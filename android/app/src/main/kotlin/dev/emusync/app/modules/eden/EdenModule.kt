@@ -32,7 +32,7 @@ class EdenModule(private val internalRoot: String = "/storage/emulated/0") : Emu
         return Detected(emulatorId, pkg, "", root, mapOf("saveRoot" to saveRoot(cfg, root), "nand" to nand(cfg, root), "INTERNAL" to internalRoot))
     }
 
-    /** Parsed Qt ini: plain keys, last-wins, flattened; keeps "Paths\x" and bare "x" forms. */
+    /** Parsed Qt ini: plain keys, the first non-empty value wins, flattened; keeps "Paths\x" and bare "x" forms. */
     internal fun readConfig(fs: Fs, dataRoot: String): Map<String, String> {
         val p = "$dataRoot/config/config.ini"
         if (!fs.exists(p)) return emptyMap()
