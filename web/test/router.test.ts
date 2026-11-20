@@ -45,4 +45,15 @@ describe("router", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(router.path).toBe("/vault");
   });
+
+  it("exposes the query string and go can replace the entry", () => {
+    router.go("/vault");
+    const len = history.length;
+    router.go("/activity?game=a%20b&emulator=eden", { replace: true });
+    expect(history.length).toBe(len);
+    expect(router.path).toBe("/activity");
+    expect(router.search).toBe("?game=a%20b&emulator=eden");
+    router.go("/activity");
+    expect(router.search).toBe("");
+  });
 });

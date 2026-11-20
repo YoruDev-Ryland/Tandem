@@ -52,11 +52,13 @@ export function matchRoute(rawPath: string): Route {
 }
 
 let path = $state(location.pathname);
+let search = $state(location.search);
 // How many in-app navigations sit behind this entry; 0 on a page opened directly.
 let depth = $state<number>((history.state as { i?: number } | null)?.i ?? 0);
 
 function sync() {
   path = location.pathname;
+  search = location.search;
   depth = (history.state as { i?: number } | null)?.i ?? 0;
 }
 addEventListener("popstate", sync);
@@ -64,10 +66,14 @@ addEventListener("popstate", sync);
 export const router = {
   get path() { return path; },
   get route() { return matchRoute(path); },
+  /** The query string of the current entry, with its leading "?" (or ""). */
+  get search() { return search; },
   get params() { return matchRoute(path).params; },
   get canGoBack() { return depth > 0; },
-  go(to: string): void {
-    history.pushState({ i: depth + 1 }, "", to);
+  /** `replace` swaps the current entry instead of adding one (filters that live in the URL). */
+  go(to: string, opts?: { replace?: boolean }): void {
+    if (opts?.replace) history.replaceState({ i: depth }, "", to);
+    else history.pushState({ i: depth + 1 }, "", to);
     sync();
   },
   back(): void {
