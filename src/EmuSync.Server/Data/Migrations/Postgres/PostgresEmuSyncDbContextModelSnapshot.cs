@@ -90,9 +90,16 @@ namespace EmuSync.Server.Data.Migrations.Postgres
 
                     b.HasKey("Id");
 
+                    b.HasIndex("GroupId");
+
+                    b.HasIndex("OwnerDeviceId");
+
                     b.HasIndex("UserId", "EmulatorId");
 
-                    b.ToTable("ConfigBundles");
+                    b.ToTable("ConfigBundles", t =>
+                        {
+                            t.HasCheckConstraint("CK_ConfigBundles_ExactlyOneOwner", "(\"OwnerDeviceId\" IS NOT NULL AND \"GroupId\" IS NULL) OR (\"OwnerDeviceId\" IS NULL AND \"GroupId\" IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("EmuSync.Server.Data.ConfigVersion", b =>
@@ -140,6 +147,8 @@ namespace EmuSync.Server.Data.Migrations.Postgres
                         .HasColumnType("bigint");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("DeviceId");
 
                     b.HasIndex("BundleId", "Seq")
                         .IsUnique();
@@ -255,6 +264,8 @@ namespace EmuSync.Server.Data.Migrations.Postgres
                         .HasColumnType("uuid");
 
                     b.HasKey("DeviceId", "EmulatorId");
+
+                    b.HasIndex("BundleId");
 
                     b.ToTable("DeviceConfigs");
                 });
@@ -486,6 +497,8 @@ namespace EmuSync.Server.Data.Migrations.Postgres
 
                     b.HasKey("Id");
 
+                    b.HasIndex("DeviceId");
+
                     b.HasIndex("ItemId", "Seq")
                         .IsUnique();
 
@@ -658,6 +671,8 @@ namespace EmuSync.Server.Data.Migrations.Postgres
 
                     b.HasKey("Id");
 
+                    b.HasIndex("DeviceId");
+
                     b.HasIndex("ItemId", "Seq")
                         .IsUnique();
 
@@ -699,6 +714,16 @@ namespace EmuSync.Server.Data.Migrations.Postgres
 
             modelBuilder.Entity("EmuSync.Server.Data.ConfigBundle", b =>
                 {
+                    b.HasOne("EmuSync.Server.Data.SyncGroup", null)
+                        .WithMany()
+                        .HasForeignKey("GroupId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("EmuSync.Server.Data.Device", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerDeviceId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
                     b.HasOne("EmuSync.Server.Data.User", null)
                         .WithMany()
                         .HasForeignKey("UserId")
@@ -713,6 +738,11 @@ namespace EmuSync.Server.Data.Migrations.Postgres
                         .HasForeignKey("BundleId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.HasOne("EmuSync.Server.Data.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.SetNull);
                 });
 
             modelBuilder.Entity("EmuSync.Server.Data.Delivery", b =>
@@ -735,6 +765,12 @@ namespace EmuSync.Server.Data.Migrations.Postgres
 
             modelBuilder.Entity("EmuSync.Server.Data.DeviceConfig", b =>
                 {
+                    b.HasOne("EmuSync.Server.Data.ConfigBundle", null)
+                        .WithMany()
+                        .HasForeignKey("BundleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("EmuSync.Server.Data.Device", null)
                         .WithMany()
                         .HasForeignKey("DeviceId")
@@ -813,6 +849,11 @@ namespace EmuSync.Server.Data.Migrations.Postgres
 
             modelBuilder.Entity("EmuSync.Server.Data.SaveVersion", b =>
                 {
+                    b.HasOne("EmuSync.Server.Data.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("EmuSync.Server.Data.SaveItem", null)
                         .WithMany()
                         .HasForeignKey("ItemId")
@@ -858,6 +899,11 @@ namespace EmuSync.Server.Data.Migrations.Postgres
 
             modelBuilder.Entity("EmuSync.Server.Data.VaultVersion", b =>
                 {
+                    b.HasOne("EmuSync.Server.Data.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("EmuSync.Server.Data.VaultItem", null)
                         .WithMany()
                         .HasForeignKey("ItemId")

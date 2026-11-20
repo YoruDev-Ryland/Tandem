@@ -92,8 +92,127 @@ public class DatabaseTests
         Assert.Equal("State", kind);
     }
 
-    [DockerFact]
-    [Trait("Category", "Postgres")]
+    private static User NewUser(string email = "a@b.c") => new()
+    {
+        Id = Guid.NewGuid(), Email = email, PasswordHash = "x", CreatedUtc = DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+    };
+
+    private static Device NewDevice(Guid userId) => new()
+    {
+        Id = Guid.NewGuid(), UserId = userId, Name = "d", Platform = "android", AppVersion = "1",
+        KeyHash = Guid.NewGuid().ToString(), CreatedUtc = DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+    };
+
+    private static async Task<EmuSyncDbContext> StartAsync(ServerFactory factory, IServiceScope[] holder)
+    {
+        await factory.Client().GetAsync("/healthz");
+        holder[0] = factory.Services.CreateScope();
+        return holder[0].ServiceProvider.GetRequiredService<EmuSyncDbContext>();
+    }
+
+    [Fact]
+    public async Task Email_is_stored_lower_cased_and_unique_case_insensitively()
+    {
+        using var factory = new ServerFactory();
+        var h = new IServiceScope[1];
+        var db = await StartAsync(factory, h);
+        using var _ = h[0];
+        db.Users.Add(NewUser("A@B.c"));
+        await db.SaveChangesAsync();
+
+        Assert.Equal("a@b.c", await db.Database.SqlQueryRaw<string>("SELECT Email AS Value FROM Users").SingleAsync());
+        Assert.NotNull(await db.Users.SingleOrDefaultAsync(u => u.Email == "A@B.C"));
+
+        db.Users.Add(NewUser("a@b.C"));
+        await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task ConfigBundle_requires_exactly_one_owner(bool device, bool group)
+    {
+        using var factory = new ServerFactory();
+        var h = new IServiceScope[1];
+        var db = await StartAsync(factory, h);
+        using var _ = h[0];
+        var user = NewUser();
+        var dev = NewDevice(user.Id);
+        var grp = new SyncGroup { Id = Guid.NewGuid(), UserId = user.Id, EmulatorId = "eden", Name = "g", BundleId = Guid.NewGuid() };
+        db.AddRange(user, dev, grp);
+        await db.SaveChangesAsync();
+
+        db.ConfigBundles.Add(new ConfigBundle
+        {
+            Id = Guid.NewGuid(), UserId = user.Id, EmulatorId = "eden",
+            OwnerDeviceId = device ? dev.Id : null, GroupId = group ? grp.Id : null,
+        });
+        await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+    }
+
+    [Fact]
+    public async Task ConfigBundle_with_one_owner_is_accepted()
+    {
+        using var factory = new ServerFactory();
+        var h = new IServiceScope[1];
+        var db = await StartAsync(factory, h);
+        using var _ = h[0];
+        var user = NewUser();
+        var dev = NewDevice(user.Id);
+        db.AddRange(user, dev);
+        db.ConfigBundles.Add(new ConfigBundle { Id = Guid.NewGuid(), UserId = user.Id, EmulatorId = "eden", OwnerDeviceId = dev.Id });
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task Deleting_user_removes_all_their_rows()
+    {
+        using var factory = new ServerFactory();
+        var h = new IServiceScope[1];
+        var db = await StartAsync(factory, h);
+        using var _ = h[0];
+        var now = DateTimeOffset.Parse("2026-02-01T00:00:00Z");
+
+        var user1 = Seed(db, "one@x.y", now);
+        var user2 = Seed(db, "two@x.y", now);
+        await db.SaveChangesAsync();
+
+        db.Users.Remove(user1);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        Assert.Equal(1, await db.Users.CountAsync());
+        Assert.Equal(1, await db.Devices.CountAsync());
+        Assert.Equal(1, await db.SaveItems.CountAsync());
+        Assert.Equal(1, await db.SaveVersions.CountAsync());
+        Assert.Equal(2, await db.ConfigBundles.CountAsync());
+        Assert.Equal(1, await db.SyncGroups.CountAsync());
+        Assert.Equal(1, await db.DeviceConfigs.CountAsync());
+        Assert.Equal(1, await db.Deliveries.CountAsync());
+        Assert.Equal(1, await db.InstallRecords.CountAsync());
+        Assert.Equal(1, await db.ActivityEvents.CountAsync());
+        Assert.Equal(user2.Id, (await db.Devices.SingleAsync()).UserId);
+    }
+
+    private static User Seed(EmuSyncDbContext db, string email, DateTimeOffset now)
+    {
+        var user = NewUser(email);
+        var dev = NewDevice(user.Id);
+        var item = new SaveItem { Id = Guid.NewGuid(), UserId = user.Id, EmulatorId = "eden", Kind = ItemKind.Save, GameKey = "g", Slot = "", Core = "" };
+        var version = new SaveVersion { Id = Guid.NewGuid(), ItemId = item.Id, Seq = 1, DeviceId = dev.Id, ReceivedUtc = now, ManifestJson = "{}", ManifestHash = "h" };
+        var bundle = new ConfigBundle { Id = Guid.NewGuid(), UserId = user.Id, EmulatorId = "eden", OwnerDeviceId = dev.Id };
+        var group = new SyncGroup { Id = Guid.NewGuid(), UserId = user.Id, EmulatorId = "eden", Name = "g", BundleId = Guid.NewGuid() };
+        var groupBundle = new ConfigBundle { Id = group.BundleId, UserId = user.Id, EmulatorId = "eden", GroupId = group.Id };
+        db.AddRange(user, dev, item, version, group, bundle, groupBundle);
+        db.AddRange(
+            new DeviceConfig { DeviceId = dev.Id, EmulatorId = "eden", BundleId = bundle.Id },
+            new Delivery { Id = Guid.NewGuid(), DeviceId = dev.Id, Kind = DeliveryKind.Save, TargetId = item.Id, VersionId = version.Id, CreatedUtc = now },
+            new InstallRecord { DeviceId = dev.Id, EmulatorId = "eden", GameKey = "g", SeenUtc = now },
+            new Data.ActivityEvent { UserId = user.Id, Utc = now, Kind = "k", Message = "m" });
+        return user;
+    }
+
+    [DockerFact]    [Trait("Category", "Postgres")]
     public async Task Postgres_migrations_apply()
     {
         await using var container = new PostgreSqlBuilder("postgres:17-alpine").Build();

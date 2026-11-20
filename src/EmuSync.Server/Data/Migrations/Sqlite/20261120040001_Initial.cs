@@ -65,29 +65,6 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 });
 
             migrationBuilder.CreateTable(
-                name: "ConfigBundles",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    EmulatorId = table.Column<string>(type: "TEXT", nullable: false),
-                    OwnerDeviceId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    GroupId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    HeadVersionId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    OpenConflict = table.Column<bool>(type: "INTEGER", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_ConfigBundles", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_ConfigBundles_Users_UserId",
-                        column: x => x.UserId,
-                        principalTable: "Users",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "Devices",
                 columns: table => new
                 {
@@ -264,34 +241,6 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 });
 
             migrationBuilder.CreateTable(
-                name: "ConfigVersions",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    BundleId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Seq = table.Column<int>(type: "INTEGER", nullable: false),
-                    BaseVersionId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    DeviceId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    Source = table.Column<string>(type: "TEXT", maxLength: 16, nullable: false),
-                    ReceivedUtc = table.Column<long>(type: "INTEGER", nullable: false),
-                    ManifestJson = table.Column<string>(type: "TEXT", nullable: false),
-                    ManifestHash = table.Column<string>(type: "TEXT", nullable: false),
-                    TotalSize = table.Column<long>(type: "INTEGER", nullable: false),
-                    Pinned = table.Column<bool>(type: "INTEGER", nullable: false),
-                    ConflictReason = table.Column<string>(type: "TEXT", maxLength: 16, nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_ConfigVersions", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_ConfigVersions_ConfigBundles_BundleId",
-                        column: x => x.BundleId,
-                        principalTable: "ConfigBundles",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "Deliveries",
                 columns: table => new
                 {
@@ -310,27 +259,6 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                     table.PrimaryKey("PK_Deliveries", x => x.Id);
                     table.ForeignKey(
                         name: "FK_Deliveries_Devices_DeviceId",
-                        column: x => x.DeviceId,
-                        principalTable: "Devices",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "DeviceConfigs",
-                columns: table => new
-                {
-                    DeviceId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    EmulatorId = table.Column<string>(type: "TEXT", nullable: false),
-                    BundleId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    AppliedVersionId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    LastRawVersionId = table.Column<Guid>(type: "TEXT", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_DeviceConfigs", x => new { x.DeviceId, x.EmulatorId });
-                    table.ForeignKey(
-                        name: "FK_DeviceConfigs_Devices_DeviceId",
                         column: x => x.DeviceId,
                         principalTable: "Devices",
                         principalColumn: "Id",
@@ -467,9 +395,50 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 {
                     table.PrimaryKey("PK_SaveVersions", x => x.Id);
                     table.ForeignKey(
+                        name: "FK_SaveVersions_Devices_DeviceId",
+                        column: x => x.DeviceId,
+                        principalTable: "Devices",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.SetNull);
+                    table.ForeignKey(
                         name: "FK_SaveVersions_SaveItems_ItemId",
                         column: x => x.ItemId,
                         principalTable: "SaveItems",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "ConfigBundles",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    EmulatorId = table.Column<string>(type: "TEXT", nullable: false),
+                    OwnerDeviceId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    GroupId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    HeadVersionId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    OpenConflict = table.Column<bool>(type: "INTEGER", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_ConfigBundles", x => x.Id);
+                    table.CheckConstraint("CK_ConfigBundles_ExactlyOneOwner", "(\"OwnerDeviceId\" IS NOT NULL AND \"GroupId\" IS NULL) OR (\"OwnerDeviceId\" IS NULL AND \"GroupId\" IS NOT NULL)");
+                    table.ForeignKey(
+                        name: "FK_ConfigBundles_Devices_OwnerDeviceId",
+                        column: x => x.OwnerDeviceId,
+                        principalTable: "Devices",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_ConfigBundles_SyncGroups_GroupId",
+                        column: x => x.GroupId,
+                        principalTable: "SyncGroups",
+                        principalColumn: "Id");
+                    table.ForeignKey(
+                        name: "FK_ConfigBundles_Users_UserId",
+                        column: x => x.UserId,
+                        principalTable: "Users",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
                 });
@@ -491,9 +460,76 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 {
                     table.PrimaryKey("PK_VaultVersions", x => x.Id);
                     table.ForeignKey(
+                        name: "FK_VaultVersions_Devices_DeviceId",
+                        column: x => x.DeviceId,
+                        principalTable: "Devices",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.SetNull);
+                    table.ForeignKey(
                         name: "FK_VaultVersions_VaultItems_ItemId",
                         column: x => x.ItemId,
                         principalTable: "VaultItems",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "ConfigVersions",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    BundleId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    Seq = table.Column<int>(type: "INTEGER", nullable: false),
+                    BaseVersionId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    DeviceId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    Source = table.Column<string>(type: "TEXT", maxLength: 16, nullable: false),
+                    ReceivedUtc = table.Column<long>(type: "INTEGER", nullable: false),
+                    ManifestJson = table.Column<string>(type: "TEXT", nullable: false),
+                    ManifestHash = table.Column<string>(type: "TEXT", nullable: false),
+                    TotalSize = table.Column<long>(type: "INTEGER", nullable: false),
+                    Pinned = table.Column<bool>(type: "INTEGER", nullable: false),
+                    ConflictReason = table.Column<string>(type: "TEXT", maxLength: 16, nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_ConfigVersions", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_ConfigVersions_ConfigBundles_BundleId",
+                        column: x => x.BundleId,
+                        principalTable: "ConfigBundles",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_ConfigVersions_Devices_DeviceId",
+                        column: x => x.DeviceId,
+                        principalTable: "Devices",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.SetNull);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "DeviceConfigs",
+                columns: table => new
+                {
+                    DeviceId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    EmulatorId = table.Column<string>(type: "TEXT", nullable: false),
+                    BundleId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    AppliedVersionId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    LastRawVersionId = table.Column<Guid>(type: "TEXT", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_DeviceConfigs", x => new { x.DeviceId, x.EmulatorId });
+                    table.ForeignKey(
+                        name: "FK_DeviceConfigs_ConfigBundles_BundleId",
+                        column: x => x.BundleId,
+                        principalTable: "ConfigBundles",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_DeviceConfigs_Devices_DeviceId",
+                        column: x => x.DeviceId,
+                        principalTable: "Devices",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
                 });
@@ -502,6 +538,16 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 name: "IX_ActivityEvents_UserId_Utc",
                 table: "ActivityEvents",
                 columns: new[] { "UserId", "Utc" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ConfigBundles_GroupId",
+                table: "ConfigBundles",
+                column: "GroupId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ConfigBundles_OwnerDeviceId",
+                table: "ConfigBundles",
+                column: "OwnerDeviceId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_ConfigBundles_UserId_EmulatorId",
@@ -515,9 +561,19 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 unique: true);
 
             migrationBuilder.CreateIndex(
+                name: "IX_ConfigVersions_DeviceId",
+                table: "ConfigVersions",
+                column: "DeviceId");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_Deliveries_DeviceId_AckedUtc",
                 table: "Deliveries",
                 columns: new[] { "DeviceId", "AckedUtc" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_DeviceConfigs_BundleId",
+                table: "DeviceConfigs",
+                column: "BundleId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_DeviceItemStates_ItemId",
@@ -552,6 +608,11 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 unique: true);
 
             migrationBuilder.CreateIndex(
+                name: "IX_SaveVersions_DeviceId",
+                table: "SaveVersions",
+                column: "DeviceId");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_SaveVersions_ItemId_Seq",
                 table: "SaveVersions",
                 columns: new[] { "ItemId", "Seq" },
@@ -572,6 +633,11 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 name: "IX_VaultItems_UserId_Category",
                 table: "VaultItems",
                 columns: new[] { "UserId", "Category" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_VaultVersions_DeviceId",
+                table: "VaultVersions",
+                column: "DeviceId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_VaultVersions_ItemId_Seq",
@@ -625,9 +691,6 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 name: "ServerSettings");
 
             migrationBuilder.DropTable(
-                name: "SyncGroups");
-
-            migrationBuilder.DropTable(
                 name: "UserBlobs");
 
             migrationBuilder.DropTable(
@@ -643,13 +706,16 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                 name: "ConfigBundles");
 
             migrationBuilder.DropTable(
-                name: "Devices");
-
-            migrationBuilder.DropTable(
                 name: "SaveItems");
 
             migrationBuilder.DropTable(
                 name: "VaultItems");
+
+            migrationBuilder.DropTable(
+                name: "Devices");
+
+            migrationBuilder.DropTable(
+                name: "SyncGroups");
 
             migrationBuilder.DropTable(
                 name: "Users");

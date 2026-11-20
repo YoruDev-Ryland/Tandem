@@ -43,7 +43,12 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
 
     protected override void OnModelCreating(ModelBuilder m)
     {
-        m.Entity<User>(e => e.HasIndex(x => x.Email).IsUnique());
+        m.Entity<User>(e =>
+        {
+            // Emails are always stored lower-cased, so the unique index is effectively case-insensitive.
+            e.Property(x => x.Email).HasConversion(v => v.ToLowerInvariant(), v => v);
+            e.HasIndex(x => x.Email).IsUnique();
+        });
 
         m.Entity<Device>(e =>
         {
@@ -78,6 +83,7 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
 
         m.Entity<SaveVersion>(e =>
         {
+            e.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => new { x.ItemId, x.Seq }).IsUnique();
             e.HasOne<SaveItem>().WithMany().HasForeignKey(x => x.ItemId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -91,12 +97,18 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
 
         m.Entity<ConfigBundle>(e =>
         {
+            e.ToTable(t => t.HasCheckConstraint("CK_ConfigBundles_ExactlyOneOwner",
+                "(\"OwnerDeviceId\" IS NOT NULL AND \"GroupId\" IS NULL) OR (\"OwnerDeviceId\" IS NULL AND \"GroupId\" IS NOT NULL)"));
+            e.HasOne<Device>().WithMany().HasForeignKey(x => x.OwnerDeviceId).OnDelete(DeleteBehavior.Cascade);
+            // Cycle with SyncGroup (a group's bundle points back at the group): NoAction on this edge.
+            e.HasOne<SyncGroup>().WithMany().HasForeignKey(x => x.GroupId).OnDelete(DeleteBehavior.NoAction);
             e.HasIndex(x => new { x.UserId, x.EmulatorId });
             e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         m.Entity<ConfigVersion>(e =>
         {
+            e.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => new { x.BundleId, x.Seq }).IsUnique();
             e.HasOne<ConfigBundle>().WithMany().HasForeignKey(x => x.BundleId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -109,6 +121,7 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
 
         m.Entity<DeviceConfig>(e =>
         {
+            e.HasOne<ConfigBundle>().WithMany().HasForeignKey(x => x.BundleId).OnDelete(DeleteBehavior.Cascade);
             e.HasKey(x => new { x.DeviceId, x.EmulatorId });
             e.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -124,6 +137,7 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
 
         m.Entity<VaultVersion>(e =>
         {
+            e.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => new { x.ItemId, x.Seq }).IsUnique();
             e.HasOne<VaultItem>().WithMany().HasForeignKey(x => x.ItemId).OnDelete(DeleteBehavior.Cascade);
         });
