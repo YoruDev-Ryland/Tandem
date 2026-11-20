@@ -5,6 +5,7 @@
   import { PRODUCT_NAME } from "./lib/brand";
   import { installInput } from "./lib/input";
   import SignIn from "./pages/SignIn.svelte";
+  import Home from "./pages/Home.svelte";
   import AppTopBar from "./lib/ui/AppTopBar.svelte";
 
   const titles: Record<string, string> = {
@@ -47,6 +48,9 @@
 {:else if session.checked && session.account}
   <AppTopBar />
   {#key key}
+    {#if route.name === "home"}
+      <Home />
+    {:else}
     <main>
       {#if route.name === "not-found"}
         <h1>Page not found</h1>
@@ -55,6 +59,7 @@
         <h1>{titles[route.name]}</h1>
       {/if}
     </main>
+    {/if}
   {/key}
 {/if}
 
