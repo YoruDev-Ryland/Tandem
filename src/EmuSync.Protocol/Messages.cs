@@ -31,4 +31,15 @@ public sealed record DeviceStatusRequest(string Platform, string AppVersion, boo
 public sealed record InstalledGame(string GameKey, string? DisplayName, string? Crc32);
 public sealed record InstallsRequest(IReadOnlyList<InstalledGame> Games);
 public sealed record InstallsResponse(int Added, int Removed);
+
+/// <summary>
+/// POST /v1/devices/me/forget: the device forgot what it knew of these emulators' saves and configs (it switched an
+/// emulator's variant, whose folder holds other files, or signed in again). The server drops its own record of what
+/// this device holds for them, so no upload is taken as based on a version the device no longer has, and the heads
+/// are delivered again. Unknown ids are ignored; at most <see cref="MaxEmulators"/>.
+/// </summary>
+public sealed record ForgetRequest(IReadOnlyList<string> EmulatorIds)
+{
+    public const int MaxEmulators = 50;
+}
 public sealed record RenameDeviceRequest(string Name);

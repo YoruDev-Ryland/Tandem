@@ -17,7 +17,7 @@ namespace EmuSync.Server.Deliveries;
 /// interleaves with an upload's read-decide-write.
 /// </summary>
 public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomainEvents events, IEventHub hub,
-    TimeProvider time, ILogger<DeliveryService> logger, IActivityLog activity, ConfigTransform configs)
+    TimeProvider time, ILogger<DeliveryService> logger, IActivityLog activity, ConfigTransform configs, MaintenanceLock maintenance)
 {
     private static readonly JsonSerializerOptions NotesJson = new(JsonSerializerDefaults.Web);
 
@@ -59,6 +59,37 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
         List<Guid> notify;
         using (await locks.Acquire(userId.Value, ct))
             notify = await ReconcileAsync(userId.Value, null, deviceId, ct);
+        Notify(notify);
+    }
+
+    /// <summary>
+    /// The device forgot what it held for the emulators in <paramref name="request"/> (a variant switch, a new
+    /// sign-in): drops this server's record of it too. The device's known versions of those emulators' save items are
+    /// deleted and its applied config versions cleared, so neither the known-head rule of a save upload nor the
+    /// applied-version rule of a config upload can take a later upload as based on the head, and the heads of its
+    /// installed games and its config are delivered again. Unknown emulator ids are ignored.
+    /// </summary>
+    public async Task ForgetAsync(Guid userId, Guid deviceId, ForgetRequest request, CancellationToken ct)
+    {
+        var requested = request.EmulatorIds ?? [];
+        if (requested.Count > ForgetRequest.MaxEmulators)
+            throw new ApiException(400, "too_many", $"At most {ForgetRequest.MaxEmulators} emulators are allowed.");
+        var ids = requested.Where(id => id is not null && EmulatorIds.IsKnown(id)).Distinct(StringComparer.Ordinal).ToList();
+        if (ids.Count == 0) return;
+
+        List<Guid> notify;
+        using (await maintenance.AcquireAsync(ct))   // the order everywhere: maintenance, then the user's lock
+        using (await locks.Acquire(userId, ct))
+        {
+            var items = db.SaveItems.Where(i => i.UserId == userId && ids.Contains(i.EmulatorId)).Select(i => i.Id);
+            var states = await db.DeviceItemStates.Where(s => s.DeviceId == deviceId && items.Contains(s.ItemId)).ToListAsync(ct);
+            db.DeviceItemStates.RemoveRange(states);
+            var configs = await db.DeviceConfigs.Where(c => c.DeviceId == deviceId && ids.Contains(c.EmulatorId)).ToListAsync(ct);
+            foreach (var c in configs) c.AppliedVersionId = null;
+            await db.SaveChangesAsync(ct);
+            notify = (await ReconcileAsync(userId, null, deviceId, ct)).Concat(await ReconcileConfigsAsync(userId, deviceId, ct))
+                .Distinct().ToList();
+        }
         Notify(notify);
     }
 

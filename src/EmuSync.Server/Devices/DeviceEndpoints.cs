@@ -41,6 +41,12 @@ public static class DeviceEndpoints
         devices.MapPut("/me/installs/{emulatorId}", (HttpContext http, string emulatorId, InstallsRequest request, DeviceService svc, CancellationToken ct) =>
             svc.ReplaceInstalls(http.User.UserId(), RequireDevice(http), emulatorId, request, ct));
 
+        devices.MapPost("/me/forget", async (HttpContext http, ForgetRequest request, Deliveries.DeliveryService svc, CancellationToken ct) =>
+        {
+            await svc.ForgetAsync(http.User.UserId(), RequireDevice(http), request, ct);
+            return Results.NoContent();
+        });
+
         devices.MapPatch("/{id:guid}", (HttpContext http, Guid id, RenameDeviceRequest request, DeviceService svc, CancellationToken ct) =>
             svc.Rename(http.User.UserId(), http.User.DeviceId(), id, request.Name, ct));
 
