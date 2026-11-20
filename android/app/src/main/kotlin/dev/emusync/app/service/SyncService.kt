@@ -65,6 +65,27 @@ class SyncService : Service() {
         private const val RESTART_DELAY_MS = 5_000L
         private const val BIND_TIMEOUT_MS = 30_000L
 
+        /**
+         * Runs [start], logging instead of throwing when Android refuses it: from Android 12 a foreground-service start
+         * while the app is in the background throws ForegroundServiceStartNotAllowedException (an
+         * IllegalStateException). Returns whether it started.
+         */
+        fun guardedStart(start: () -> Unit): Boolean = try {
+            start()
+            true
+        } catch (e: IllegalStateException) {
+            LogBuffer.add("sync service start refused: ${e.message}")
+            false
+        }
+
+        /** [start] for callers that may run in the background (a request finishing after the app left the screen). */
+        fun tryStart(context: Context, action: String? = null): Boolean = guardedStart { start(context, action) }
+
+        /** Stops sync (sign-out). Nothing restarts it until a sign-in: the launcher and boot start it only with a key. */
+        fun stop(context: Context) {
+            context.stopService(Intent(context, SyncService::class.java))
+        }
+
         fun start(context: Context, action: String? = null) {
             context.startForegroundService(Intent(context, SyncService::class.java).setAction(action))
         }
@@ -77,6 +98,7 @@ class SyncService : Service() {
         val applier: DeliveryApplier,
         val queue: WorkQueue<SyncWork>,
         val planner: WorkPlanner,
+        val flows: SessionFlows.Token,
         val exits: ExitDetector = ExitDetector(),
         var watched: List<String> = emptyList(),
     )
@@ -124,7 +146,8 @@ class SyncService : Service() {
         log("service stopped")
         destroyed = true
         scope.cancel()
-        AppGraph.snapshot.value = ServiceSnapshot(running = false, status = "Not running")
+        AppGraph.snapshot.value = ServiceSnapshot(running = false, status = "Not running", scans = AppGraph.fullScans.get(), failedScans = AppGraph.failedScans.get())
+        AppGraph.sessionFlows.end(null)   // drops the live session's late writes too
         super.onDestroy()
     }
 
@@ -172,6 +195,8 @@ class SyncService : Service() {
 
     /** One Shizuku-ready session. Returns only by throwing (or never, when not signed in). */
     private suspend fun runSession(): Unit = coroutineScope {
+        // The previous session has ended (collectLatest joins it): forgets recorded since can no longer be undone.
+        prepareSession(store).takeIf { it.isNotEmpty() }?.let { log("forgot what this device knew of ${it.sorted()}; their next uploads are fresh") }
         val url = store.serverUrl?.trimEnd('/')
         val key = store.deviceKey
         if (url.isNullOrBlank() || key.isNullOrBlank()) {
@@ -186,58 +211,69 @@ class SyncService : Service() {
             throw FsUnavailableException("shell bind timed out")
         }
         val fs = RemoteFs(shell)
-        val api = StatusRecordingApi(ApiClient(url, key)) { lastStatus = SentStatus(url, key, it) }
-        val stored = store.settings
-        val s = DeviceSettings(stored.romDirs, stored.overrides)
-        val planner = WorkPlanner(stored.autoApply)
-        val engine = SyncEngine(
-            fs, api, store, registry, s,
-            clock = System::currentTimeMillis,   // compared with file mtimes: must be wall-clock time
-            log = log,
-            versionOf = ::versionOf,
-            appVersion = BuildConfig.VERSION_NAME,
-            shizukuOk = { gate.state.value == ShizukuState.Ready },
-            onConflict = notifier::conflict,
-        )
-        val applier = DeliveryApplier(
-            fs, api, store, registry, engine, notifier::alert, s, cacheDir, log = log,
-        )
-        val sess = Session(fs, engine, applier, WorkQueue(), planner)
-        log("sync session starting ($url, auto-apply ${if (stored.autoApply) "on" else "off"})")
-
-        // Initial pass before anything else is queued.
-        handle(sess, SyncWork.FullScan)
-        session = sess
-        publish()
-
-        fun offer(work: List<SyncWork>) = work.forEach { sess.queue.offer(it) }
-        val opens = java.util.concurrent.atomic.AtomicInteger(0)
-        val events = EventStream(
-            defaultHttpClient(), url, key,
-            onDeliveries = { offer(planner.deliveriesEvent()) },
-            onState = { up ->
-                if (up != online) log(if (up) "server events connected" else "server events disconnected")
-                online = up
-                // A reconnect rescans to catch up on what was missed.
-                if (up) offer(planner.streamOpened(reconnect = opens.getAndIncrement() > 0))
-                publish()
-            },
-        )
+        val flows = AppGraph.sessionFlows.begin()
         try {
-            launch { sess.queue.consume { handle(sess, it) } }
-            launch { every(TICK_MS) { offer(planner.tick()) } }
-            launch { every(MONITOR_MS) { offer(planner.monitor()) } }
-            launch { every(SyncConfig.pollMillis) { offer(planner.poll()) } }
-            launch { every(FULL_SCAN_MS) { offer(planner.periodicScan()) } }
-            offer(planner.sessionStarted())
-            events.start()
-            awaitCancellation()
+            val api = StatusRecordingApi(ApiClient(url, key), AppGraph.sessionFlows, flows) {
+                lastStatus = SentStatus(url, key, it)
+            }
+            val stored = store.settings
+            val s = DeviceSettings(stored.romDirs, stored.overrides, stored.variants)
+            val planner = WorkPlanner(stored.autoApply, StoredApplyOnExitFlags(store))
+            val engine = SyncEngine(
+                fs, api, store, registry, s,
+                clock = System::currentTimeMillis,   // compared with file mtimes: must be wall-clock time
+                log = log,
+                versionOf = ::versionOf,
+                appVersion = BuildConfig.VERSION_NAME,
+                shizukuOk = { gate.state.value == ShizukuState.Ready },
+                onConflict = notifier::conflict,
+            )
+            val applier = DeliveryApplier(
+                fs, api, store, registry, engine, notifier::alert, s, cacheDir,
+                onWaiting = { AppGraph.sessionFlows.publishWaiting(flows, it) },
+                onReceived = { AppGraph.sessionFlows.publishReceived(flows, it, java.time.Instant.now()) },
+                log = log,
+            )
+            val sess = Session(fs, engine, applier, WorkQueue(), planner, flows)
+            log("sync session starting ($url, auto-apply ${if (stored.autoApply) "on" else "off"})")
+
+            // Initial pass before anything else is queued.
+            handle(sess, SyncWork.FullScan)
+            session = sess
+            publish()
+
+            fun offer(work: List<SyncWork>) = work.forEach { sess.queue.offer(it) }
+            val opens = java.util.concurrent.atomic.AtomicInteger(0)
+            val events = EventStream(
+                defaultHttpClient(), url, key,
+                onDeliveries = { AppGraph.sessionFlows.nudgeDeliveries(flows); offer(planner.deliveriesEvent()) },
+                onState = { up ->
+                    if (up != online) log(if (up) "server events connected" else "server events disconnected")
+                    online = up
+                    // A reconnect rescans to catch up on what was missed.
+                    if (up) offer(planner.streamOpened(reconnect = opens.getAndIncrement() > 0))
+                    publish()
+                },
+            )
+            try {
+                launch { sess.queue.consume { handle(sess, it) } }
+                launch { every(TICK_MS) { offer(planner.tick()) } }
+                launch { every(MONITOR_MS) { offer(planner.monitor()) } }
+                launch { every(SyncConfig.pollMillis) { offer(planner.poll()) } }
+                launch { every(FULL_SCAN_MS) { offer(planner.periodicScan()) } }
+                offer(planner.sessionStarted())
+                events.start()
+                awaitCancellation()
+            } finally {
+                events.stop()
+                online = null
+                sess.queue.close()
+                runCatching { fs.unwatchAll() }
+                if (session === sess) session = null
+            }
         } finally {
-            events.stop()
-            online = null
-            sess.queue.close()
-            runCatching { fs.unwatchAll() }
-            if (session === sess) session = null
+            // This session's knowledge ends with it, and its late writes (blocked calls returning) are dropped.
+            AppGraph.sessionFlows.end(flows)
         }
     }
 
@@ -250,6 +286,7 @@ class SyncService : Service() {
 
     /** Runs one work item. Everything but [FsUnavailableException] and cancellation is logged and swallowed. */
     private suspend fun handle(s: Session, w: SyncWork) {
+        var error: Throwable? = null
         try {
             when (w) {
                 SyncWork.FullScan -> {
@@ -257,38 +294,57 @@ class SyncService : Service() {
                     rewatch(s)
                 }
                 SyncWork.Tick -> s.engine.tick()
-                SyncWork.ApplyAll -> {
+                SyncWork.ApplyAll, SyncWork.ApplyRequested -> {
                     val r = s.applier.applyAll()
+                    s.planner.applied(w, r)
                     if (r.applied + r.failed + r.waitingForEmulator > 0)
                         log("deliveries: ${r.applied} applied, ${r.skipped} skipped, ${r.failed} failed, ${r.waitingForEmulator} waiting")
                 }
                 SyncWork.Monitor -> monitor(s)
             }
         } catch (e: CancellationException) {
+            error = e
             throw e
         } catch (e: FsUnavailableException) {
+            error = e
             throw e
         } catch (e: Throwable) {
+            error = e
             log("$w failed: ${e.javaClass.simpleName}: ${e.message}")
         } finally {
+            // Whoever waits for a scan hears how it ended: only one that got every upload through is a success.
+            if (w == SyncWork.FullScan) countScan(scanSucceeded(error, s.engine.queuedCount()))
             if (w != SyncWork.Tick && w != SyncWork.Monitor) publish()
         }
     }
 
-    /** Probes each detected emulator; on alive -> dead uploads its config and applies what waited for the exit. */
+    /**
+     * Probes each detected emulator, publishes the running set (and reports it to the server when it changed or is
+     * due), then on alive -> dead uploads its config and applies what waited for the exit.
+     */
     private suspend fun monitor(s: Session) {
         val found = s.engine.detectedEmulators()
-        s.exits.retain(found.map { it.emulatorId }.toSet())
+        val ids = found.map { it.emulatorId }.toSet()
+        s.exits.retain(ids)
+        s.applier.retainWaiting(ids)   // an emulator no longer detected holds nothing back
+        val running = LinkedHashSet<String>()
+        val exited = ArrayList<String>()
         for (d in found) {
             val m = registry.byId(d.emulatorId) ?: continue
             val alive = s.fs.isEmulatorRunning(m, d)   // any variant or sub-process; throws (ends the session) on probe failure
-            if (!s.exits.observe(d.emulatorId, alive)) continue
-            log("${d.emulatorId} exited")
-            s.engine.onEmulatorExited(d.emulatorId)
-            if (s.planner.applyOnExit()) {
-                val r = s.applier.onEmulatorExited(d.emulatorId)
-                if (r.applied + r.failed > 0) log("${d.emulatorId}: ${r.applied} applied, ${r.failed} failed after exit")
-            }
+            if (alive) running += d.emulatorId
+            if (s.exits.observe(d.emulatorId, alive)) exited += d.emulatorId
+        }
+        AppGraph.sessionFlows.publishRunning(s.flows, running)
+        s.engine.reportRunning(running)
+        for (id in exited) {
+            log("$id exited")
+            s.engine.onEmulatorExited(id)
+            // Runs in the queue's consumer like any apply; the applier re-checks the process before every write.
+            val r = s.planner.exited(id,
+                apply = { requested -> s.applier.onEmulatorExited(id, force = requested) },
+                forget = { s.applier.forgetWaiting(id) })
+            if (r != null && r.applied + r.failed > 0) log("$id: ${r.applied} applied, ${r.failed} failed after exit")
             rewatch(s)
             publish()
         }
@@ -352,6 +408,9 @@ class SyncService : Service() {
             online = online == true,
             emulators = e?.detectedEmulators()?.map { EmulatorInfo(it, counts[it.emulatorId] ?: 0) } ?: emptyList(),
             watchDirs = session?.watched?.size ?: 0,
+            live = session != null,
+            scans = AppGraph.fullScans.get(),
+            failedScans = AppGraph.failedScans.get(),
         )
         val prev = AppGraph.snapshot.value
         AppGraph.snapshot.value = next
@@ -359,10 +418,26 @@ class SyncService : Service() {
     }
 }
 
-/** Passes calls through and remembers the last status the server accepted (for the Shizuku-off report). */
-private class StatusRecordingApi(private val inner: Api, private val onStatus: (DeviceStatusRequest) -> Unit) : Api by inner {
+/**
+ * Passes calls through and remembers the last status the server accepted (for the Shizuku-off report), but only
+ * while [token]'s session is live.
+ */
+internal class StatusRecordingApi(
+    private val inner: Api,
+    private val flows: SessionFlows,
+    private val token: SessionFlows.Token,
+    private val onStatus: (DeviceStatusRequest) -> Unit,
+) : Api by inner {
     override suspend fun putStatus(req: DeviceStatusRequest) {
         inner.putStatus(req)
-        onStatus(req)
+        record(req)
     }
+
+    override suspend fun putStatus(req: DeviceStatusRequest, callTimeoutMillis: Long) {
+        inner.putStatus(req, callTimeoutMillis)
+        record(req)
+    }
+
+    /** A call that returns after its session ended must not replace what the Shizuku-off report resends. */
+    private fun record(req: DeviceStatusRequest) = flows.ifLive(token) { onStatus(req) }
 }

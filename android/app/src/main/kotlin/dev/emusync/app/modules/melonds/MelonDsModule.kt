@@ -29,7 +29,7 @@ class MelonDsModule(
     private val romKey = "rom:"
 
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {
-        val pkg = packages.firstOrNull { it in fs.installedPackages() } ?: return null
+        val pkg = activePackage(fs.installedPackages(), settings) ?: return null
         val dirs = LinkedHashSet<String>()
         dirs += rooted("/sdcard/Games/nds")
         for (e in try { fs.list(storageRoot) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }) {

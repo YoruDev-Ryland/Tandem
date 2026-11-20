@@ -1,18 +1,45 @@
 package dev.emusync.app.service
 
+import dev.emusync.app.sync.ApplyReport
+import dev.emusync.app.sync.StateStore
+
 /** A unit of engine or applier work, run one at a time by the session's [WorkQueue]. */
 sealed interface SyncWork {
     data object FullScan : SyncWork
     data object Tick : SyncWork
+    /** An apply the session decided on (auto-apply on). */
     data object ApplyAll : SyncWork
+    /** An apply the user asked for: what it holds back for a running emulator is applied when that emulator closes. */
+    data object ApplyRequested : SyncWork
     data object Monitor : SyncWork
 }
 
+/** The emulators whose next exit finishes an apply the user asked for. */
+interface ApplyOnExitFlags {
+    fun flagged(): Set<String>
+    fun flag(ids: Set<String>)
+    fun clear(id: String)
+}
+
+class MemoryApplyOnExitFlags : ApplyOnExitFlags {
+    private val ids = LinkedHashSet<String>()
+    @Synchronized override fun flagged(): Set<String> = ids.toSet()
+    @Synchronized override fun flag(ids: Set<String>) { this.ids += ids }
+    @Synchronized override fun clear(id: String) { ids -= id }
+}
+
+/** The flags persisted in [StateStore], so a session or process restart keeps them. */
+class StoredApplyOnExitFlags(private val store: StateStore) : ApplyOnExitFlags {
+    override fun flagged(): Set<String> = store.applyOnExit
+    override fun flag(ids: Set<String>) { if (!store.applyOnExit.containsAll(ids)) store.flagApplyOnExit(ids) }
+    override fun clear(id: String) { if (id in store.applyOnExit) store.clearApplyOnExit(id) }
+}
+
 /**
- * Decides which work each trigger queues. With [autoApply] false, nothing but [explicitApply] ever yields
- * [SyncWork.ApplyAll], and an emulator exit doesn't apply what waited for it.
+ * Decides which work each trigger queues. With [autoApply] false, nothing but [explicitApply] ever yields an apply,
+ * and an emulator exit applies only what an explicit apply left waiting for it ([flags]).
  */
-class WorkPlanner(private val autoApply: Boolean) {
+class WorkPlanner(private val autoApply: Boolean, private val flags: ApplyOnExitFlags = MemoryApplyOnExitFlags()) {
     /** Right after the session's first full scan. */
     fun sessionStarted(): List<SyncWork> = applyIfAuto()
 
@@ -26,11 +53,34 @@ class WorkPlanner(private val autoApply: Boolean) {
     fun streamOpened(reconnect: Boolean): List<SyncWork> =
         (if (reconnect) listOf(SyncWork.FullScan) else emptyList()) + applyIfAuto()
 
-    /** Whether an emulator exit also retries the deliveries that waited for it. */
-    fun applyOnExit(): Boolean = autoApply
+    /** "Sync now", a resolve, a setup choice, "Apply deliveries now". Always applies (marker recovery runs at the start of every apply). */
+    fun explicitApply(): List<SyncWork> = listOf(SyncWork.ApplyRequested)
 
-    /** "Apply deliveries now". Always applies (marker recovery runs at the start of every apply). */
-    fun explicitApply(): List<SyncWork> = listOf(SyncWork.ApplyAll)
+    /** After an apply pass ran [work]: the emulators an asked-for apply waited on finish it when they close. */
+    fun applied(work: SyncWork, report: ApplyReport) {
+        if (work == SyncWork.ApplyRequested && report.waitingOn.isNotEmpty()) flags.flag(report.waitingOn)
+    }
+
+    /**
+     * Emulator [id] exited. Applies through [apply] (the normal applier pass, which re-checks the process and backs
+     * up before writing) when auto-apply is on or an asked-for apply waited for it; `requested` tells the applier to
+     * run even if this session held nothing. Otherwise only [forget]s the waiting entries. The flag is cleared once
+     * the pass returns, and set again when the emulator held the deliveries back once more (reopened at once).
+     * Returns the pass's report, or null when nothing was applied.
+     */
+    suspend fun exited(id: String, apply: suspend (requested: Boolean) -> ApplyReport, forget: suspend () -> Unit): ApplyReport? {
+        val requested = id in flags.flagged()
+        if (!requested && !autoApply) {
+            forget()
+            return null
+        }
+        val r = apply(requested)
+        if (requested) {
+            flags.clear(id)
+            if (id in r.waitingOn) flags.flag(setOf(id))
+        }
+        return r
+    }
 
     fun tick(): List<SyncWork> = listOf(SyncWork.Tick)
     fun monitor(): List<SyncWork> = listOf(SyncWork.Monitor)

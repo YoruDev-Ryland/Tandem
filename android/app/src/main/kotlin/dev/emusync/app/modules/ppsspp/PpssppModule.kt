@@ -31,7 +31,7 @@ class PpssppModule(
     private val romExts = setOf("iso", "cso", "pbp", "chd")
 
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {
-        val pkg = packages.firstOrNull { it in fs.installedPackages() } ?: return null
+        val pkg = activePackage(fs.installedPackages(), settings) ?: return null
         val ms = settings.overrides["ppsspp.memstick"]?.takeIf { it.isNotBlank() }?.let { rooted(it).trimEnd('/') }
             ?: findMemstick(fs, pkg)
             ?: rooted("/sdcard/Android/data/$pkg/files")

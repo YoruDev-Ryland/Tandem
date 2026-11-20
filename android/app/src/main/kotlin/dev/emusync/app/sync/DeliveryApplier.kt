@@ -17,7 +17,34 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-data class ApplyReport(val applied: Int, val skipped: Int, val failed: Int, val waitingForEmulator: Int)
+/** What a pass did. [waitingOn] holds the emulators whose running held back at least one delivery. */
+data class ApplyReport(
+    val applied: Int,
+    val skipped: Int,
+    val failed: Int,
+    val waitingForEmulator: Int,
+    val waitingOn: Set<String> = emptySet(),
+)
+
+/**
+ * A delivery that had been held back because its emulator was running and has now been applied. [gameKey] and
+ * [displayName] are null for config bundles; [displayName] is also null when the game's title is unknown.
+ */
+data class ReceivedDelivery(val deliveryId: String, val emulatorId: String, val gameKey: String?, val displayName: String?)
+
+/**
+ * A delivery held back because its emulator is running. [gameKey] and [displayName] are null for config bundles;
+ * [displayName] is also null when the game's title is unknown. [fromDeviceName] is null when the server doesn't say
+ * which device the version came from (it currently never does).
+ */
+data class WaitingDelivery(
+    val deliveryId: String,
+    val emulatorId: String,
+    val emulatorName: String,
+    val gameKey: String?,
+    val displayName: String?,
+    val fromDeviceName: String?,
+)
 
 /**
  * Applies server deliveries (saves, config bundles, vault files) to this device.
@@ -47,6 +74,10 @@ class DeliveryApplier(
     private val cacheDir: File,
     private val backups: LocalBackups = LocalBackups(),
     private val vaultRoot: String = DEFAULT_VAULT_ROOT,
+    /** Receives the deliveries waiting for a running emulator after every pass (and [forgetWaiting]). */
+    private val onWaiting: (List<WaitingDelivery>) -> Unit = {},
+    /** Receives, after a pass, the held-back deliveries it applied (none: not called). */
+    private val onReceived: (List<ReceivedDelivery>) -> Unit = {},
     private val log: (String) -> Unit = {},
 ) {
     private enum class Outcome { Applied, Skipped, Failed, Waiting }
@@ -83,26 +114,78 @@ class DeliveryApplier(
     private val notifiedRunning = HashSet<String>()                // delivery ids already notified
     private val notifiedRecovery = HashSet<String>()               // marker keys whose failed recovery was notified
     private val notifiedUndetected = HashSet<String>()             // marker keys postponed because detect failed
+    private val waitingNow = LinkedHashMap<String, WaitingDelivery>()   // delivery id -> entry, as last published
+    private val passWaiting = LinkedHashMap<String, WaitingDelivery>()  // entries found by the pass in progress
+    private val passReceived = ArrayList<ReceivedDelivery>()            // held deliveries the pass in progress applied
+    private var exitPass = false                                       // the pass in progress follows an emulator exit
 
     // ---- public API ----
 
     /** Recovers interrupted writes, then applies pending deliveries, refetching up to [MAX_PASSES] times. */
-    suspend fun applyAll(): ApplyReport = mutex.withLock { pass { true } }
+    suspend fun applyAll(): ApplyReport = mutex.withLock { pass(null) }
 
-    /** Retries deliveries (and interrupted writes) held back while [emulatorId] ran, against the server's list. */
-    suspend fun onEmulatorExited(emulatorId: String): ApplyReport = mutex.withLock {
+    /**
+     * Retries deliveries (and interrupted writes) held back while [emulatorId] ran, against the server's list. With
+     * [force] the pass runs even when this applier held nothing for it: the hold was an apply the user asked for in an
+     * earlier session. Like every pass, it re-checks that the emulator is closed and backs up before writing.
+     */
+    suspend fun onEmulatorExited(emulatorId: String, force: Boolean = false): ApplyReport = mutex.withLock {
+        // The emulator stopped: nothing waits for it any more, whether or not a pass reaches the server.
+        val dropped = waitingNow.values.removeAll { it.emulatorId == emulatorId }
         val hasMarker = store.applyMarkers().values.any { it.emulatorId == emulatorId }
-        if (!hasMarker && pendingWhileRunning.values.none { it == emulatorId }) return@withLock ApplyReport(0, 0, 0, 0)
+        if (!force && !hasMarker && pendingWhileRunning.values.none { it == emulatorId }) {
+            if (dropped) publishWaiting()
+            return@withLock ApplyReport(0, 0, 0, 0)
+        }
         pendingWhileRunning.values.removeAll { it == emulatorId }
-        pass { it.emulatorId == emulatorId }
+        pass(emulatorId)
     }
+
+    /**
+     * Drops the published waiting entries of [emulatorId] without applying anything: it exited and its deliveries
+     * are no longer held back by it (they stay pending until the next apply).
+     */
+    suspend fun forgetWaiting(emulatorId: String): Unit = mutex.withLock {
+        if (waitingNow.values.removeAll { it.emulatorId == emulatorId }) publishWaiting()
+    }
+
+    /** Drops the published waiting entries of emulators not in [emulatorIds] (no longer detected). */
+    suspend fun retainWaiting(emulatorIds: Set<String>): Unit = mutex.withLock {
+        if (waitingNow.values.removeAll { it.emulatorId !in emulatorIds }) publishWaiting()
+    }
+
+    private fun publishWaiting() = onWaiting(waitingNow.values.toList())
 
     // ---- loop ----
 
-    private suspend fun pass(filter: (DeliveryDto) -> Boolean): ApplyReport {
+    /** One apply pass over every delivery, or only [emulatorId]'s. Then republishes the waiting deliveries. */
+    private suspend fun pass(emulatorId: String?): ApplyReport {
+        passWaiting.clear()
+        passReceived.clear()
+        exitPass = emulatorId != null   // only onEmulatorExited scopes a pass: what it applies waited for the exit
+        var fetchedAny = false
+        var completed = false
+        try {
+            return passInner(emulatorId) { fetchedAny = true }.also { completed = true }
+        } finally {
+            // A completed pass saw every pending delivery in scope (its first fetch lists them all), so its outcome
+            // replaces the scope's entries. An interrupted or offline pass only adds what it found.
+            if (completed && fetchedAny) waitingNow.values.removeAll { emulatorId == null || it.emulatorId == emulatorId }
+            waitingNow.putAll(passWaiting)
+            passWaiting.clear()
+            publishWaiting()
+            if (passReceived.isNotEmpty()) onReceived(passReceived.toList())
+            passReceived.clear()
+            exitPass = false
+        }
+    }
+
+    private suspend fun passInner(emulatorId: String?, onFetched: () -> Unit): ApplyReport {
+        val filter: (DeliveryDto) -> Boolean = { emulatorId == null || it.emulatorId == emulatorId }
         recoverMarkers()
         val seen = HashSet<String>()
         var applied = 0; var skipped = 0; var failed = 0; var waiting = 0
+        val waitingOn = LinkedHashSet<String>()
         for (i in 1..MAX_PASSES) {
             val fetched = try {
                 api.deliveries()
@@ -113,6 +196,7 @@ class DeliveryApplier(
             } catch (e: kotlinx.serialization.SerializationException) {
                 log("deliveries: server response not understood (update the app?)"); break
             }
+            onFetched()
             val list = fetched.filter { filter(it) && it.id !in seen }
             if (list.isEmpty()) break
             for (d in list) {
@@ -121,11 +205,11 @@ class DeliveryApplier(
                     Outcome.Applied -> applied++
                     Outcome.Skipped -> skipped++
                     Outcome.Failed -> failed++
-                    Outcome.Waiting -> waiting++
+                    Outcome.Waiting -> { waiting++; waitingOn += d.emulatorId }
                 }
             }
         }
-        return ApplyReport(applied, skipped, failed, waiting)
+        return ApplyReport(applied, skipped, failed, waiting, waitingOn)
     }
 
     private suspend fun applyOne(d: DeliveryDto): Outcome = try {
@@ -155,9 +239,12 @@ class DeliveryApplier(
         val m = registry.byId(d.emulatorId) ?: throw Reject("emulator not found")
         val det = moduleCall { m.detect(fs, settings) } ?: throw Reject("emulator not found")
         if (fs.isEmulatorRunning(m, det)) return waiting(d, m)
-        pendingWhileRunning.remove(d.id)
+        val held = pendingWhileRunning.remove(d.id) != null || exitPass
         return try {
-            if (d.kind == DeliveryKind.Config) applyConfig(d, m, det) else applySave(d, m, det)
+            (if (d.kind == DeliveryKind.Config) applyConfig(d, m, det) else applySave(d, m, det)).also {
+                if (it == Outcome.Applied && held) passReceived += ReceivedDelivery(d.id, m.emulatorId, d.gameKey,
+                    d.gameKey?.let { k -> engine.gameTitle(m.emulatorId, k) })
+            }
         } catch (e: StartedRunning) {
             waiting(d, m)
         }
@@ -165,6 +252,8 @@ class DeliveryApplier(
 
     private fun waiting(d: DeliveryDto, m: EmulatorModule): Outcome {
         pendingWhileRunning[d.id] = m.emulatorId
+        passWaiting[d.id] = WaitingDelivery(d.id, m.emulatorId, m.displayName, d.gameKey,
+            d.gameKey?.let { engine.gameTitle(m.emulatorId, it) }, fromDeviceName = null)
         if (notifiedRunning.add(d.id)) notifier(
             if (d.kind == DeliveryKind.Config) "Close ${m.displayName} to receive the newer settings"
             else "Close ${m.displayName} to receive the newer save for ${d.gameKey?.let { title(m, it) }}")

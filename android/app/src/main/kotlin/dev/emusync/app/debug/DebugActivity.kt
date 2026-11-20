@@ -20,10 +20,10 @@ import dev.emusync.app.api.ApiClient
 import dev.emusync.app.api.ApiException
 import dev.emusync.app.fs.ShizukuState
 import dev.emusync.app.model.DeviceKeyResponse
+import dev.emusync.app.modules.ModuleRegistry
 import dev.emusync.app.service.AppGraph
 import dev.emusync.app.service.LogBuffer
 import dev.emusync.app.service.SyncService
-import dev.emusync.app.sync.DeviceSettingsData
 import dev.emusync.app.sync.SignInForm
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,7 +41,7 @@ class DebugActivity : Activity() {
         const val LOG_LINES = 200
         const val REFRESH_MS = 2_000L
         const val REQ_NOTIFICATIONS = 1
-        val EDITED_OVERRIDES = setOf("azahar.root", "ppsspp.memstick", "eden.package")
+        val EDITED_OVERRIDES = setOf("azahar.root", "ppsspp.memstick")
     }
 
     private val ui = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -153,7 +153,7 @@ class DebugActivity : Activity() {
         romDirs = field("ROM folders (comma-separated)", settings.romDirs.joinToString(", "))
         azaharRoot = field("azahar.root (Azahar data root override)", settings.overrides["azahar.root"] ?: "")
         ppssppMemstick = field("ppsspp.memstick (PPSSPP memstick override)", settings.overrides["ppsspp.memstick"] ?: "")
-        edenPackage = field("eden.package (Eden package override)", settings.overrides["eden.package"] ?: "")
+        edenPackage = field("Eden variant (package; Settings › Emulators)", settings.variants["eden"] ?: "")
         root.addView(button("Save settings") { saveSettings() })
         text().text = "melonDS settings sync via export: export them in melonDS to " +
             "/storage/emulated/0/EmuSync/melonds-export/ and EmuSync picks them up from there."
@@ -179,9 +179,7 @@ class DebugActivity : Activity() {
         ui.launch {
             try {
                 val r = call(ApiClient(url, null), name)
-                store.serverUrl = url
-                store.deviceKey = r.deviceKey
-                store.deviceId = r.deviceId
+                store.signIn(url, r.deviceKey, r.deviceId, ModuleRegistry.default().all().map { it.emulatorId })
                 LogBuffer.add("$what ok: device ${r.deviceId} on $url")
                 toast("Signed in as device ${r.deviceId}")
                 SyncService.start(this@DebugActivity, SyncService.ACTION_RELOAD)
@@ -201,11 +199,13 @@ class DebugActivity : Activity() {
         val edited = mapOf(
             "azahar.root" to azaharRoot.value(),
             "ppsspp.memstick" to ppssppMemstick.value(),
-            "eden.package" to edenPackage.value(),
         ).filterValues { it.isNotBlank() }
         val current = store.settings
         val overrides = (current.overrides - EDITED_OVERRIDES) + edited   // keep keys this screen doesn't edit
-        store.settings = DeviceSettingsData(dirs, overrides, autoApply.isChecked)
+        val eden = edenPackage.value().trim()
+        val variants = if (eden.isEmpty()) current.variants - "eden" else current.variants + ("eden" to eden)
+        // copy: theme and the other emulators' variants are not on this screen and must survive a save
+        store.settings = current.copy(romDirs = dirs, overrides = overrides, autoApply = autoApply.isChecked, variants = variants)
         saveForm()
         LogBuffer.add("settings saved: ${dirs.size} ROM folders, overrides ${overrides.keys}")
         if (AppGraph.snapshot.value.running) SyncService.start(this, SyncService.ACTION_RELOAD)

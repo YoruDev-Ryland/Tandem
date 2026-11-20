@@ -9,8 +9,13 @@ import dev.emusync.app.model.*
 import dev.emusync.app.modules.*
 import java.io.IOException
 import java.security.MessageDigest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** A server-reported conflict. [kind] and [gameKey] are null for a config bundle. */
 data class SyncConflict(
@@ -48,6 +53,11 @@ class SyncEngine(
     private val onConflict: (SyncConflict) -> Unit,
     private val storageRoot: String = "/storage",
     private val quietMillis: Long = SyncConfig.quietMillis,
+    private val runningReportMillis: Long = SyncConfig.runningReportMillis,
+    /** How long [reportRunning] waits for the server before leaving the PUT to finish in the background. */
+    private val statusTimeoutMillis: Long = 10_000L,
+    /** Runs [reportRunning]'s PUTs, so a hung (non-cancellable) call never blocks the caller past the timeout. */
+    private val statusScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
 ) {
     private class Tracked(val module: EmulatorModule, val detected: Detected, val item: LocalItem)
@@ -80,6 +90,16 @@ class SyncEngine(
     private val shadowLogged = HashSet<String>()
     private val queued = HashSet<String>()                   // store keys whose last upload attempt failed
     private val titles = HashMap<String, String>()            // "<emulatorId>|<gameKey>" -> game title (items, installs)
+    private var running: Set<String> = emptySet()             // emulator ids the last [reportRunning] saw running
+
+    // The last status report and its attempt, guarded by [statusLock].
+    private val statusLock = Any()
+    private var lastStatus: DeviceStatusRequest? = null       // last built or sent; its emulators and roots are reused
+    private var sentRunning: List<String>? = null
+    private var sentAt = 0L
+    private var sentOk = false
+    private var attempt = 0L                                  // bumped per attempt; a late success counts only if current
+    private var inFlight = false                              // a [reportRunning] PUT hasn't returned yet
 
     // Touched only under [mutex].
     private val lastInstalls = HashMap<String, List<InstalledGame>>()
@@ -87,12 +107,14 @@ class SyncEngine(
     private val hashCache = java.util.concurrent.ConcurrentHashMap<String, CachedHash>()
     /** Bumped (under [ev]) by every invalidation; a build commits its hashes only if it didn't change meanwhile. */
     private var cacheEpoch = 0L
-    private val notified = HashSet<String>()                  // "<key>|<manifest hash>" conflicts already reported
+    private val notified = HashSet<String>()
+    private var forgetTriedAt: Long? = null                   // the last forget attempt (see dropServerRecords)                  // "<key>|<manifest hash>" conflicts already reported
 
     // ---- public API ----
 
     /** Detects modules, reports status and installs, then uploads every changed item and idle config bundle. */
     suspend fun fullScan(): Unit = mutex.withLock {
+        dropServerRecords(force = true)
         val found = LinkedHashMap<String, Pair<EmulatorModule, Detected>>()
         for (m in registry.all()) detectOne(m)?.let { found[m.emulatorId] = m to it }
         val dirs = found.mapValues { (_, p) -> moduleCall(p.first, "watchDirs") { p.first.watchDirs(fs, p.second) } ?: emptyList() }
@@ -114,6 +136,49 @@ class SyncEngine(
             }
         }
         for ((m, d) in found.values) if (!fs.isEmulatorRunning(m, d)) uploadConfigBundle(m, d)
+
+    }
+
+    /**
+     * Records the emulators running now (from the process monitor) and sends a status report when the set changed
+     * since the last report, or when [runningReportMillis] passed since it while an emulator runs or the last report
+     * failed. Nothing is sent while nothing runs and the last report went through.
+     *
+     * Cheap and lock-free with respect to the engine: it resends the last full scan's status (emulators, roots) with
+     * only the running list replaced, never touches modules or storage, and waits at most [statusTimeoutMillis] for
+     * the server. While a previous PUT is still out, nothing more is sent.
+     */
+    suspend fun reportRunning(ids: Set<String>) {
+        synchronized(ev) { running = ids }
+        val (req, mine) = synchronized(statusLock) {
+            val base = lastStatus ?: return   // no full scan reported yet; it will include the running list
+            if (inFlight) return
+            val known = base.emulators.map { it.emulatorId }.toSet()
+            val current = ids.filter { it in known }.sorted()
+            val elapsed = clock() - sentAt   // wall clock: a step backwards counts as due rather than stalling
+            val due = current != sentRunning ||
+                ((current.isNotEmpty() || !sentOk) && (elapsed >= runningReportMillis || elapsed < 0))
+            if (!due) return
+            val r = base.copy(shizukuOk = shizukuOk(), runningEmulators = current)
+            lastStatus = r
+            sentRunning = current
+            sentAt = clock()
+            sentOk = false
+            inFlight = true
+            r to ++attempt
+        }
+        val put = statusScope.async {
+            try {
+                apiCall("status") {
+                    api.putStatus(req, callTimeoutMillis = statusTimeoutMillis)   // fails rather than landing late
+                    synchronized(statusLock) { if (attempt == mine) sentOk = true }
+                }
+            } finally {
+                synchronized(statusLock) { inFlight = false }
+            }
+        }
+        if (withTimeoutOrNull(statusTimeoutMillis) { put.await() } == null && put.isActive)
+            log("status: no answer in ${statusTimeoutMillis / 1000} s, left running")
     }
 
     /** Drops cached hashes for [paths] (files the applier wrote, deleted or restored). Lock-free. */
@@ -146,6 +211,7 @@ class SyncEngine(
 
     /** Rescans modules that saw events, then uploads dirty items quiet for at least quietMillis. */
     suspend fun tick(): Unit = mutex.withLock {
+        dropServerRecords()
         val now = clock()
         val (rescans, mods) = synchronized(ev) {
             val r = HashMap(rescan); rescan.clear()
@@ -269,11 +335,14 @@ class SyncEngine(
         }
         val hash = Manifests.hash(fresh.entries)
         if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= key }; return null }
+        // Forgotten (variant switch, new sign-in) and the server's records not yet dropped: it must take the base as sent.
+        dropServerRecords()
+        val isFresh = store.isFresh(id)
         return queueing(key, apiCall(name) {
             val built = fresh
             pushBlobs(built)
             val r = api.uploadSave(SaveUploadRequest(id, item.kind, item.gameKey, item.slot, item.core,
-                known?.knownVersionId, built.entries, item.displayName))
+                known?.knownVersionId, built.entries, item.displayName, fresh = if (isFresh) true else null))
             when (r.status) {
                 SaveUploadStatus.Accepted, SaveUploadStatus.Unchanged -> {
                     val v = if (r.status == SaveUploadStatus.Accepted) r.versionId else r.headVersionId
@@ -315,10 +384,12 @@ class SyncEngine(
         val known = store.configState(id)
         val hash = Manifests.hash(fresh.entries)
         if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= ItemKey.config(id) }; return null }
+        dropServerRecords()
+        val isFresh = store.isFresh(id)
         return queueing(ItemKey.config(id), apiCall(name) {
             val built = fresh
             pushBlobs(built)
-            val r = api.uploadConfig(ConfigUploadRequest(id, known?.knownVersionId, built.entries))
+            val r = api.uploadConfig(ConfigUploadRequest(id, known?.knownVersionId, built.entries, fresh = if (isFresh) true else null))
             when (r.status) {
                 SaveUploadStatus.Accepted, SaveUploadStatus.Unchanged -> {
                     store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash))
@@ -335,6 +406,25 @@ class SyncEngine(
             }
             r.status
         })
+    }
+
+    /**
+     * Asks the server to drop what it recorded this device as holding for the emulators forgotten here (variant
+     * switch, new sign-in), before their next upload. Until that succeeds their uploads are sent fresh. A failure is
+     * retried no more than every [FORGET_RETRY_MS] (each full scan always tries), so an offline device doesn't send it
+     * every tick. Called under [mutex].
+     */
+    private suspend fun dropServerRecords(force: Boolean = false) {
+        val ids = store.serverForgetPending
+        if (ids.isEmpty()) return
+        val at = forgetTriedAt
+        if (!force && at != null && clock() - at in 0 until FORGET_RETRY_MS) return
+        forgetTriedAt = clock()
+        apiCall("forget") {
+            api.forget(ids.sorted())
+            store.forgetDone(ids)
+            log("server forgot what this device held for ${ids.sorted()}")
+        }
     }
 
     /** Records whether the upload of [key] failed ([status] null from [apiCall]) for [queuedCount]. */
@@ -489,7 +579,25 @@ class SyncEngine(
         roots["{INTERNAL}"] = "$storageRoot/emulated/0"
         sdCard()?.let { roots["{SD}"] = it }
         for ((m, d) in found) roots["{EMU:${m.emulatorId}}"] = d.dataRoot
-        apiCall("status") { api.putStatus(DeviceStatusRequest("android", appVersion, shizukuOk(), emulators, roots)) }
+        val runningNow = runningOf(found)
+        val req = DeviceStatusRequest("android", appVersion, shizukuOk(), emulators, roots, runningNow)
+        val mine = synchronized(statusLock) {
+            lastStatus = req
+            sentRunning = runningNow
+            sentAt = clock()
+            sentOk = false
+            ++attempt
+        }
+        apiCall("status") {
+            api.putStatus(req)
+            synchronized(statusLock) { if (attempt == mine) sentOk = true }
+        }
+    }
+
+    /** The running emulator ids among [found], sorted (the server drops ids it doesn't know). */
+    private fun runningOf(found: List<Pair<EmulatorModule, Detected>>): List<String> {
+        val ids = found.map { it.first.emulatorId }.toSet()
+        return synchronized(ev) { running.filter { it in ids }.sorted() }
     }
 
     private fun sdCard(): String? = try {
@@ -546,6 +654,7 @@ class SyncEngine(
 
     private companion object {
         const val UNKNOWN_VERSION = "unknown"
+        const val FORGET_RETRY_MS = 30_000L
         val BLOB_RETRY_DELAYS = longArrayOf(1_000L, 2_000L, 4_000L)
         val sdName = Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")
     }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window background only; everything else is drawn by Compose from EmuColors. Light bg #EDEDEA. -->
+    <style name="Theme.EmuSync" parent="android:Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:windowBackground">#FFEDEDEA</item>
+    </style>
+</resources>

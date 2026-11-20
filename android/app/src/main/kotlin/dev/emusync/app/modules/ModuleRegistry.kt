@@ -9,8 +9,8 @@ import dev.emusync.app.modules.ppsspp.PpssppModule
 import dev.emusync.app.modules.vita3k.Vita3kModule
 
 /**
- * The emulator modules, one per emulator id. Each module's detection takes the FIRST installed package of its
- * [EmulatorModule.packages] (or a settings override); the running check covers all of them.
+ * The emulator modules, one per emulator id. Each module's detection takes its active package (the chosen variant
+ * when installed, else the first installed of [EmulatorModule.packages]); the running check covers all of them.
  */
 class ModuleRegistry(private val modules: List<EmulatorModule>) {
     fun all(): List<EmulatorModule> = modules

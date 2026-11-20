@@ -24,9 +24,7 @@ class EdenModule(private val internalRoot: String = "/storage/emulated/0") : Emu
     private val userId = "0000000000000000"
 
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {
-        val installed = fs.installedPackages()
-        val pkg = settings.overrides["eden.package"]?.takeIf { it in installed }
-            ?: packages.firstOrNull { it in installed } ?: return null
+        val pkg = activePackage(fs.installedPackages(), settings) ?: return null
         val root = rooted("/sdcard/Android/data/$pkg/files")
         val cfg = readConfig(fs, root)
         return Detected(emulatorId, pkg, "", root, mapOf("saveRoot" to saveRoot(cfg, root), "nand" to nand(cfg, root), "INTERNAL" to internalRoot))

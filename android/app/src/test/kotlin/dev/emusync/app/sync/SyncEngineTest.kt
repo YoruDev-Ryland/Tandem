@@ -22,6 +22,21 @@ class SyncEngineTest {
     // ---- fakes ----
 
     class FakeApi : Api {
+        override suspend fun games(emulator: String?): List<GameRow> = error("unused")
+        override suspend fun game(emulatorId: String, gameKey: String): GameDetail = error("unused")
+        override suspend fun conflicts(): List<ConflictRow> = error("unused")
+        override suspend fun resolveConflict(itemId: String, req: ResolveConflictRequest) = error("unused")
+        override suspend fun firstSync(req: BulkFirstSyncRequest) = error("unused")
+        override suspend fun configs(): ConfigOverview = error("unused")
+        override suspend fun joinGroup(groupId: String, deviceId: String) = error("unused")
+        override suspend fun applyConfig(req: ApplyConfigRequest): ApplyConfigResponse = error("unused")
+        override suspend fun keepOwn(deviceId: String, emulatorId: String) = error("unused")
+        override suspend fun setup(deviceId: String): SetupChecklist = error("unused")
+        override suspend fun activity(device: String?, before: Long?, limit: Int): ActivityPage = error("unused")
+        override suspend fun devices(): List<DeviceSummary> = error("unused")
+        override suspend fun me(): DeviceSummary = error("unused")
+        override suspend fun serverInfo(): ServerInfo = error("unused")
+
         val statuses = mutableListOf<DeviceStatusRequest>()
         val installs = mutableListOf<Pair<String, List<InstalledGame>>>()
         val missingQueries = mutableListOf<List<String>>()
@@ -40,6 +55,13 @@ class SyncEngineTest {
         override suspend fun login(email: String, password: String, deviceName: String) = error("unused")
         override suspend fun redeemPairing(code: String, deviceName: String) = error("unused")
         override suspend fun putStatus(req: DeviceStatusRequest) { statuses += req }
+        /** Every forget call and save upload, in order ("forget:[fake]", "save:GAME1"). */
+        val calls = mutableListOf<String>()
+        var forgetFails = false
+        override suspend fun forget(emulatorIds: List<String>) {
+            calls += "forget:$emulatorIds"
+            if (forgetFails) throw java.io.IOException("offline")
+        }
         override suspend fun putInstalls(emulatorId: String, games: List<InstalledGame>): InstallsResponse {
             installs += emulatorId to games; return InstallsResponse(games.size, 0)
         }
@@ -55,7 +77,7 @@ class SyncEngineTest {
         override suspend fun uploadSave(req: SaveUploadRequest): SaveUploadResponse {
             if (req.gameKey == failSaveFor) throw ApiException(500, "boom", "boom")
             if (req.gameKey == unparseableSaveFor) throw kotlinx.serialization.SerializationException("unknown enum")
-            saves += req; n++
+            saves += req; n++; calls += "save:${req.gameKey}"
             return SaveUploadResponse(saveStatus, "item-${req.gameKey}", "v$n", "head$n")
         }
         override suspend fun uploadConfig(req: ConfigUploadRequest): ConfigUploadResponse {
@@ -166,6 +188,90 @@ class SyncEngineTest {
         engine().fullScan()
         assertEquals("v1", api.saves[1].baseVersionId)
         assertEquals("v2", store.get(saveKey("GAME1"))!!.knownVersionId)
+    }
+
+    private fun forgetFake() { store.setVariant("fake", "com.fake.emu.duo", forgetState = true); store.applyPendingForget() }
+
+    @Test fun the_servers_records_are_dropped_before_the_first_upload_after_a_variant_change() = runBlocking {
+        put("saves/GAME1/a.sav", "old variant")
+        store.put(ItemKey.of("other", "Save", "X", "", ""), ItemState("v7", "h", "h"))
+        engine().fullScan()
+        assertEquals("v1", store.get(saveKey("GAME1"))!!.knownVersionId)
+        // The user picks another variant; its folder holds an older, different save of the same game.
+        forgetFake()
+        put("saves/GAME1/a.sav", "new variant, older save", 6_000)
+        engine().fullScan()
+        assertEquals(listOf("save:GAME1", "forget:[fake]", "save:GAME1"), api.calls)
+        assertNull(api.saves[1].baseVersionId)   // the server no longer records a version for it: a conflict, not a fast-forward
+        assertNull(api.saves[1].fresh)           // the records are gone, so the flag is not needed
+        assertEquals(emptySet<String>(), store.serverForgetPending)
+        assertEquals("v7", store.get(ItemKey.of("other", "Save", "X", "", ""))!!.knownVersionId)
+    }
+
+    @Test fun while_the_forget_cannot_reach_the_server_every_upload_stays_fresh_whatever_the_answer() = runBlocking {
+        forgetFake()
+        api.forgetFails = true
+        put("saves/GAME1/a.sav", "mine")
+        put("config/a.ini", "x=1")
+        api.saveStatus = SaveUploadStatus.Conflict
+        engine().fullScan()
+        api.saveStatus = SaveUploadStatus.Accepted
+        now += 60_000
+        put("saves/GAME1/a.sav", "mine, played on", 6_000)
+        put("saves/GAME2/a.sav", "a game first seen later", 6_000)
+        engine().fullScan()
+        now += 60_000
+        put("saves/GAME1/a.sav", "mine, played more", 7_000)
+        engine().fullScan()
+        assertEquals(listOf(true, true, true, true), api.saves.map { it.fresh })
+        assertEquals(true, api.configs[0].fresh)
+        assertEquals(setOf("fake"), store.serverForgetPending)
+        assertEquals(3, api.calls.count { it.startsWith("forget") })   // retried, once per scan
+        // Back online: the forget goes through and uploads are ordinary again.
+        api.forgetFails = false
+        now += 60_000
+        put("saves/GAME1/a.sav", "online again", 8_000)
+        engine().fullScan()
+        assertEquals("forget:[fake]", api.calls[api.calls.lastIndex - 1])
+        assertNull(api.saves.last().fresh)
+        assertEquals(emptySet<String>(), store.serverForgetPending)
+    }
+
+    @Test fun a_failed_forget_is_not_retried_on_every_tick() = runBlocking {
+        forgetFake()
+        api.forgetFails = true
+        put("saves/GAME1/a.sav", "mine")
+        val e = engine()
+        e.fullScan()
+        put("saves/GAME1/a.sav", "edited", 6_000)
+        e.onFsEvent("$root/saves/GAME1")
+        now += 5_000; e.tick()
+        now += 5_000; e.tick()
+        assertEquals(1, api.calls.count { it.startsWith("forget") })
+        now += 60_000
+        e.tick()
+        assertEquals(2, api.calls.count { it.startsWith("forget") })
+    }
+
+    @Test fun a_delivery_applied_while_the_forget_is_pending_uploads_fresh_on_its_delivered_base() = runBlocking {
+        forgetFake()
+        api.forgetFails = true
+        put("saves/GAME1/a.sav", "delivered")
+        // What the applier stores after writing a delivered version.
+        store.put(saveKey("GAME1"), ItemState("d1", hashOf("delivered"), hashOf("delivered")))
+        engine().fullScan()
+        assertTrue(api.saves.isEmpty())   // the files are what was delivered: nothing to upload
+        put("saves/GAME1/a.sav", "played on the delivered save", 6_000)
+        engine().fullScan()
+        assertEquals("d1", api.saves.single().baseVersionId)
+        assertEquals(true, api.saves.single().fresh)
+    }
+
+    @Test fun an_ordinary_request_is_serialized_without_the_fresh_field() {
+        val req = SaveUploadRequest("eden", ItemKind.Save, "G", "", "", null, emptyList())
+        assertFalse(ProtocolJson.encodeToString(SaveUploadRequest.serializer(), req).contains("fresh"))
+        assertTrue(ProtocolJson.encodeToString(SaveUploadRequest.serializer(), req.copy(fresh = true)).contains("\"fresh\":true"))
+        assertFalse(ProtocolJson.encodeToString(ConfigUploadRequest.serializer(), ConfigUploadRequest("eden", null, emptyList())).contains("fresh"))
     }
 
     @Test fun unchanged_response_stores_head_version() = runBlocking {

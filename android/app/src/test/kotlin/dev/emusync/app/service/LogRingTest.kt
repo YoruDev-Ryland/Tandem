@@ -23,4 +23,11 @@ class LogRingTest {
         r.add("x")
         assertTrue(r.last(1)[0], r.last(1)[0].matches(Regex("""\d\d:\d\d:\d\d\.\d{3} x""")))
     }
+
+    @Test fun lines_flow_holds_the_newest_window() {
+        val r = LogRing(5, window = 3) { 0L }
+        assertEquals(emptyList<String>(), r.lines.value)
+        (1..4).forEach { r.add("l$it") }
+        assertEquals(listOf("l2", "l3", "l4"), r.lines.value.map { it.substringAfter(' ') })
+    }
 }

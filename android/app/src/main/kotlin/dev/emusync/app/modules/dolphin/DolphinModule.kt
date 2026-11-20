@@ -26,7 +26,7 @@ class DolphinModule(private val internalRoot: String = "/storage/emulated/0") : 
     private val romExts = setOf("iso", "gcm", "ciso", "wbfs", "rvz", "wia")
 
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {
-        val pkg = packages.firstOrNull { it in fs.installedPackages() } ?: return null
+        val pkg = activePackage(fs.installedPackages(), settings) ?: return null
         return Detected(emulatorId, pkg, "", rooted("/sdcard/Android/data/$pkg/files"), mapOf("INTERNAL" to internalRoot))
     }
 

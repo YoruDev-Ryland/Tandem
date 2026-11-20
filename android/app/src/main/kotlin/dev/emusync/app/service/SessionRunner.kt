@@ -9,6 +9,12 @@ import kotlinx.coroutines.launch
  * job (cancelled by the old instance's onDestroy), so the old session's cleanup (unwatchAll on the shared shell,
  * in-flight uploads) finishes before the new session binds and scans.
  */
+/**
+ * The first step of every sync session, run after the previous session has ended (the supervisor joins it): applies
+ * the sync state forgets the UI recorded. Returns the forgotten emulator ids.
+ */
+internal fun prepareSession(store: dev.emusync.app.sync.StateStore): Set<String> = store.applyPendingForget()
+
 class SessionRunner {
     private var current: Job? = null
 

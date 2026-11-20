@@ -10,6 +10,9 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 @Serializable enum class DeliveryKind { Save, Config, Vault }
 @Serializable enum class DeliveryResult { Applied, SkippedLocalChanged, Failed }
 
+/** GET /v1/server-info: no key needed. [protocol] is the server's EmuSync-Protocol version. */
+@Serializable data class ServerInfo(val name: String, val protocol: Int, val registrationOpen: Boolean)
+
 @Serializable data class RegisterRequest(val email: String, val password: String, val deviceName: String, val platform: String)
 @Serializable data class LoginRequest(val email: String, val password: String, val deviceName: String, val platform: String)
 @Serializable data class RedeemPairingRequest(val code: String, val deviceName: String, val platform: String)
@@ -31,6 +34,8 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val shizukuOk: Boolean,
     val emulators: List<EmulatorStatus>,
     val roots: Map<String, String>,
+    /** Emulator ids running right now; replaces the server's list on every report. Null (omitted) means none. */
+    val runningEmulators: List<String>? = null,
 )
 
 @Serializable data class InstalledGame(
@@ -39,6 +44,8 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val crc32: String? = null,
 )
 @Serializable data class InstallsRequest(val games: List<InstalledGame>)
+/** POST /v1/devices/me/forget: the server drops what it recorded this device as holding for these emulators. */
+@Serializable data class ForgetRequest(val emulatorIds: List<String>)
 @Serializable data class InstallsResponse(val added: Int = 0, val removed: Int = 0)
 
 @Serializable data class SaveUploadRequest(
@@ -50,6 +57,8 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val baseVersionId: String? = null,
     val manifest: List<ManifestEntry>,
     val displayName: String? = null,
+    /** True while this device has forgotten what it knew of the item (variant switch, new sign-in); null otherwise. */
+    val fresh: Boolean? = null,
 )
 @Serializable data class SaveUploadResponse(
     val status: SaveUploadStatus,
@@ -62,6 +71,8 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val emulatorId: String,
     val baseVersionId: String? = null,
     val files: List<ManifestEntry>,
+    /** As [SaveUploadRequest.fresh], for the emulator's config bundle. */
+    val fresh: Boolean? = null,
 )
 @Serializable data class ConfigUploadResponse(
     val status: SaveUploadStatus,
