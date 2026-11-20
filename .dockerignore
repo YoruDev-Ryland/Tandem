@@ -5,6 +5,11 @@
 .vs/
 .idea/
 data/
+**/data/
+.env
+**/appsettings.Development.json
+*.pfx
+*.key
 tests/
 docs/
 node_modules/

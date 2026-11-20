@@ -2,7 +2,8 @@
 
 A self-hosted server that syncs emulator saves and states between your Android handhelds, and backs up and syncs
 emulator configs. One container, one data volume. Clients (the Android app and the web UI) talk to it over HTTP; the API
-is described by `GET /v1/openapi.json`.
+is described by `GET /v1/openapi.json` (send the `EmuSync-Protocol: 1` header with that request, as with every `/v1/` route
+except `/v1/server-info`).
 
 ## Run
 
@@ -90,8 +91,9 @@ In the web UI (admin), set a target and a schedule: a mounted folder (a NAS) or 
 how many backups to keep. A backup holds the database and all blobs. "Run now" starts one immediately. You can encrypt
 backups with a passphrase.
 
-- **Notification tokens and Discord webhook URLs are stored on the server** and are part of a backup. Only an
-  **encrypted** backup protects them; turn encryption on if the target is not private.
+- **Secrets are stored on the server in plain form** and are part of a backup: emulator config secrets synced with the
+  configs (RetroArch cheevos and netplay credentials, the Eden web token) and notification tokens and Discord webhook
+  URLs. Only an **encrypted** backup protects them; turn encryption on if the target is not private.
 - **Losing the passphrase means the backup cannot be restored.** There is no recovery. Store it somewhere other than the
   server.
 - Backup target settings (secrets, schedule) are not restored; set the target up again on the restored server.
