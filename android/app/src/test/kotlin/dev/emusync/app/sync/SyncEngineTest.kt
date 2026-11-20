@@ -250,6 +250,42 @@ class SyncEngineTest {
         assertEquals(hashOf("BBBB"), Manifests.hash(api.saves.last().manifest))
     }
 
+    @Test fun event_between_build_and_commit_drops_entry() = runBlocking {
+        put("saves/GAME1/a.sav", "AAAA")
+        lateinit var e: SyncEngine
+        var fired = false
+        val fs = object : LocalFs() {
+            override fun openRead(path: String): InputStream {
+                if (!fired && path.endsWith("/a.sav")) {
+                    fired = true
+                    val a = File(path).readBytes()
+                    File(path).writeText("BBBB"); File(path).setLastModified(5_000)   // same size, stale mtime
+                    e.onFsEvent("$root/unrelated")   // bumps the epoch without touching this item's marks
+                    return a.inputStream()
+                }
+                return super.openRead(path)
+            }
+        }.apply { packages.add("com.fake.emu") }
+        e = engine(fs)
+        e.fullScan()
+        assertFalse(e.cachedPaths().any { it.endsWith("/a.sav") })
+        e.fullScan()
+        assertEquals(hashOf("BBBB"), Manifests.hash(api.saves.last().manifest))
+    }
+
+    @Test fun cache_never_feeds_config_upload_manifest() = runBlocking {
+        put("config/c.ini", "AAAA")
+        api.configStatus = SaveUploadStatus.Conflict   // nothing stored; the cache is primed with A
+        val e = engine()
+        e.fullScan()
+        assertEquals(1, api.configs.size)
+        put("config/c.ini", "BBBB", 5_000)             // same size and mtime, no event
+        val d = module.detect(fs(), DeviceSettings(emptyList(), emptyMap()))!!
+        e.uploadConfig(module, d)
+        assertEquals(2, api.configs.size)
+        assertTrue(api.configs.last().files.any { it.hash == blobHash("BBBB") })
+    }
+
     @Test fun event_in_parent_dir_picks_up_new_item() = runBlocking {
         put("saves/GAME1/a.sav", "hello")
         val e = engine()
@@ -440,7 +476,7 @@ class SyncEngineTest {
         assertEquals(first, reads)
         put("saves/GAME2/b.sav", "world2", 6_000)
         e.fullScan()
-        assertEquals(first + 3, reads)     // cached-path rehash + fresh upload hash + one blob upload
+        assertEquals(first + 2, reads)     // one rehash (reused for the upload manifest) + one blob upload
     }
 
     @Test fun repeated_conflict_for_same_content_notifies_once() = runBlocking {

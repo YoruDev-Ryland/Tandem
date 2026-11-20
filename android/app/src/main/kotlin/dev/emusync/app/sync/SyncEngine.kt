@@ -55,6 +55,8 @@ class SyncEngine(
         val sources: Map<String, String>,            // hash -> absolute path
         val stats: Map<String, FileEntry>,           // absolute path -> stat taken before hashing
         val hashed: Map<String, CachedHash>,         // newly computed hashes, committed once stable
+        val epoch: Long,                             // [cacheEpoch] when the build started
+        val cacheHits: Int,                          // entries taken from [hashCache]; 0 means entirely fresh from disk
     ) : Build
     private class TooLarge(val path: String, val size: Long) : Build
     private object Fresh : Build                     // a file was modified within the quiet window
@@ -79,6 +81,8 @@ class SyncEngine(
     private val lastInstalls = HashMap<String, List<InstalledGame>>()
     /** Absolute path -> last stable hash. Only ever used to conclude "unchanged"; never feeds an uploaded manifest. */
     private val hashCache = java.util.concurrent.ConcurrentHashMap<String, CachedHash>()
+    /** Bumped (under [ev]) by every invalidation; a build commits its hashes only if it didn't change meanwhile. */
+    private var cacheEpoch = 0L
     private val notified = HashSet<String>()                  // "<key>|<manifest hash>" conflicts already reported
 
     // ---- public API ----
@@ -111,19 +115,28 @@ class SyncEngine(
     /** Drops cached hashes for [paths] (files the applier wrote, deleted or restored). Lock-free. */
     fun invalidate(paths: Collection<String>) {
         val s = paths.toSet()
-        hashCache.keys.removeIf { it in s }
+        synchronized(ev) { cacheEpoch++; hashCache.keys.removeIf { it in s } }
+    }
+
+    /** Paths currently in the hash cache (for tests). */
+    internal fun cachedPaths(): Set<String> = hashCache.keys.toSet()
+
+    /** Commits [b]'s new hashes unless an invalidation happened since it started; check and commit are atomic. */
+    private fun commit(b: Built) {
+        synchronized(ev) { if (cacheEpoch == b.epoch) hashCache.putAll(b.hashed) }
     }
 
     /** Marks items under [dir] dirty and their module for rescan. */
     fun onFsEvent(dir: String) {
-        hashCache.keys.removeIf { under(it, dir) }
         val t = clock()
         synchronized(ev) {
+            cacheEpoch++
             val hit = HashSet<String>()
             for ((key, tr) in tracked) if (under(dir, tr.item.baseDir)) {
                 dirty[key] = t; marks[key] = ++eventSeq; hit += tr.module.emulatorId
             }
             for ((id, dirs) in watchDirs) if (id in hit || dirs.any { under(dir, it) || under(it, dir) }) rescan[id] = t
+            hashCache.keys.removeIf { under(it, dir) }
         }
     }
 
@@ -231,18 +244,22 @@ class SyncEngine(
         }
         if (!stable(built)) return defer("changed while reading")
         if (synchronized(ev) { marks[key] } != seq0) return defer("event while reading")
-        hashCache.putAll(built.hashed)
+        commit(built)
         val known = store.get(key)
         // The cache may only conclude "unchanged"; a manifest that goes to the server is hashed fresh from disk.
         if (Manifests.hash(built.entries) == known?.knownManifestHash) { synchronized(ev) { queued -= key }; return null }
-        val fresh = when (val b = buildOrNull(name, item.files.map { it to "${item.baseDir}/$it" }, rejectFresh = true, useCache = false)) {
-            null -> return null
-            Fresh -> return defer("modified within quiet window")
-            else -> b as Built
+        // A build that took nothing from the cache is already entirely fresh from disk; reuse it.
+        val fresh = if (built.cacheHits == 0) built else {
+            val b = when (val x = buildOrNull(name, item.files.map { it to "${item.baseDir}/$it" }, rejectFresh = true, useCache = false)) {
+                null -> return null
+                Fresh -> return defer("modified within quiet window")
+                else -> x as Built
+            }
+            if (!stable(b)) return defer("changed while reading")
+            if (synchronized(ev) { marks[key] } != seq0) return defer("event while reading")
+            commit(b)
+            b
         }
-        if (!stable(fresh)) return defer("changed while reading")
-        if (synchronized(ev) { marks[key] } != seq0) return defer("event while reading")
-        hashCache.putAll(fresh.hashed)
         val hash = Manifests.hash(fresh.entries)
         if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= key }; return null }
         return queueing(key, apiCall(name) {
@@ -284,15 +301,18 @@ class SyncEngine(
             log("$name: changed while reading, skipped")
             return null
         }
-        hashCache.putAll(built.hashed)
+        commit(built)
         val known = store.configState(id)
         if (Manifests.hash(built.entries) == known?.knownManifestHash) { synchronized(ev) { queued -= ItemKey.config(id) }; return null }
-        val fresh = buildOrNull(name, files.entries.map { it.key to it.value }, rejectFresh = false, useCache = false) as Built? ?: return null
-        if (!stable(fresh)) {
-            log("$name: changed while reading, skipped")
-            return null
+        val fresh = if (built.cacheHits == 0) built else {
+            val b = buildOrNull(name, files.entries.map { it.key to it.value }, rejectFresh = false, useCache = false) as Built? ?: return null
+            if (!stable(b)) {
+                log("$name: changed while reading, skipped")
+                return null
+            }
+            commit(b)
+            b
         }
-        hashCache.putAll(fresh.hashed)
         val hash = Manifests.hash(fresh.entries)
         if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= ItemKey.config(id) }; return null }
         return queueing(ItemKey.config(id), apiCall(name) {
@@ -364,6 +384,7 @@ class SyncEngine(
      */
     private fun build(files: List<Pair<String, String>>, rejectFresh: Boolean, useCache: Boolean = true): Build {
         files.forEach { Paths.requireSafeRelative(it.first) }
+        val epoch = synchronized(ev) { cacheEpoch }
         val stats = HashMap<String, FileEntry>()
         val now = clock()
         for ((rel, abs) in files) {
@@ -374,11 +395,13 @@ class SyncEngine(
         if (rejectFresh && stats.values.any { it.mtimeMillis > now - quietMillis && it.mtimeMillis <= now + quietMillis }) return Fresh
         val sources = HashMap<String, String>()
         val hashed = HashMap<String, CachedHash>()
+        var hits = 0
         val entries = files.map { (rel, abs) ->
             val st = stats.getValue(abs)
             val c = if (useCache) hashCache[abs] else null
             if (c != null && c.size == st.size && c.mtime == st.mtimeMillis) {
                 sources.putIfAbsent(c.hash, abs)
+                hits++
                 return@map ManifestEntry(rel, c.hash, c.size)
             }
             val md = MessageDigest.getInstance("SHA-256")
@@ -396,7 +419,7 @@ class SyncEngine(
             hashed[abs] = CachedHash(st.size, st.mtimeMillis, h)
             ManifestEntry(rel, h, size)
         }.sortedBy { it.path }
-        return Built(entries, sources, stats, hashed)
+        return Built(entries, sources, stats, hashed, epoch, hits)
     }
 
     /** True when every file still has the size and mtime it had before hashing. */

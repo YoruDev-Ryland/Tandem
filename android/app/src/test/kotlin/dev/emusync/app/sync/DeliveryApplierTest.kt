@@ -286,18 +286,51 @@ class DeliveryApplierTest {
         assertTrue(cache.walk().none { it.isFile })
     }
 
+    private fun cachedIn(game: String) = engine.cachedPaths().filter { it.contains("/saves/$game/") }
+
     @Test fun applier_write_invalidates_engine_cache() = runBlocking {
         put("saves/G1/a.sav", "aaaa"); markSynced("G1")
         api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "bbbb", version = "v9"))
         val a = applier()
         engine.fullScan()                       // primes the engine's hash cache with "aaaa"
+        assertEquals(1, cachedIn("G1").size)
         a.applyAll()
         assertEquals("bbbb", read("saves/G1/a.sav"))
+        assertTrue(cachedIn("G1").isEmpty())
         File(root, "saves/G1/a.sav").setLastModified(5_000)   // storage keeps a stale mtime
         api.standing = emptyList()
         now += 100_000
         engine.fullScan()
         assertTrue("stale cached hash was uploaded", api.saves.isEmpty())
+    }
+
+    @Test fun failed_write_undo_invalidates_engine_cache() = runBlocking {
+        put("saves/G1/a.sav", "old-a"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new-a", "c.sav" to "new-c"))
+        val fs = object : LocalFs() {
+            override fun writeAtomic(path: String, data: InputStream) {
+                if (path.endsWith("/c.sav")) throw IOException("disk full")
+                super.writeAtomic(path, data)
+            }
+        }.apply { packages.add("com.fake.emu") }
+        val a = applier(fs)
+        engine.fullScan()
+        assertEquals(1, cachedIn("G1").size)
+        a.applyAll()
+        assertEquals("old-a", read("saves/G1/a.sav"))
+        assertTrue(cachedIn("G1").isEmpty())
+    }
+
+    @Test fun marker_recovery_invalidates_engine_cache() = runBlocking {
+        put("saves/G1/a.sav", "new"); put("saves/G1/b.sav", "created")
+        backupFile("a.sav", "old")
+        val a = applier()
+        engine.fullScan()
+        assertEquals(2, cachedIn("G1").size)
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old")), "b.sav" to MarkerFile(h("created"), null, null)))
+        a.applyAll()
+        assertEquals("old", read("saves/G1/a.sav"))
+        assertTrue(cachedIn("G1").isEmpty())
     }
 
     @Test fun new_item_written_to_module_target_dir() = runBlocking {
