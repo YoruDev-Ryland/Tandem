@@ -19,3 +19,11 @@ public sealed record AdminSettings(bool AllowRegistration);
 public sealed record DeviceSummary(Guid Id, string Name, string Platform, DateTimeOffset? LastSeenUtc, bool? ShizukuOk, bool IsCurrent);
 public sealed record MissingBlobsRequest(List<string> Hashes);
 public sealed record MissingBlobsResponse(List<string> Missing);
+
+public sealed record EmulatorStatus(string EmulatorId, string Package, string Version, IReadOnlyList<string>? Cores);
+public sealed record DeviceStatusRequest(string Platform, string AppVersion, bool ShizukuOk,
+    IReadOnlyList<EmulatorStatus> Emulators, IReadOnlyDictionary<string, string> Roots);
+public sealed record InstalledGame(string GameKey, string? DisplayName, string? Crc32);
+public sealed record InstallsRequest(IReadOnlyList<InstalledGame> Games);
+public sealed record InstallsResponse(int Added, int Removed);
+public sealed record RenameDeviceRequest(string Name);

@@ -37,4 +37,23 @@ public static class TestApi
         response.EnsureSuccessStatusCode();
         return client;
     }
+
+    /// <summary>Pairs a second device onto the same user via a pairing code created by <paramref name="device"/>.</summary>
+    public static async Task<(HttpClient Device, DeviceKeyResponse Key)> PairSecondDevice(
+        this ServerFactory factory, HttpClient device, string name = "Second device")
+    {
+        var codeResponse = await device.PostAsync("/v1/pairing/codes", null);
+        codeResponse.EnsureSuccessStatusCode();
+        var code = await codeResponse.ReadAsync<PairingCodeResponse>();
+        var redeem = await factory.Client().PostAsJsonAsync("/v1/pairing/redeem",
+            new RedeemPairingRequest(code.Code, name, "android"));
+        redeem.EnsureSuccessStatusCode();
+        var key = await redeem.ReadAsync<DeviceKeyResponse>();
+        var client = factory.Client();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key.DeviceKey);
+        return (client, key);
+    }
+
+    public static Task<HttpResponseMessage> PatchAsJsonAsync<T>(this HttpClient client, string url, T body) =>
+        client.PatchAsync(url, JsonContent.Create(body));
 }

@@ -3,6 +3,7 @@ using EmuSync.Server.Auth;
 using EmuSync.Server.Blobs;
 using EmuSync.Server.Data;
 using EmuSync.Server.Devices;
+using EmuSync.Server.Events;
 using EmuSync.Server.Http;
 using EmuSync.Server.Pairing;
 
@@ -22,6 +23,8 @@ public static class ServerSetup
         builder.Services.AddScoped<PairingService>();
         builder.Services.AddSingleton<IBlobStore, BlobStore>();
         builder.Services.AddScoped<BlobService>();
+        builder.Services.AddSingleton<IDomainEvents, DomainEvents>();
+        builder.Services.AddScoped<DeviceService>();
     }
 
     /// <summary>Builds the pipeline and maps endpoints. Each feature adds one line here.</summary>
