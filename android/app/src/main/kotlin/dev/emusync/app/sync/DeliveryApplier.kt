@@ -110,6 +110,8 @@ class DeliveryApplier(
                 log("deliveries: server error ${e.status} ${e.code ?: ""}".trimEnd()); break
             } catch (e: IOException) {
                 log("deliveries: io error (${e.message})"); break
+            } catch (e: kotlinx.serialization.SerializationException) {
+                log("deliveries: server response not understood (update the app?)"); break
             }
             val list = fetched.filter { filter(it) && it.id !in seen }
             if (list.isEmpty()) break
@@ -554,6 +556,8 @@ class DeliveryApplier(
             else log("delivery ${d.id}: ack failed ${e.status} ${e.code ?: ""}".trimEnd())
         } catch (e: IOException) {
             log("delivery ${d.id}: ack io error (${e.message})")
+        } catch (e: kotlinx.serialization.SerializationException) {
+            log("delivery ${d.id}: server response not understood (update the app?)")
         }
     }
 

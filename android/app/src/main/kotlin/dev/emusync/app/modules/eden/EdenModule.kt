@@ -108,6 +108,7 @@ class EdenModule(private val internalRoot: String = "/storage/emulated/0") : Emu
     /** Maps update (low 12 bits 0x800) and DLC (non-zero low bits) title ids to the base application id. */
     internal fun normalizeTitleId(id: String): String {
         val v = id.toULongOrNull(16) ?: return id.uppercase()
+        if (v < 0x1000UL) return id
         val low = v and 0xFFFUL
         val base = when {
             low == 0x800UL -> v - 0x800UL

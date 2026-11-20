@@ -32,6 +32,7 @@ class SyncEngineTest {
         var saveStatus = SaveUploadStatus.Accepted
         var configStatus = SaveUploadStatus.Accepted
         var failSaveFor: String? = null
+        var unparseableSaveFor: String? = null
         private var n = 0
 
         override suspend fun register(email: String, password: String, deviceName: String) = error("unused")
@@ -50,6 +51,7 @@ class SyncEngineTest {
         override suspend fun getBlob(hash: String): InputStream = error("unused")
         override suspend fun uploadSave(req: SaveUploadRequest): SaveUploadResponse {
             if (req.gameKey == failSaveFor) throw ApiException(500, "boom", "boom")
+            if (req.gameKey == unparseableSaveFor) throw kotlinx.serialization.SerializationException("unknown enum")
             saves += req; n++
             return SaveUploadResponse(saveStatus, "item-${req.gameKey}", "v$n", "head$n")
         }
@@ -274,6 +276,16 @@ class SyncEngineTest {
         assertEquals(listOf("GAME2"), api.saves.map { it.gameKey })
         assertNull(store.get(saveKey("GAME1")))
         assertNotNull(store.get(saveKey("GAME2")))
+    }
+
+    @Test fun unparseable_server_response_logs_and_continues() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        put("saves/GAME2/a.sav", "world")
+        api.unparseableSaveFor = "GAME1"
+        engine().fullScan()
+        assertEquals(listOf("GAME2"), api.saves.map { it.gameKey })
+        assertNull(store.get(saveKey("GAME1")))
+        assertTrue(logs.any { it.contains("server response not understood") })
     }
 
     @Test fun failed_upload_counts_as_queued_until_retried() = runBlocking {

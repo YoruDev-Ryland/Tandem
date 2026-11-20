@@ -454,6 +454,8 @@ class SyncEngine(
         log("$name: server error ${e.status} ${e.code ?: ""}".trimEnd()); null
     } catch (e: IOException) {
         log("$name: io error, skipped (${e.message})"); null
+    } catch (e: kotlinx.serialization.SerializationException) {
+        log("$name: server response not understood (update the app?)"); null
     }
 
     private fun storeKey(emulatorId: String, item: LocalItem) =
