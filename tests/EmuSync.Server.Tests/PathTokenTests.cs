@@ -97,4 +97,22 @@ public class PathTokenTests
         Assert.Null(PathTokens.Expand("{EMU:ppsspp}/x", Roots));
         Assert.Null(PathTokens.Expand("{INTERNAL}/a/{SD2}/b", Roots));
     }
+
+    private static readonly Dictionary<string, string> WinRoots = new()
+    {
+        ["{GAMES}"] = @"C:\Games\",
+        ["{D}"] = "D:/Games",
+    };
+
+    [Fact]
+    public void Windows_roots_with_trailing_separator_and_mixed_slashes()
+    {
+        Assert.Equal(@"{GAMES}\foo", PathTokens.Tokenize(@"C:\Games\foo", WinRoots).Value);
+        Assert.Equal("{GAMES}", PathTokens.Tokenize(@"C:\Games", WinRoots).Value);
+        Assert.True(PathTokens.Tokenize(@"C:\Gamesx\foo", WinRoots).DeviceLocal);
+        Assert.Equal("{D}/x/y", PathTokens.Tokenize("D:/Games/x/y", WinRoots).Value);
+        Assert.Equal(@"C:\Games\foo", PathTokens.Expand(@"{GAMES}\foo", WinRoots));
+        Assert.Equal("D:/Games/x", PathTokens.Expand("{D}/x", WinRoots));
+        Assert.Equal(@"C:\Games", PathTokens.Expand("{GAMES}", WinRoots));
+    }
 }

@@ -27,7 +27,7 @@ public sealed class XmlFormat : IConfigFormat
         var result = new List<ConfigValue>();
         var stack = new List<(Frame Frame, string Name)>();
         var root = new Frame("");
-        var pos = 0;
+        var pos = t.Length > 0 && t[0] == '\uFEFF' ? 1 : 0;
         var rootSeen = false;
         while (pos < t.Length)
         {

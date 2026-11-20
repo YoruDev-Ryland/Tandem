@@ -4,10 +4,10 @@ namespace EmuSync.Server.Configs.Formats;
 
 internal static class FormatSupport
 {
-    /// <summary>Line content ranges. Terminators (\n or \r\n) are excluded and never touched.</summary>
+    /// <summary>Line content ranges (a leading BOM is skipped). Terminators (\n or \r\n) are excluded and never touched.</summary>
     public static IEnumerable<(int Start, int Length)> Lines(string text)
     {
-        var pos = 0;
+        var pos = text.Length > 0 && text[0] == '\uFEFF' ? 1 : 0; // spans still index the original text
         while (pos < text.Length)
         {
             var nl = text.IndexOf('\n', pos);

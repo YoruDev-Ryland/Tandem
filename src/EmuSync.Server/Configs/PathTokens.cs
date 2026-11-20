@@ -48,7 +48,7 @@ public static partial class PathTokens
         var bestLen = -1;
         foreach (var (token, path) in roots)
         {
-            var root = path.TrimEnd('/');
+            var root = path.TrimEnd('/', '\\');
             if (root.Length == 0 || root.Length <= bestLen) continue;
             if (!inner.StartsWith(root, StringComparison.Ordinal)) continue;
             if (inner.Length != root.Length && inner[root.Length] is not ('/' or '\\')) continue;
@@ -66,7 +66,7 @@ public static partial class PathTokens
         var unknown = false;
         var expanded = TokenRegex().Replace(inner, m =>
         {
-            if (roots.TryGetValue(m.Value, out var path)) return path.TrimEnd('/');
+            if (roots.TryGetValue(m.Value, out var path)) return path.TrimEnd('/', '\\');
             unknown = true;
             return m.Value;
         });

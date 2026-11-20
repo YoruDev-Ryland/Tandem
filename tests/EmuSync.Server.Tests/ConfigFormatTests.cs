@@ -209,4 +209,96 @@ public class ConfigFormatTests
     {
         Assert.Null(ConfigFormats.ForPath("x", path));
     }
+
+    public static IEnumerable<object[]> MutationCases()
+    {
+        foreach (var (name, fmt) in new (string, IConfigFormat)[]
+        {
+            ("eden-thor.ini", new IniFormat()),
+            ("retroarch-odin.cfg", new RetroArchCfgFormat()),
+            ("azahar-thor.ini", new IniFormat()),
+            ("dolphin-odin.ini", new IniFormat()),
+            ("vita3k-config.yml", new YamlLineFormat()),
+        })
+            foreach (var crlf in new[] { false, true })
+                yield return new object[] { name, fmt, crlf };
+    }
+
+    private static void AssertSpansAndMutations(IConfigFormat fmt, string text, bool exactRaw, int step)
+    {
+        var values = fmt.Read(text);
+        Assert.NotEmpty(values);
+        foreach (var v in values)
+        {
+            var raw = text.Substring(v.Start, v.Length);
+            if (exactRaw) Assert.Equal(v.Value, raw);
+            else Assert.True(raw == v.Value || raw.Contains('&') || raw.Contains('\\'), raw);
+        }
+        var unique = values.GroupBy(v => v.Key).Where(g => g.Count() == 1).Select(g => g.Single()).ToList();
+        Assert.NotEmpty(unique);
+        for (var i = 0; i < unique.Count; i += step)
+        {
+            var v = unique[i];
+            var result = fmt.Replace(text, new Dictionary<string, string> { [v.Key] = "MUTATED-" + i });
+            Assert.Equal(text[..v.Start] + "MUTATED-" + i + text[(v.Start + v.Length)..], result);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(MutationCases))]
+    public void Raw_spans_are_exact_and_single_mutation_changes_only_that_span(string fixture, IConfigFormat fmt, bool crlf)
+    {
+        var text = Fixture(fixture);
+        if (crlf) text = text.Replace("\n", "\r\n");
+        AssertSpansAndMutations(fmt, text, exactRaw: true, step: Math.Max(1, fmt.Read(text).Count / 40));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Raw_spans_and_mutations_xml_and_json(bool crlf)
+    {
+        string N(string s) => crlf ? s.Replace("\r\n", "\n").Replace("\n", "\r\n") : s.Replace("\r\n", "\n");
+        AssertSpansAndMutations(new XmlFormat(), N(Xml), exactRaw: false, step: 1);
+        AssertSpansAndMutations(new JsonFormat(), N(Json), exactRaw: false, step: 1);
+    }
+
+    [Fact]
+    public void Repeated_key_names_across_sections_are_distinct()
+    {
+        var ini = "[A]\nk=1\n[B]\nk=1\n";
+        Assert.Equal("[A]\nk=2\n[B]\nk=1\n",
+            new IniFormat().Replace(ini, new Dictionary<string, string> { ["A/k"] = "2" }));
+
+        var yaml = "a:\n  k: 1\nb:\n  k: 1\n";
+        Assert.Equal("a:\n  k: 1\nb:\n  k: 2\n",
+            new YamlLineFormat().Replace(yaml, new Dictionary<string, string> { ["b.k"] = "2" }));
+
+        const string xml = "<r><i v=\"1\"/><i v=\"1\"/><i v=\"1\"/></r>";
+        Assert.Equal("<r><i v=\"1\"/><i v=\"2\"/><i v=\"1\"/></r>",
+            new XmlFormat().Replace(xml, new Dictionary<string, string> { ["/r/i[2]/@v"] = "2" }));
+        Assert.Equal("<r><i v=\"2\"/><i v=\"1\"/><i v=\"1\"/></r>",
+            new XmlFormat().Replace(xml, new Dictionary<string, string> { ["/r/i/@v"] = "2" }));
+    }
+
+    [Fact]
+    public void Leading_bom_is_handled_in_every_format()
+    {
+        const string bom = "\uFEFF";
+        var ini = bom + "[General]\r\nkey=old\r\n";
+        var f = new IniFormat();
+        var v = Assert.Single(f.Read(ini));
+        Assert.Equal("General/key", v.Key);
+        Assert.Equal("old", ini.Substring(v.Start, v.Length));
+        Assert.Equal(ini, f.Replace(ini, new Dictionary<string, string> { ["General/key"] = "old" }));
+        Assert.Equal(bom + "[General]\r\nkey=new\r\n", f.Replace(ini, new Dictionary<string, string> { ["General/key"] = "new" }));
+
+        Assert.Equal("k", Assert.Single(new RetroArchCfgFormat().Read(bom + "k = \"v\"\n")).Key);
+        Assert.Equal("k", Assert.Single(new YamlLineFormat().Read(bom + "k: v\n")).Key);
+        var xml = bom + "<a b=\"1\"/>";
+        Assert.Equal("/a/@b", Assert.Single(new XmlFormat().Read(xml)).Key);
+        Assert.Equal(bom + "<a b=\"2\"/>", new XmlFormat().Replace(xml, new Dictionary<string, string> { ["/a/@b"] = "2" }));
+        var json = bom + "{\"a\":\"x\"}";
+        Assert.Equal(bom + "{\"a\":\"y\"}", new JsonFormat().Replace(json, new Dictionary<string, string> { ["/a"] = "y" }));
+    }
 }
