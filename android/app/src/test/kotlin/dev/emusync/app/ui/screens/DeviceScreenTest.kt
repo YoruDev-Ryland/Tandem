@@ -9,7 +9,11 @@ import dev.emusync.app.fs.ShizukuState
 import dev.emusync.app.model.DeviceGameState
 import dev.emusync.app.model.GameDeviceState
 import dev.emusync.app.model.GameRow
+import dev.emusync.app.service.ReceivedAt
 import dev.emusync.app.service.SyncService
+import dev.emusync.app.sync.ReceivedDelivery
+import dev.emusync.app.sync.StateStore
+import java.io.File
 import dev.emusync.app.sync.WaitingDelivery
 import dev.emusync.app.ui.kit.Tone
 import dev.emusync.app.ui.kit.TopBar
@@ -169,13 +173,56 @@ class DeviceScreenTest {
         assertEquals(2, setup)
     }
 
+    private fun store(key: String?) = StateStore(File.createTempFile("state", ".json").apply { delete(); deleteOnExit() })
+        .also { it.deviceKey = key }
+
     @Test fun xSendsScanThenApply() {
         val app = RuntimeEnvironment.getApplication()
-        show(ui(emptyList()), actions = DeviceActions(syncNow = { syncNow(app) }))
+        val signedIn = store("k")
+        show(ui(emptyList()), actions = DeviceActions(syncNow = { syncNow(app, signedIn) }))
         compose.key(KeyEvent.KEYCODE_BUTTON_X)
         val shadow = shadowOf(app)
         assertEquals(SyncService.ACTION_SCAN, shadow.nextStartedService?.action)
         assertEquals(SyncService.ACTION_APPLY, shadow.nextStartedService?.action)
+    }
+
+    // ---- final review (d): Sync now never starts the service signed out ----
+
+    @Test fun syncNowWhileSignedOutDoesNotStartTheService() {
+        val app = RuntimeEnvironment.getApplication()
+        syncNow(app, store(null))
+        assertEquals(null, shadowOf(app).nextStartedService)
+    }
+
+    // ---- final review (b): "Received {game}" when a held delivery lands, until the next refresh ----
+
+    private val landedAt = Instant.parse("2026-11-20T21:58:49Z")
+    private fun sword(at: Instant = landedAt) = ReceivedAt(ReceivedDelivery("d1", "eden", "0100ABF008968000", "Pokémon Sword"), at)
+    private fun uiAt(updatedAt: Instant, received: List<ReceivedAt>, games: List<GameRow> = listOf(game("0100ABF008968000", "Pokémon Sword", DeviceGameState.Pending))) =
+        deviceUi(sampleEmulators, Loaded(games, updatedAt), emptyList(), HERE, true, received)
+
+    @Test fun aReceivedLineAppearsAfterADeliveredEvent() {
+        val u = uiAt(landedAt.minusSeconds(30), listOf(sword()))
+        assertEquals(listOf(ReceivedLine("Received Pokémon Sword")), u.panes.first { it.id == "eden" }.received)
+        assertEquals(emptyList<ReceivedLine>(), u.panes.first { it.id == "azahar" }.received)
+        show(u)
+        compose.onNodeWithText("Received Pokémon Sword").assertExists()
+    }
+
+    @Test fun aReceivedLineSurvivesTheRefreshThatRacesItAndGoesOnTheNextOne() {
+        // The refresh the exit itself triggers may finish just after the apply: the line stays for one cycle.
+        assertEquals(1, uiAt(landedAt.plusSeconds(2), listOf(sword())).panes.first { it.id == "eden" }.received.size)
+        assertEquals(0, uiAt(landedAt.plusSeconds(60), listOf(sword())).panes.first { it.id == "eden" }.received.size)
+    }
+
+    @Test fun aReceivedConfigNamesTheEmulatorsSettings() {
+        val cfg = ReceivedAt(ReceivedDelivery("d2", "eden", null, null), landedAt)
+        assertEquals(listOf(ReceivedLine("Received Eden settings")), uiAt(landedAt, listOf(cfg)).panes.first { it.id == "eden" }.received)
+    }
+
+    @Test fun aReceivedGameWithoutATitleUsesTheServersName() {
+        val r = ReceivedAt(ReceivedDelivery("d3", "eden", "0100ABF008968000", null), landedAt)
+        assertEquals(listOf(ReceivedLine("Received Pokémon Sword")), uiAt(landedAt, listOf(r)).panes.first { it.id == "eden" }.received)
     }
 
     @Test fun rightThenAOpensTheFocusedGame() {

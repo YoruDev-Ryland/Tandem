@@ -130,6 +130,7 @@ class DeliveryApplierTest {
     private var now = 1_000_000_000L
     private val logs = mutableListOf<String>()
     private val notes = mutableListOf<String>()
+    private val received = mutableListOf<ReceivedDelivery>()
     private val api = FakeApi()
     private val root by lazy { tmp.newFolder("emu").path }
     private val backupRoot by lazy { tmp.newFolder("backups").path }
@@ -150,7 +151,7 @@ class DeliveryApplierTest {
             storageRoot = tmp.newFolder().path)
         return DeliveryApplier(fs, api, store, registry, engine, notifier = { notes += it }, settings = none,
             cacheDir = cache, backups = LocalBackups(backupRoot, clock = { now }), vaultRoot = vaultRoot,
-            log = { logs += it })
+            onReceived = { received += it }, log = { logs += it })
     }
 
     private fun put(rel: String, text: String) {
@@ -1187,5 +1188,68 @@ class DeliveryApplierTest {
         assertEquals("m", File("$profile/0100AAAA00000000/savedata/save000/meta.bin").readText())
         assertEquals("other game", File("$profile/01002C9022770000/savedata/save000/data.dat").readText())
         assertEquals("ve1", store.get(ItemKey.of("eden", "Save", "0100AAAA00000000", "", ""))!!.knownVersionId)
+    }
+
+    // ---- final review I-1 and (b): asked-for applies finish on exit; held deliveries that land are reported ----
+
+    @Test fun report_names_the_emulators_a_pass_waited_for() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        val r = applier(fs().apply { alive.add("com.fake.emu") }).applyAll()
+        assertEquals(setOf("fake"), r.waitingOn)
+    }
+
+    @Test fun forced_exit_pass_applies_after_a_restart_lost_what_was_held() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        val fs = fs().apply { alive.add("com.fake.emu") }
+        applier(fs).applyAll()                       // held in the old session
+        fs.alive.clear()
+        val fresh = applier(fs)                      // a new session: nothing held in memory
+        assertEquals(0, fresh.onEmulatorExited("fake").applied)
+        assertEquals("old", read("saves/G1/a.sav"))
+        assertEquals(1, fresh.onEmulatorExited("fake", force = true).applied)
+        assertEquals("new", read("saves/G1/a.sav"))
+    }
+
+    @Test fun forced_exit_pass_still_waits_while_the_emulator_runs() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        val a = applier(fs().apply { alive.add("com.fake.emu") })
+        val r = a.onEmulatorExited("fake", force = true)   // reopened before the pass ran
+        assertEquals(0, r.applied)
+        assertEquals(setOf("fake"), r.waitingOn)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("old", read("saves/G1/a.sav"))
+    }
+
+    @Test fun a_held_delivery_that_lands_is_reported_received() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        put("saves/G2/a.sav", "old"); markSynced("G2")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        val fs = fs().apply { alive.add("com.fake.emu") }
+        val a = applier(fs)
+        a.applyAll()
+        assertEquals(emptyList<ReceivedDelivery>(), received)
+        fs.alive.clear()
+        a.onEmulatorExited("fake")
+        assertEquals(listOf(Triple("d1", "fake", "G1")), received.map { Triple(it.deliveryId, it.emulatorId, it.gameKey) })
+
+        // A delivery that never waited lands silently.
+        received.clear()
+        api.standing = listOf(saveDelivery("d2", "G2", "a.sav" to "new"))
+        assertEquals(1, a.applyAll().applied)
+        assertEquals(emptyList<ReceivedDelivery>(), received)
+    }
+
+    @Test fun a_held_delivery_applied_by_sync_now_is_reported_received() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        val fs = fs().apply { alive.add("com.fake.emu") }
+        val a = applier(fs)
+        a.applyAll()
+        fs.alive.clear()
+        assertEquals(1, a.applyAll().applied)
+        assertEquals(listOf("d1"), received.map { it.deliveryId })
     }
 }

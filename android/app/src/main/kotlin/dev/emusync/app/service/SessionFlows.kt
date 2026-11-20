@@ -1,8 +1,13 @@
 package dev.emusync.app.service
 
+import dev.emusync.app.sync.ReceivedDelivery
 import dev.emusync.app.sync.WaitingDelivery
+import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+
+/** A held-back delivery that was applied at [at]. */
+data class ReceivedAt(val delivery: ReceivedDelivery, val at: Instant)
 
 /**
  * What the live sync session publishes for the UI: the deliveries waiting for a running emulator and the running
@@ -19,12 +24,15 @@ class SessionFlows {
     private val runningState = MutableStateFlow<Set<String>>(emptySet())
 
     private val nudgeState = MutableStateFlow(0L)
+    private val receivedState = MutableStateFlow<List<ReceivedAt>>(emptyList())
 
     /** Counts the server's `deliveries` events (monotonic, never reset); the UI refetches on every change. */
     val deliveryNudges: StateFlow<Long> get() = nudgeState
 
     val waiting: StateFlow<List<WaitingDelivery>> get() = waitingState
     val running: StateFlow<Set<String>> get() = runningState
+    /** The held-back deliveries applied lately, oldest first (at most [MAX_RECEIVED]); the UI decides how long to show them. */
+    val received: StateFlow<List<ReceivedAt>> get() = receivedState
 
     /** Starts a session; any previous session's token stops working. */
     fun begin(): Token = synchronized(lock) { Token().also { live = it } }
@@ -35,6 +43,7 @@ class SessionFlows {
         live = null
         waitingState.value = emptyList()
         runningState.value = emptySet()
+        receivedState.value = emptyList()
     }
 
     /** Runs [block] under the lock only while [token]'s session is live, so it can't interleave with [end]. */
@@ -50,7 +59,15 @@ class SessionFlows {
         if (live === token) runningState.value = v
     }
 
+    fun publishReceived(token: Token, v: List<ReceivedDelivery>, at: Instant) = synchronized(lock) {
+        if (live === token) receivedState.value = (receivedState.value + v.map { ReceivedAt(it, at) }).takeLast(MAX_RECEIVED)
+    }
+
     fun nudgeDeliveries(token: Token) = synchronized(lock) {
         if (live === token) nudgeState.value += 1
+    }
+
+    private companion object {
+        const val MAX_RECEIVED = 20
     }
 }

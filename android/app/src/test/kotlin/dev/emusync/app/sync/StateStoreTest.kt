@@ -183,4 +183,26 @@ class StateStoreTest {
         assertNull(s.get("eden|Save|G||"))
         assertEquals(setOf("eden", "dolphin"), s.serverForgetPending)
     }
+
+    // ---- final review I-1: an asked-for apply held by a running emulator survives a session or process restart ----
+
+    @Test fun apply_on_exit_flags_persist_and_clear_per_emulator() {
+        val f = File(tmp.root, "state.json")
+        val s = StateStore(f)
+        assertEquals(emptySet<String>(), s.applyOnExit)
+        s.flagApplyOnExit(setOf("eden", "azahar"))
+        assertEquals(setOf("eden", "azahar"), StateStore(f).applyOnExit)
+        s.clearApplyOnExit("eden")
+        assertEquals(setOf("azahar"), StateStore(f).applyOnExit)
+    }
+
+    @Test fun signing_in_or_out_drops_apply_on_exit_flags() {
+        val s = StateStore(File(tmp.root, "state.json"))
+        s.flagApplyOnExit(setOf("eden"))
+        s.signOut(listOf("eden"))
+        assertEquals(emptySet<String>(), s.applyOnExit)
+        s.flagApplyOnExit(setOf("eden"))
+        s.signIn("http://x", "k", "d", listOf("eden"))
+        assertEquals(emptySet<String>(), s.applyOnExit)
+    }
 }

@@ -64,6 +64,9 @@ object AppGraph {
     /** The emulator ids running, refreshed on every process monitor tick; empty while sync is off. */
     val running: StateFlow<Set<String>> get() = sessionFlows.running
 
+    /** Held-back deliveries the live session applied lately; empty while sync is off. */
+    val received: StateFlow<List<ReceivedAt>> get() = sessionFlows.received
+
     /** Bumped on each SSE `deliveries` event of the live session, so the UI needs no second connection. */
     val deliveryNudges: StateFlow<Long> get() = sessionFlows.deliveryNudges
 

@@ -36,7 +36,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.emusync.app.api.encodeKey
 import dev.emusync.app.api.encodeSegment
+import dev.emusync.app.service.AppGraph
 import dev.emusync.app.service.SyncService
+import dev.emusync.app.sync.StateStore
 import dev.emusync.app.ui.input.Action
 import dev.emusync.app.ui.input.OnAction
 import dev.emusync.app.ui.kit.Cell
@@ -58,10 +60,14 @@ class DeviceActions(
     val back: () -> Unit = {},
 )
 
-/** Sync now: a scan for local changes, then an apply of what the server has for this device. */
-fun syncNow(context: Context) {
-    SyncService.start(context, SyncService.ACTION_SCAN)
-    SyncService.start(context, SyncService.ACTION_APPLY)
+/**
+ * Sync now: a scan for local changes, then an apply of what the server has for this device. Signed out it does
+ * nothing (sync stays stopped until a sign-in), and a start Android refuses is logged, not thrown.
+ */
+fun syncNow(context: Context, store: StateStore = AppGraph.store(context)) {
+    if (store.deviceKey.isNullOrBlank()) return
+    SyncService.tryStart(context, SyncService.ACTION_SCAN)
+    SyncService.tryStart(context, SyncService.ACTION_APPLY)
 }
 
 /** The web page of a game, encoded like the web app's own gamePath. */
@@ -209,6 +215,10 @@ private fun ColumnScope.GamesPane(
         }
         ui.error != null && !ui.loaded -> ErrorLine(ui.error, Modifier.padding(horizontal = 12.dp))
         ui.loaded -> EmptyLine("No games here yet. Play one and it shows up after the next sync.")
+    }
+    for (r in emu.received) {
+        BasicText(r.text, Modifier.padding(start = 12.dp, end = 12.dp, top = 14.dp).widthIn(max = 460.dp),
+            style = EmuType.meta.copy(color = c.ink))
     }
     for (w in emu.waiting) {
         BasicText(

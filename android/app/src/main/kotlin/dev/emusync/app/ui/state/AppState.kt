@@ -47,6 +47,7 @@ class AppState(
 
     val waiting: StateFlow<List<WaitingDelivery>> = graph.waiting
     val running: StateFlow<Set<String>> = graph.running
+    val received: StateFlow<List<dev.emusync.app.service.ReceivedAt>> = graph.received
 
     val top: StateFlow<TopStatus> = combine(
         store.changes, shizuku, graph.snapshots, server.deviceName, server.games,

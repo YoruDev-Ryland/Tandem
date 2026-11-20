@@ -3,6 +3,7 @@ package dev.emusync.app.ui.screens
 import dev.emusync.app.api.ApiException
 import dev.emusync.app.model.DeviceGameState
 import dev.emusync.app.model.GameRow
+import dev.emusync.app.service.ReceivedAt
 import dev.emusync.app.sync.WaitingDelivery
 import dev.emusync.app.ui.kit.Tone
 import dev.emusync.app.ui.state.AppState
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import java.time.Duration
 
 /** One game in the right pane: GAME, NEWEST ON and HERE, with the tones of NEWEST ON and HERE. */
 data class GameLine(val key: String, val name: String, val newestOn: String, val here: String, val tone: Tone, val newestTone: Tone = Tone.Ink2)
@@ -24,8 +26,25 @@ data class WaitLine(val emulator: String, val game: String, val device: String) 
     val rest: String get() = "Nothing is written while $emulator is open."
 }
 
-/** One emulator: its row on the left, and its games and waiting deliveries for the right pane. */
-data class EmuPane(val id: String, val name: String, val state: String, val tone: Tone, val games: List<GameLine>, val waiting: List<WaitLine>)
+/** "Received {game}": a held-back delivery landed. Shown in ink, with no status colour. */
+data class ReceivedLine(val text: String)
+
+/**
+ * How long after a delivery lands a games refresh still keeps its "Received" line. The refresh the emulator's exit
+ * starts races the apply and may finish just after it; the line should last until the next one (one cycle).
+ */
+internal val RECEIVED_GRACE: Duration = Duration.ofSeconds(10)
+
+/** One emulator: its row on the left, and its games, waiting and just-received deliveries for the right pane. */
+data class EmuPane(
+    val id: String,
+    val name: String,
+    val state: String,
+    val tone: Tone,
+    val games: List<GameLine>,
+    val waiting: List<WaitLine>,
+    val received: List<ReceivedLine> = emptyList(),
+)
 
 /** Everything the "This device" tab shows. [loaded] is false until the first games list arrives. */
 data class DeviceUi(val signedIn: Boolean, val panes: List<EmuPane>, val loaded: Boolean, val error: ApiException?)
@@ -53,6 +72,7 @@ fun deviceUi(
     waiting: List<WaitingDelivery>,
     deviceId: String?,
     signedIn: Boolean,
+    received: List<ReceivedAt> = emptyList(),
 ): DeviceUi {
     val rows = if (signedIn) games.value.orEmpty() else emptyList()
     val panes = emulators.map { emu ->
@@ -88,7 +108,19 @@ fun deviceUi(
             val newest = g.newestOnDeviceName
             GameLine(g.gameKey, g.displayName ?: g.gameKey, newest ?: "—", text, t, if (newest == null) Tone.Ink3 else Tone.Ink2)
         }
-        EmuPane(emu.id, emu.name, state, tone, lines, waits.values.toList())
+        // Held deliveries that landed since the last refresh, newest first, each game once; none for a waiting game.
+        val updated = games.updatedAt
+        val got = LinkedHashMap<String, ReceivedLine>()
+        for (r in received.asReversed()) {
+            val d = r.delivery
+            if (d.emulatorId != emu.id || !signedIn) continue
+            if (updated != null && updated >= r.at + RECEIVED_GRACE) continue
+            val key = d.gameKey ?: "config"
+            if (key in waits) continue
+            val name = if (d.gameKey == null) "${emu.name} settings" else d.displayName ?: byKey[d.gameKey]?.displayName ?: d.gameKey
+            got.putIfAbsent(key, ReceivedLine("Received $name"))
+        }
+        EmuPane(emu.id, emu.name, state, tone, lines, waits.values.toList(), got.values.toList())
     }
     return DeviceUi(signedIn, panes, loaded = games.value != null, error = if (signedIn) games.error else null)
 }
@@ -98,7 +130,7 @@ fun deviceUi(
  * owns it, so it lives as long as the AppState it reads.
  */
 class DeviceViewModel(app: AppState, games: StateFlow<Loaded<List<GameRow>>>, deviceId: () -> String?, scope: CoroutineScope) {
-    val ui: StateFlow<DeviceUi> = combine(app.emulators, games, app.waiting, app.top) { emus, g, w, top ->
-        deviceUi(emus, g, w, deviceId(), top.signedIn)
+    val ui: StateFlow<DeviceUi> = combine(app.emulators, games, app.waiting, app.top, app.received) { emus, g, w, top, got ->
+        deviceUi(emus, g, w, deviceId(), top.signedIn, got)
     }.stateIn(scope, SharingStarted.Eagerly, DeviceUi(false, emptyList(), false, null))
 }

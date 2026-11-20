@@ -81,6 +81,11 @@ private data class StateData(
      * are, every upload of theirs is sent with fresh=true (see StateStore.isFresh).
      */
     val serverForgetPending: Set<String> = emptySet(),
+    /**
+     * Emulators whose running held back an apply the user asked for (Sync now, a resolve, a setup choice): their next
+     * exit applies what waits for them, even with auto-apply off. Persisted so a session restart doesn't lose the ask.
+     */
+    val applyOnExit: Set<String> = emptySet(),
 )
 
 /**
@@ -191,7 +196,8 @@ class StateStore(
      * account or device record, so every emulator in [emulatorIds] is forgotten at the next session start.
      */
     fun signIn(serverUrl: String, deviceKey: String, deviceId: String, emulatorIds: Collection<String>) = mutate {
-        it.copy(serverUrl = serverUrl, deviceKey = deviceKey, deviceId = deviceId, pendingForget = it.pendingForget + emulatorIds)
+        it.copy(serverUrl = serverUrl, deviceKey = deviceKey, deviceId = deviceId, pendingForget = it.pendingForget + emulatorIds,
+            applyOnExit = emptySet())   // the ask was made of another account or device record
     }
 
     /**
@@ -233,8 +239,14 @@ class StateStore(
      */
     fun signOut(emulatorIds: Collection<String>) = mutate {
         // Cleared now, and again when the next sign-in's session starts: the stopping session may still write.
-        it.copy(deviceKey = null, deviceId = null, items = emptyMap(), configs = emptyMap(), pendingForget = it.pendingForget + emulatorIds)
+        it.copy(deviceKey = null, deviceId = null, items = emptyMap(), configs = emptyMap(), pendingForget = it.pendingForget + emulatorIds,
+            applyOnExit = emptySet())
     }
+
+    /** See StateData.applyOnExit. */
+    val applyOnExit: Set<String> get() = synchronized(lock) { data.applyOnExit }
+    fun flagApplyOnExit(ids: Set<String>) = mutate { it.copy(applyOnExit = it.applyOnExit + ids) }
+    fun clearApplyOnExit(id: String) = mutate { it.copy(applyOnExit = it.applyOnExit - id) }
 
     var signInForm: SignInForm
         get() = synchronized(lock) { data.signInForm }

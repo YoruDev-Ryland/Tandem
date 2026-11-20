@@ -1,6 +1,8 @@
 package dev.emusync.app.service
 
+import dev.emusync.app.sync.ReceivedDelivery
 import dev.emusync.app.sync.WaitingDelivery
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -68,5 +70,19 @@ class SessionFlowsNudgeTest {
         f.end(t)
         f.nudgeDeliveries(t)
         assertEquals(1L, f.deliveryNudges.value)
+    }
+
+    // ---- final review (b): a held delivery that lands is shown once ----
+
+    @Test fun received_deliveries_are_published_with_their_time_and_cleared_with_the_session() {
+        val f = SessionFlows()
+        val t = f.begin()
+        val r = ReceivedDelivery("d1", "eden", "0100A", "Title")
+        f.publishReceived(t, listOf(r), Instant.ofEpochSecond(100))
+        assertEquals(listOf(ReceivedAt(r, Instant.ofEpochSecond(100))), f.received.value)
+        f.end(t)
+        assertTrue(f.received.value.isEmpty())
+        f.publishReceived(t, listOf(r), Instant.ofEpochSecond(200))   // late write of the ended session
+        assertTrue(f.received.value.isEmpty())
     }
 }

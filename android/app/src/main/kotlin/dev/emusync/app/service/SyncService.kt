@@ -218,7 +218,7 @@ class SyncService : Service() {
             }
             val stored = store.settings
             val s = DeviceSettings(stored.romDirs, stored.overrides, stored.variants)
-            val planner = WorkPlanner(stored.autoApply)
+            val planner = WorkPlanner(stored.autoApply, StoredApplyOnExitFlags(store))
             val engine = SyncEngine(
                 fs, api, store, registry, s,
                 clock = System::currentTimeMillis,   // compared with file mtimes: must be wall-clock time
@@ -230,7 +230,9 @@ class SyncService : Service() {
             )
             val applier = DeliveryApplier(
                 fs, api, store, registry, engine, notifier::alert, s, cacheDir,
-                onWaiting = { AppGraph.sessionFlows.publishWaiting(flows, it) }, log = log,
+                onWaiting = { AppGraph.sessionFlows.publishWaiting(flows, it) },
+                onReceived = { AppGraph.sessionFlows.publishReceived(flows, it, java.time.Instant.now()) },
+                log = log,
             )
             val sess = Session(fs, engine, applier, WorkQueue(), planner, flows)
             log("sync session starting ($url, auto-apply ${if (stored.autoApply) "on" else "off"})")
@@ -292,8 +294,9 @@ class SyncService : Service() {
                     rewatch(s)
                 }
                 SyncWork.Tick -> s.engine.tick()
-                SyncWork.ApplyAll -> {
+                SyncWork.ApplyAll, SyncWork.ApplyRequested -> {
                     val r = s.applier.applyAll()
+                    s.planner.applied(w, r)
                     if (r.applied + r.failed + r.waitingForEmulator > 0)
                         log("deliveries: ${r.applied} applied, ${r.skipped} skipped, ${r.failed} failed, ${r.waitingForEmulator} waiting")
                 }
@@ -337,12 +340,11 @@ class SyncService : Service() {
         for (id in exited) {
             log("$id exited")
             s.engine.onEmulatorExited(id)
-            if (s.planner.applyOnExit()) {
-                val r = s.applier.onEmulatorExited(id)
-                if (r.applied + r.failed > 0) log("$id: ${r.applied} applied, ${r.failed} failed after exit")
-            } else {
-                s.applier.forgetWaiting(id)
-            }
+            // Runs in the queue's consumer like any apply; the applier re-checks the process before every write.
+            val r = s.planner.exited(id,
+                apply = { requested -> s.applier.onEmulatorExited(id, force = requested) },
+                forget = { s.applier.forgetWaiting(id) })
+            if (r != null && r.applied + r.failed > 0) log("$id: ${r.applied} applied, ${r.failed} failed after exit")
             rewatch(s)
             publish()
         }
