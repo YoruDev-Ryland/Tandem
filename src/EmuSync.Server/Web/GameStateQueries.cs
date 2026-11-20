@@ -16,7 +16,7 @@ public sealed class GameStateQueries(EmuSyncDbContext db, TimeProvider time)
     {
         var itemIds = items.Select(i => i.Id);
         var devices = await db.Devices.AsNoTracking().Where(d => d.UserId == userId)
-            .Select(d => new DeviceInfo(d.Id, d.Name, d.CreatedUtc, d.RevokedUtc == null, d.LastSeenUtc, d.RunningEmulatorsJson))
+            .Select(d => new DeviceInfo(d.Id, d.Name, d.CreatedUtc, d.RevokedUtc == null, d.ShizukuOk, d.RunningEmulatorsJson))
             .ToListAsync(ct);
         var known = await db.DeviceItemStates.AsNoTracking().Where(s => itemIds.Contains(s.ItemId))
             .Select(s => new { s.DeviceId, s.ItemId, s.KnownVersionId }).ToListAsync(ct);
@@ -31,13 +31,13 @@ public sealed class GameStateQueries(EmuSyncDbContext db, TimeProvider time)
         return new GameStates(
             devices.ToDictionary(d => d.Id),
             devices.Where(d => d.Active).OrderBy(d => d.CreatedUtc).ToList(),
-            devices.ToDictionary(d => d.Id, d => DeviceService.RunningEmulators(d.RunningJson, d.LastSeenUtc, now).ToHashSet(StringComparer.Ordinal)),
+            devices.ToDictionary(d => d.Id, d => DeviceService.RunningEmulators(d.RunningJson, d.ShizukuOk, now).ToHashSet(StringComparer.Ordinal)),
             known.ToDictionary(k => (k.DeviceId, k.ItemId), k => k.KnownVersionId),
             pending.Select(p => (p.DeviceId, p.TargetId)).ToHashSet(),
             conflicts.ToLookup(c => c.ItemId, c => c.DeviceId));
     }
 
-    public sealed record DeviceInfo(Guid Id, string Name, DateTimeOffset CreatedUtc, bool Active, DateTimeOffset? LastSeenUtc, string? RunningJson);
+    public sealed record DeviceInfo(Guid Id, string Name, DateTimeOffset CreatedUtc, bool Active, bool? ShizukuOk, string? RunningJson);
 }
 
 public sealed record HeadInfo(Guid Id, Guid? DeviceId, DateTimeOffset ReceivedUtc);

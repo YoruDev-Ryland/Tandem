@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using EmuSync.Protocol;
 using EmuSync.Server.Tests.Infrastructure;
 
@@ -64,4 +65,40 @@ public class RunningEmulatorsTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("unknown_emulator", (await response.ReadAsync<ErrorResponse>()).Code);
     }
+
+    [Fact]
+    public async Task RunningEmulators_OtherRequestsDoNotKeepStaleStatusAlive()
+    {
+        using var factory = NewFactory();
+        var (odin, _) = await factory.Register(Email, deviceName: "Odin");
+        var (retroid, retroidKey) = await factory.PairSecondDevice(odin, "Retroid");
+        await odin.Install("G1");
+        await retroid.Install("G1");
+        await odin.UploadSave("G1", "v1", null);
+        (await retroid.ReportStatus(["eden"])).EnsureSuccessStatusCode();
+        var web = await factory.WebLogin(Email);
+        Assert.Equal(DeviceGameState.Waiting, await RetroidState(web));
+
+        factory.Time.Advance(TimeSpan.FromMinutes(3));
+        Assert.Single(await retroid.PendingDeliveries()); // a device-key request: the device is online, its status is stale
+
+        Assert.Empty(await Running(web, retroidKey.DeviceId));
+        Assert.Empty((await retroid.GetOk<DeviceSummary>("/v1/devices/me")).RunningEmulators);
+        Assert.Equal(DeviceGameState.Pending, await RetroidState(web));
+    }
+
+    [Fact]
+    public async Task RunningEmulators_EmptyWhileShizukuOff()
+    {
+        using var factory = NewFactory();
+        var (odin, odinKey) = await factory.Register(Email, deviceName: "Odin");
+
+        (await odin.PutAsJsonAsync("/v1/devices/me/status", new DeviceStatusRequest("android", "1.0", false, [],
+            new Dictionary<string, string>(), ["eden"]))).EnsureSuccessStatusCode();
+
+        Assert.Empty(await Running(odin, odinKey.DeviceId));
+    }
+
+    private static async Task<DeviceGameState> RetroidState(HttpClient web) =>
+        (await web.GetOk<GameRow[]>("/v1/web/games")).Single(r => r.GameKey == "G1").Devices.Single(d => d.DeviceName == "Retroid").State;
 }

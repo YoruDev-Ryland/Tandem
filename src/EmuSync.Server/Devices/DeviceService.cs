@@ -13,18 +13,27 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
     public const int MaxGames = 20000;
     public const int MaxCores = 500;
     public const int MaxRunningEmulators = 50;
-    /// <summary>A device not heard from for this long is offline: its running emulators read as empty.</summary>
+    /// <summary>A device without a status report for this long is offline: its running emulators read as empty. Other
+    /// requests (which refresh LastSeenUtc) do not count.</summary>
     public static readonly TimeSpan OnlineWindow = TimeSpan.FromMinutes(2);
 
-    /// <summary>The device's running emulators, or empty when it has been offline longer than <see cref="OnlineWindow"/>.</summary>
-    public static string[] RunningEmulators(string? json, DateTimeOffset? lastSeenUtc, DateTimeOffset now) =>
-        json is null || lastSeenUtc is not DateTimeOffset seen || now - seen > OnlineWindow
-            ? []
-            : JsonSerializer.Deserialize<string[]>(json) ?? [];
+    /// <summary>Stored in <see cref="Device.RunningEmulatorsJson"/>: the list and the time of the status report that sent it.</summary>
+    private sealed record RunningStatus(DateTimeOffset At, string[] Ids);
+
+    /// <summary>The device's running emulators; empty when its last status report is older than <see cref="OnlineWindow"/>
+    /// or Shizuku is off (the app cannot see the foreground app then).</summary>
+    public static string[] RunningEmulators(string? json, bool? shizukuOk, DateTimeOffset now)
+    {
+        if (json is null || shizukuOk == false) return [];
+        var status = JsonSerializer.Deserialize<RunningStatus>(json, Json);
+        return status is null || now - status.At > OnlineWindow ? [] : status.Ids ?? [];
+    }
 
     public static DeviceSummary Summary(Device d, Guid? currentDeviceId, DateTimeOffset now) =>
         new(d.Id, d.Name, d.Platform, d.LastSeenUtc, d.ShizukuOk, d.Id == currentDeviceId,
-            RunningEmulators(d.RunningEmulatorsJson, d.LastSeenUtc, now));
+            RunningEmulators(d.RunningEmulatorsJson, d.ShizukuOk, now));
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     [GeneratedRegex(@"\A\{(INTERNAL|SD|EMU:[a-z0-9]+)\}\z")] // \z: "$" would also match before a trailing newline
     private static partial Regex RootToken();
@@ -54,7 +63,7 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         device.ShizukuOk = request.ShizukuOk;
         device.LastSeenUtc = now;
         device.RunningEmulatorsJson = request.RunningEmulators is { Length: > 0 } running
-            ? JsonSerializer.Serialize(running.Distinct(StringComparer.Ordinal).ToArray())
+            ? JsonSerializer.Serialize(new RunningStatus(now, running.Distinct(StringComparer.Ordinal).ToArray()), Json)
             : null;
 
         var emulators = request.Emulators ?? [];
