@@ -8,6 +8,7 @@ using EmuSync.Server.Tests.Infrastructure;
 
 namespace EmuSync.Server.Tests;
 
+[Collection("Memory")]
 public class BlobTests
 {
     private static string Sha(byte[] data) => Convert.ToHexStringLower(SHA256.HashData(data));

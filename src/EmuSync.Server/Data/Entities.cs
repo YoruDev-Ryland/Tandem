@@ -161,6 +161,7 @@ public class VaultItem
     public Guid UserId { get; set; }
     /// <summary>bios | keys | firmware | sysdata | system</summary>
     public string Category { get; set; } = "";
+    /// <summary>"" when the item is not tied to an emulator (never null: part of the unique key).</summary>
     public string? EmulatorId { get; set; }
     public string Name { get; set; } = "";
     public Guid? HeadVersionId { get; set; }

@@ -662,7 +662,8 @@ namespace EmuSync.Server.Data.Migrations.Postgres
 
                     b.HasKey("Id");
 
-                    b.HasIndex("UserId", "Category");
+                    b.HasIndex("UserId", "Category", "EmulatorId", "Name")
+                        .IsUnique();
 
                     b.ToTable("VaultItems");
                 });

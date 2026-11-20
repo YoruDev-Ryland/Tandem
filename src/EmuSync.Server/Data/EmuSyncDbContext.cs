@@ -132,7 +132,8 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
 
         m.Entity<VaultItem>(e =>
         {
-            e.HasIndex(x => new { x.UserId, x.Category });
+            // EmulatorId is "" when the item has none, so the key is unique for those too.
+            e.HasIndex(x => new { x.UserId, x.Category, x.EmulatorId, x.Name }).IsUnique();
             e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 

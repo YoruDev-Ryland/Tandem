@@ -183,41 +183,134 @@ public class VaultTests
         using var f = NewFactory();
         var s = await TwoDevices(f);
         var v1 = await Upload(s.Odin, "keys", "eden", "prod.keys", await Files(s.Odin, ("prod.keys", "k1")));
-        Assert.Empty(Assert.Single(await List(s.Web)).Holders);
+        var uploader = Assert.Single(Assert.Single(await List(s.Web)).Holders);
+        Assert.Equal((s.OdinId, true), (uploader.DeviceId, uploader.Current));
 
         await Send(s.Web, v1.ItemId, s.ThorId);
-        Assert.Empty(Assert.Single(await List(s.Web)).Holders); // not acked yet
+        Assert.Single(Assert.Single(await List(s.Web)).Holders); // not acked yet
         var d = Assert.Single(await VaultDeliveries(s.Thor));
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Thor, d.Id)).StatusCode);
 
-        var holder = Assert.Single(Assert.Single(await List(s.Web)).Holders);
-        Assert.Equal((s.ThorId, "Thor", true), (holder.DeviceId, holder.DeviceName, holder.Current));
+        var holders = Assert.Single(await List(s.Web)).Holders.ToDictionary(h => h.DeviceId);
+        Assert.Equal(2, holders.Count);
+        Assert.True(holders[s.ThorId].Current);
+        Assert.Equal("Thor", holders[s.ThorId].DeviceName);
         Assert.Empty(await VaultDeliveries(s.Thor));
 
-        // A new head makes the holder stale, and a failed delivery changes nothing.
-        var v2 = await Upload(s.Odin, "keys", "eden", "prod.keys", await Files(s.Odin, ("prod.keys", "k2")));
-        Assert.False(Assert.Single(Assert.Single(await List(s.Web)).Holders).Current);
+        // A new head (uploaded from the web) makes both holders stale; a failed delivery changes nothing.
+        var v2 = await Upload(s.Web, "keys", "eden", "prod.keys", await Files(s.Odin, ("prod.keys", "k2")));
+        Assert.All(Assert.Single(await List(s.Web)).Holders, h => Assert.False(h.Current));
         await Send(s.Web, v1.ItemId, s.OdinId);
         var od = Assert.Single(await VaultDeliveries(s.Odin));
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Odin, od.Id, DeliveryResult.Failed)).StatusCode);
-        Assert.Single(Assert.Single(await List(s.Web)).Holders);
+        Assert.All(Assert.Single(await List(s.Web)).Holders, h => Assert.False(h.Current));
         await Send(s.Web, v1.ItemId, s.OdinId);
         od = Assert.Single(await VaultDeliveries(s.Odin));
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Odin, od.Id)).StatusCode);
-        var holders = Assert.Single(await List(s.Web)).Holders.ToDictionary(h => h.DeviceId);
+        holders = Assert.Single(await List(s.Web)).Holders.ToDictionary(h => h.DeviceId);
         Assert.True(holders[s.OdinId].Current);
         Assert.False(holders[s.ThorId].Current);
 
-        // Re-sending to Thor and acking brings it current; the activity log records the placement.
         await Send(s.Web, v1.ItemId, s.ThorId);
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Thor, Assert.Single(await VaultDeliveries(s.Thor)).Id)).StatusCode);
         Assert.All(Assert.Single(await List(s.Web)).Holders, h => Assert.True(h.Current));
         Assert.Equal(v2.VersionId, Assert.Single(await List(s.Web)).HeadVersionId);
-        var state = await InDb(f, db => db.DeviceVaultStates.AsNoTracking().ToListAsync());
-        Assert.Equal(2, state.Count);
+        Assert.Equal(2, (await InDb(f, db => db.DeviceVaultStates.AsNoTracking().ToListAsync())).Count);
         var kinds = (await (await s.Web.GetAsync("/v1/activity")).ReadAsync<ActivityPage>()).Items.Select(i => i.Kind).ToList();
         Assert.Equal(3, kinds.Count(k => k == "vault_placed"));
         Assert.DoesNotContain("delivered", kinds);
+    }
+
+    [Fact]
+    public async Task Uploading_device_holds_the_version_it_uploaded()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var files = await Files(s.Odin, ("a.bin", "1"));
+        var v1 = await Upload(s.Odin, "bios", null, "b", files);
+        var v2 = await Upload(s.Thor, "bios", null, "b", await Files(s.Thor, ("a.bin", "22")));
+        var holders = Assert.Single(await List(s.Web)).Holders.ToDictionary(h => h.DeviceId);
+        Assert.False(holders[s.OdinId].Current); // holds v1, the head is now Thor's
+        Assert.True(holders[s.ThorId].Current);
+        Assert.Equal(v1.ItemId, v2.ItemId);
+
+        // An identical re-upload from Odin of the head makes it a current holder too.
+        var again = await Upload(s.Odin, "bios", null, "b", await Files(s.Odin, ("a.bin", "22")));
+        Assert.True(again.Unchanged);
+        Assert.All(Assert.Single(await List(s.Web)).Holders, h => Assert.True(h.Current));
+        Assert.Equal(2, (await InDb(f, db => db.DeviceVaultStates.AsNoTracking().ToListAsync())).Count);
+
+        // A web upload has no device and adds no holder.
+        await Upload(s.Web, "bios", null, "b", await Files(s.Odin, ("a.bin", "333")));
+        Assert.Equal(2, (await InDb(f, db => db.DeviceVaultStates.AsNoTracking().ToListAsync())).Count);
+    }
+
+    [Fact]
+    public async Task Items_and_devices_of_other_users_are_not_found()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (other, otherKey) = await f.Register("b@example.com", deviceName: "Other");
+        var mine = await Upload(s.Odin, "bios", null, "b", await Files(s.Odin, ("a.bin", "1")));
+        var theirs = await Upload(other, "bios", null, "b", await Files(other, ("a.bin", "1")));
+        Assert.NotEqual(mine.ItemId, theirs.ItemId);
+
+        await AssertError(await Send(other, mine.ItemId, otherKey.DeviceId), HttpStatusCode.NotFound, "vault_item_not_found");
+        await AssertError(await Send(s.Web, mine.ItemId, otherKey.DeviceId), HttpStatusCode.NotFound, "device_not_found");
+        await AssertError(await Send(s.Web, theirs.ItemId, s.ThorId), HttpStatusCode.NotFound, "vault_item_not_found");
+        Assert.Equal(mine.ItemId, Assert.Single(await List(s.Web)).Id);
+        Assert.Empty(await VaultDeliveries(other));
+        Assert.Empty(await VaultDeliveries(s.Thor));
+    }
+
+    [Fact]
+    public async Task Revoked_device_cannot_be_sent_to_and_is_not_a_holder()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var up = await Upload(s.Odin, "bios", null, "b", await Files(s.Odin, ("a.bin", "1")));
+        await Send(s.Web, up.ItemId, s.ThorId);
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Thor, Assert.Single(await VaultDeliveries(s.Thor)).Id)).StatusCode);
+        Assert.Equal(2, Assert.Single(await List(s.Web)).Holders.Count);
+
+        (await s.Odin.DeleteAsync($"/v1/devices/{s.ThorId}")).EnsureSuccessStatusCode();
+
+        Assert.Equal(s.OdinId, Assert.Single(Assert.Single(await List(s.Web)).Holders).DeviceId);
+        await AssertError(await Send(s.Web, up.ItemId, s.ThorId), HttpStatusCode.NotFound, "device_not_found");
+    }
+
+    [Fact]
+    public async Task Concurrent_identical_uploads_make_one_item()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var files = await Files(s.Odin, ("a.bin", "same"));
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Upload(i % 2 == 0 ? s.Odin : s.Thor, "bios", null, "b", files)));
+
+        Assert.Single(results.Select(r => r.ItemId).Distinct());
+        Assert.Single(results.Select(r => r.VersionId).Distinct());
+        Assert.Equal(1, results.Count(r => !r.Unchanged));
+        Assert.Equal(1, await InDb(f, db => db.VaultItems.CountAsync()));
+        Assert.Equal(1, await InDb(f, db => db.VaultVersions.CountAsync()));
+    }
+
+    [Fact]
+    public async Task Item_without_emulator_differs_from_one_with_an_emulator()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var files = await Files(s.Odin, ("a.bin", "1"));
+        var none = await Upload(s.Odin, "bios", null, "same", files);
+        var eden = await Upload(s.Odin, "bios", "eden", "same", files);
+        Assert.NotEqual(none.ItemId, eden.ItemId);
+        Assert.True((await Upload(s.Odin, "bios", null, "same", files)).Unchanged);
+
+        var items = await List(s.Web);
+        Assert.Equal(2, items.Count);
+        Assert.Null(items.Single(i => i.Id == none.ItemId).EmulatorId);
+        Assert.Equal("eden", items.Single(i => i.Id == eden.ItemId).EmulatorId);
+        Assert.Equal("", (await InDb(f, db => db.VaultItems.AsNoTracking().SingleAsync(i => i.Id == none.ItemId))).EmulatorId);
     }
 
     [Fact]
@@ -225,10 +318,10 @@ public class VaultTests
     {
         using var f = NewFactory();
         var s = await TwoDevices(f);
-        var v1 = await Upload(s.Odin, "bios", null, "b", await Files(s.Odin, ("b.bin", "1")));
+        var v1 = await Upload(s.Web, "bios", null, "b", await Files(s.Odin, ("b.bin", "1")));
         await Send(s.Web, v1.ItemId, s.ThorId);
         var old = Assert.Single(await VaultDeliveries(s.Thor));
-        var v2 = await Upload(s.Odin, "bios", null, "b", await Files(s.Odin, ("b.bin", "22")));
+        var v2 = await Upload(s.Web, "bios", null, "b", await Files(s.Odin, ("b.bin", "22")));
         await Send(s.Web, v1.ItemId, s.ThorId);
         var current = Assert.Single(await VaultDeliveries(s.Thor));
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Thor, current.Id)).StatusCode);
@@ -236,7 +329,7 @@ public class VaultTests
         // The device applied the old one late: it must not be recorded as holding the older version.
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Thor, old.Id)).StatusCode);
 
-        Assert.True(Assert.Single(Assert.Single(await List(s.Web)).Holders).Current);
+        Assert.All(Assert.Single(await List(s.Web)).Holders, h => Assert.True(h.Current));
         Assert.Equal(v2.VersionId, current.VersionId);
     }
 
@@ -254,6 +347,6 @@ public class VaultTests
         Assert.True((await Upload(s.Odin, "keys", "eden", "prod.keys", await Files(s.Odin, ("prod.keys", "k1")))).Unchanged);
         await Send(s.Web, up.ItemId, s.ThorId);
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Thor, Assert.Single(await VaultDeliveries(s.Thor)).Id)).StatusCode);
-        Assert.True(Assert.Single(Assert.Single(await List(s.Web)).Holders).Current);
+        Assert.All(Assert.Single(await List(s.Web)).Holders, h => Assert.True(h.Current));
     }
 }

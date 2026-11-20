@@ -36,45 +36,62 @@ public sealed class VaultService(EmuSyncDbContext db, BlobService blobs, UserLoc
         await blobs.RequireSizesAsync(userId, manifest, ct);
         var hash = Manifests.Hash(manifest);
 
+        // Stored as "" when there is none, so the unique key (user, category, emulator, name) holds for those too.
+        var emulator = request.EmulatorId ?? "";
         VaultUploadResponse response;
         using (await locks.Acquire(userId, ct))
         {
-            await using var tx = await BeginAsync(ct);
-            var item = await FindItemForUpdateAsync(userId, request.Category, request.EmulatorId, request.Name, ct);
-            var head = item?.HeadVersionId is Guid headId ? await db.VaultVersions.SingleAsync(v => v.Id == headId, ct) : null;
-            if (head is not null && head.ManifestHash == hash)
+            // A lost insert race (unique violation) re-reads the item the winner created and continues.
+            for (var attempt = 0; ; attempt++)
             {
-                response = new VaultUploadResponse(item!.Id, head.Id, true);
-            }
-            else
-            {
-                if (item is null)
+                var created = false;
+                try
                 {
-                    item = new VaultItem
+                    await using var tx = await BeginAsync(ct);
+                    var item = await FindItemForUpdateAsync(userId, request.Category, emulator, request.Name, ct);
+                    var head = item?.HeadVersionId is Guid headId ? await db.VaultVersions.SingleAsync(v => v.Id == headId, ct) : null;
+                    if (head is not null && head.ManifestHash == hash)
                     {
-                        Id = Guid.NewGuid(), UserId = userId, Category = request.Category, EmulatorId = request.EmulatorId,
-                        Name = request.Name,
-                    };
-                    db.VaultItems.Add(item);
+                        response = new VaultUploadResponse(item!.Id, head.Id, true);
+                    }
+                    else
+                    {
+                        if (item is null)
+                        {
+                            item = new VaultItem
+                            {
+                                Id = Guid.NewGuid(), UserId = userId, Category = request.Category, EmulatorId = emulator,
+                                Name = request.Name,
+                            };
+                            db.VaultItems.Add(item);
+                            created = true;
+                        }
+                        var seq = (await db.VaultVersions.Where(v => v.ItemId == item.Id).MaxAsync(v => (int?)v.Seq, ct) ?? 0) + 1;
+                        var version = new VaultVersion
+                        {
+                            Id = Guid.NewGuid(), ItemId = item.Id, Seq = seq, DeviceId = deviceId, ReceivedUtc = time.GetUtcNow(),
+                            ManifestJson = Manifests.ToJson(manifest), ManifestHash = hash, TotalSize = manifest.Sum(e => e.Size),
+                        };
+                        db.VaultVersions.Add(version);
+                        await db.SaveChangesAsync(ct); // the version row first: the head is set once it exists
+                        item.HeadVersionId = version.Id;
+                        response = new VaultUploadResponse(item.Id, version.Id, false);
+                    }
+                    // The uploading device holds what it just uploaded (or already matched).
+                    if (deviceId is Guid uploader) await RecordHolderAsync(uploader, response.ItemId, response.VersionId, ct);
+                    await db.SaveChangesAsync(ct);
+                    if (tx is not null) await tx.CommitAsync(ct);
+                    break;
                 }
-                var seq = (await db.VaultVersions.Where(v => v.ItemId == item.Id).MaxAsync(v => (int?)v.Seq, ct) ?? 0) + 1;
-                var version = new VaultVersion
+                catch (DbUpdateException) when (created && attempt == 0)
                 {
-                    Id = Guid.NewGuid(), ItemId = item.Id, Seq = seq, DeviceId = deviceId, ReceivedUtc = time.GetUtcNow(),
-                    ManifestJson = Manifests.ToJson(manifest), ManifestHash = hash, TotalSize = manifest.Sum(e => e.Size),
-                };
-                db.VaultVersions.Add(version);
-                await db.SaveChangesAsync(ct); // the version row first: the head is set once it exists
-                item.HeadVersionId = version.Id;
-                response = new VaultUploadResponse(item.Id, version.Id, false);
+                    db.ChangeTracker.Clear(); // the transaction rolled back on dispose; retry finds the winner's item
+                }
             }
-            await db.SaveChangesAsync(ct);
-            if (tx is not null) await tx.CommitAsync(ct);
         }
 
         if (!response.Unchanged)
         {
-            hub.NotifyUser(userId, "vault");
             var who = deviceId is Guid d
                 ? await db.Devices.AsNoTracking().Where(x => x.Id == d).Select(x => x.Name).FirstOrDefaultAsync(ct) ?? "A device"
                 : "The web app";
@@ -102,7 +119,7 @@ public sealed class VaultService(EmuSyncDbContext db, BlobService blobs, UserLoc
                 orderby d.Name, d.Id
                 select new { s.ItemId, s.DeviceId, d.Name, s.VersionId })
             .ToListAsync(ct);
-        return items.Select(i => new VaultItemDto(i.Item.Id, i.Item.Category, i.Item.EmulatorId, i.Item.Name,
+        return items.Select(i => new VaultItemDto(i.Item.Id, i.Item.Category, string.IsNullOrEmpty(i.Item.EmulatorId) ? null : i.Item.EmulatorId, i.Item.Name,
                 i.Item.HeadVersionId!.Value, i.TotalSize,
                 holders.Where(h => h.ItemId == i.Item.Id)
                     .Select(h => new VaultHolder(h.DeviceId, h.Name, h.VersionId == i.Item.HeadVersionId)).ToList()))
@@ -153,20 +170,27 @@ public sealed class VaultService(EmuSyncDbContext db, BlobService blobs, UserLoc
             throw new ApiException(400, "bad_name", "Name must not contain '/', '\\', '..' or NUL.");
     }
 
+    private async Task RecordHolderAsync(Guid deviceId, Guid itemId, Guid versionId, CancellationToken ct)
+    {
+        var state = await db.DeviceVaultStates.FirstOrDefaultAsync(s => s.DeviceId == deviceId && s.ItemId == itemId, ct);
+        if (state is null) db.DeviceVaultStates.Add(new DeviceVaultState { DeviceId = deviceId, ItemId = itemId, VersionId = versionId });
+        else state.VersionId = versionId;
+    }
+
     private bool IsPostgres => db is PostgresEmuSyncDbContext;
 
     private async Task<IDbContextTransaction?> BeginAsync(CancellationToken ct) =>
         IsPostgres ? await db.Database.BeginTransactionAsync(ct) : null;
 
     /// <summary>Loads the item tracked; on Postgres also takes its row lock for the transaction.</summary>
-    private async Task<VaultItem?> FindItemForUpdateAsync(Guid userId, string category, string? emulatorId, string name, CancellationToken ct)
+    private async Task<VaultItem?> FindItemForUpdateAsync(Guid userId, string category, string emulatorId, string name, CancellationToken ct)
     {
         if (!IsPostgres)
             return await db.VaultItems.FirstOrDefaultAsync(i => i.UserId == userId && i.Category == category
                 && i.EmulatorId == emulatorId && i.Name == name, ct);
         var rows = await db.VaultItems.FromSql($"""
             SELECT * FROM "VaultItems" WHERE "UserId" = {userId} AND "Category" = {category} AND "Name" = {name}
-            AND "EmulatorId" IS NOT DISTINCT FROM {emulatorId} FOR UPDATE
+            AND "EmulatorId" = {emulatorId} FOR UPDATE
             """).ToListAsync(ct);
         return rows.SingleOrDefault();
     }
