@@ -31,11 +31,20 @@ class Vita3kModule(private val internalRoot: String = "/storage/emulated/0") : E
                     val l = raw.trim()
                     if (!l.startsWith("pref-path:")) continue
                     val v = l.removePrefix("pref-path:").trim().trim('"', '\'').trimEnd('/')
-                    if (v.isNotEmpty() && v.startsWith("/")) return rooted(v)
+                    safePrefPath(v)?.let { return it }
                 }
             }
         } catch (_: Exception) { }
         return "${d.dataRoot}/vita"
+    }
+
+    private val volumeRe = Regex("^/storage/[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}/.+")
+
+    /** Only internal storage or an SD volume, and no `.`/`..` segments; anything else (synced input) is rejected. */
+    private fun safePrefPath(v: String): String? {
+        if (v.contains('\u0000') || v.split('/').any { it == ".." || it == "." }) return null
+        val c = Paths.canonical(v)
+        return if (c.startsWith("/storage/emulated/0/") && c.length > "/storage/emulated/0/".length || volumeRe.matches(c)) rooted(c) else null
     }
 
     private fun saveRoot(fs: Fs, d: Detected) = "${vitaFs(fs, d)}/ux0/user/00/savedata"

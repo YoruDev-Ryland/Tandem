@@ -9,7 +9,14 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /** [internalRoot] replaces /storage/emulated/0 (for tests). */
-class AzaharModule(private val internalRoot: String = "/storage/emulated/0") : EmulatorModule {
+class AzaharModule(
+    private val internalRoot: String = "/storage/emulated/0",
+    private val storageRoot: String = "/storage",
+    private val now: () -> Long = System::currentTimeMillis,
+) : EmulatorModule {
+    private var cached: Pair<Long, String>? = null
+    private val cacheMillis = 10 * 60 * 1000L
+
     private fun rooted(p: String): String {
         val c = Paths.canonical(p)
         return if (internalRoot != "/storage/emulated/0" && c.startsWith("/storage/emulated/0")) internalRoot + c.removePrefix("/storage/emulated/0") else c
@@ -28,26 +35,40 @@ class AzaharModule(private val internalRoot: String = "/storage/emulated/0") : E
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {
         val pkg = packages.firstOrNull { it in fs.installedPackages() } ?: return null
         val root = settings.overrides["azahar.root"]?.takeIf { it.isNotBlank() }?.let { rooted(it).trimEnd('/') }
-            ?: DirSearch.find(fs, rooted("/sdcard"), 4) { fs.exists("$it/config/config.ini") && fs.exists("$it/sdmc") }
+            ?: findRoot(fs, pkg)
             ?: return null
         return Detected(emulatorId, pkg, "", root, mapOf("INTERNAL" to internalRoot, "root" to root))
     }
 
+    private fun isRoot(fs: Fs, dir: String) = fs.exists("$dir/config/config.ini") && fs.exists("$dir/sdmc")
+
+    private fun findRoot(fs: Fs, pkg: String): String? {
+        cached?.let { (t, r) -> if (now() - t < cacheMillis && isRoot(fs, r)) return r }
+        val volumes = DirSearch.sdVolumes(fs, storageRoot)
+        val known = (listOf(rooted("/sdcard")) + volumes).flatMap { listOf("$it/Games/3ds/user", "$it/Android/data/$pkg/files") }
+        val found = DirSearch.locate(fs, known, listOf(rooted("/sdcard")) + volumes, 4,
+            rank = { fs.stat("$it/sdmc")?.mtimeMillis ?: 0L }) { isRoot(fs, it) }
+        if (found != null) cached = now() to found
+        return found
+    }
+
     private fun name(p: String) = p.substringAfterLast('/')
 
-    /** `<root>/sdmc/Nintendo 3DS/<id0>/<id1>/title` of the most recently modified id0/id1 pair. */
-    private fun titleRoot(fs: Fs, d: Detected): String? {
+    /** `<root>/sdmc/Nintendo 3DS/<id0>/<id1>` of the most recently modified id0/id1 pair (title/ need not exist yet). */
+    private fun idPair(fs: Fs, d: Detected): String? {
         val base = "${d.dataRoot}/sdmc/Nintendo 3DS"
         var best: Pair<Long, String>? = null
         for (id0 in fs.list(base)) {
             if (!id0.isDir) continue
             for (id1 in fs.list(id0.path)) {
-                if (!id1.isDir || !fs.exists("${id1.path}/title")) continue
+                if (!id1.isDir) continue
                 if (best == null || id1.mtimeMillis > best.first) best = id1.mtimeMillis to id1.path
             }
         }
-        return best?.let { "${it.second}/title" }
+        return best?.second
     }
+
+    private fun titleRoot(fs: Fs, d: Detected): String? = idPair(fs, d)?.let { "$it/title" }
 
     private fun titleDirs(fs: Fs, d: Detected): List<Pair<String, String>> {   // (low8 as-is, absolute dir)
         val tr = titleRoot(fs, d) ?: return emptyList()
@@ -118,7 +139,8 @@ class AzaharModule(private val internalRoot: String = "/storage/emulated/0") : E
         val low = gameKey.substring(8)
         val tr = titleRoot(fs, d) ?: "${d.dataRoot}/sdmc/Nintendo 3DS/$zeroId/$zeroId/title"
         val existing = fs.list("$tr/$appHigh").firstOrNull { it.isDir && name(it.path).equals(low, true) }
-        return "${existing?.path ?: "$tr/$appHigh/$low"}/data"
+        // Azahar writes title dirs as {:08x}
+        return "${existing?.path ?: "$tr/$appHigh/${low.lowercase()}"}/data"
     }
 
     companion object {

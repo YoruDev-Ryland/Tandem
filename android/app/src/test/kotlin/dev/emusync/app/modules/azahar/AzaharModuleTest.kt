@@ -16,7 +16,10 @@ class AzaharModuleTest {
     private val fs = LocalFs().apply { packages.add("org.azahar_emu.azahar") }
     private val none = DeviceSettings(emptyList(), emptyMap())
     private fun internal() = File(tmp.root, "internal").path
-    private fun m() = AzaharModule(internal())
+    private var clock = 0L
+    private fun storage() = File(tmp.root, "storage").path
+    private val inst by lazy { AzaharModule(internal(), storage()) { clock } }
+    private fun m() = inst
     private fun user() = "${internal()}/Games/3ds/user"
     private val pair = "sdmc/Nintendo 3DS/00000000000000000000000000000000/00000000000000000000000000000000"
     private fun put(path: String, bytes: ByteArray = byteArrayOf(1, 2, 3)) { File(path).also { it.parentFile.mkdirs() }.writeBytes(bytes) }
@@ -57,7 +60,7 @@ class AzaharModuleTest {
         assertEquals(listOf("00000001.sav", "sub/x.bin"), s.files)
         assertEquals(listOf("000400000017E100", "000400000017E200"), m().installedGames(fs, det(), none).map { it.gameKey })
         assertEquals("${user()}/$pair/title/00040000/0017e100/data", m().targetDirFor(fs, det(), ItemKind.Save, "000400000017E100", "", ""))
-        assertEquals("${user()}/$pair/title/00040000/0017E300/data", m().targetDirFor(fs, det(), ItemKind.Save, "000400000017E300", "", ""))
+        assertEquals("${user()}/$pair/title/00040000/0017e300/data", m().targetDirFor(fs, det(), ItemKind.Save, "000400000017E300", "", ""))
         assertThrows(ModuleException::class.java) { m().targetDirFor(fs, det(), ItemKind.Save, "../../x", "", "") }
         assertThrows(ModuleException::class.java) { m().targetDirFor(fs, det(), ItemKind.Save, "0004000000", "", "") }
     }
@@ -118,5 +121,45 @@ class AzaharModuleTest {
         val b = m().configBundle(fs, det()).files
         assertEquals(setOf("root/config/config.ini", "root/config/custom/000400000017E100.ini"), b.keys)
         assertEquals("${user()}/config/config.ini", b["root/config/config.ini"])
+    }
+
+    private fun mkRoot(root: String, sdmcMtime: Long) {
+        put("$root/config/config.ini"); File("$root/sdmc").mkdirs(); File("$root/sdmc").setLastModified(sdmcMtime)
+    }
+
+    @Test fun known_location_beats_walk_decoy() {
+        mkRoot("${internal()}/Backups/azahar", 9_000_000)   // found earlier in the walk, and newer
+        mkRoot(user(), 1_000_000)
+        assertEquals(user(), det().dataRoot)
+    }
+
+    @Test fun most_recent_sdmc_wins_among_walk_matches() {
+        mkRoot("${internal()}/A/old", 1_000_000)
+        mkRoot("${internal()}/B/new", 5_000_000)
+        assertEquals("${internal()}/B/new", det().dataRoot)
+    }
+
+    @Test fun walk_skips_android_and_dot_dirs_and_result_is_cached() {
+        mkRoot("${internal()}/Android/data/other/files", 9_000_000)
+        mkRoot("${internal()}/.hidden/x", 9_000_000)
+        assertNull(m().detect(fs, none))
+        mkRoot("${internal()}/X/y", 1_000_000)
+        assertEquals("${internal()}/X/y", det().dataRoot)
+        File("${internal()}/X/y").deleteRecursively()
+        mkRoot("${internal()}/Z", 1_000_000)
+        clock = 1000
+        mkRoot("${internal()}/X/y", 1_000_000)
+        assertEquals("${internal()}/X/y", det().dataRoot)             // cached
+        File("${internal()}/X/y").deleteRecursively()
+        clock = 11 * 60 * 1000
+        assertEquals("${internal()}/Z", det().dataRoot)               // expired + invalid
+    }
+
+    @Test fun target_prefers_existing_pair_without_title_else_zero_pair() {
+        layout()
+        assertEquals("${user()}/$pair/title/00040000/00000a0b/data", m().targetDirFor(fs, det(), ItemKind.Save, "0004000000000A0B", "", ""))
+        File("${user()}/sdmc/Nintendo 3DS/${"a".repeat(32)}/${"b".repeat(32)}").mkdirs()
+        assertEquals("${user()}/sdmc/Nintendo 3DS/${"a".repeat(32)}/${"b".repeat(32)}/title/00040000/00000a0b/data",
+            m().targetDirFor(fs, det(), ItemKind.Save, "0004000000000A0B", "", ""))
     }
 }

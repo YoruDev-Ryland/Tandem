@@ -15,7 +15,9 @@ class PpssppModuleTest {
     private val none = DeviceSettings(emptyList(), emptyMap())
     private fun internal() = File(tmp.root, "internal").path
     private fun storage() = File(tmp.root, "storage").path
-    private fun m() = PpssppModule(internal(), storage())
+    private var clock = 0L
+    private val inst by lazy { PpssppModule(internal(), storage()) { clock } }
+    private fun m() = inst
     private fun put(path: String) { File(path).also { it.parentFile.mkdirs() }.writeBytes(byteArrayOf(1, 2, 3)) }
     private fun ms() = "${internal()}/PSP-Stick"
 
@@ -74,5 +76,22 @@ class PpssppModuleTest {
         put("${ms()}/PSP/SYSTEM/other.txt")
         val b = m().configBundle(fs, m().detect(fs, none)!!).files
         assertEquals(setOf("memstick/PSP/SYSTEM/ppsspp.ini", "memstick/PSP/SYSTEM/controls.ini", "memstick/PSP/SYSTEM/ULUS10272_ppsspp.ini"), b.keys)
+    }
+
+    private fun mk(root: String, mtime: Long) {
+        put("$root/PSP/SYSTEM/ppsspp.ini"); File("$root/PSP/SAVEDATA").mkdirs(); File("$root/PSP/SAVEDATA").setLastModified(mtime)
+    }
+
+    @Test fun known_location_beats_walk_decoy() {
+        mk("${internal()}/Backups/psp", 9_000_000)
+        mk(internal(), 1_000_000)
+        assertEquals(internal(), m().detect(fs, none)!!.dataRoot)
+    }
+
+    @Test fun most_recent_savedata_wins_among_walk_matches() {
+        mk("${internal()}/A/old", 1_000_000)
+        mk("${internal()}/B/new", 5_000_000)
+        mk("${internal()}/Android/data/other/files", 9_000_000)
+        assertEquals("${internal()}/B/new", m().detect(fs, none)!!.dataRoot)
     }
 }

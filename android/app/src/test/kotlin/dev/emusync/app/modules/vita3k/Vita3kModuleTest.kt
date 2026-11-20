@@ -40,7 +40,7 @@ class Vita3kModuleTest {
 
     @Test fun pref_path_from_config() {
         val alt = "${internal()}/VitaFs"
-        put("${root()}/config.yml", "foo: 1\npref-path: \"$alt/\"\nbar: 2\n")
+        put("${root()}/config.yml", "foo: 1\npref-path: \"/storage/emulated/0/VitaFs/\"\nbar: 2\n")
         put("$alt/ux0/user/00/savedata/PCSE00003/a.bin")
         put("${root()}/vita/ux0/user/00/savedata/PCSE00004/a.bin")
         assertEquals(listOf("PCSE00003"), m().saveItems(fs, m().detect(fs, none)!!).map { it.gameKey })
@@ -53,5 +53,18 @@ class Vita3kModuleTest {
         val b = m().configBundle(fs, m().detect(fs, none)!!).files
         assertEquals(setOf("data/config.yml", "data/config/user-00.xml"), b.keys)
         assertEquals("${root()}/config.yml", b["data/config.yml"])
+    }
+
+    @Test fun unsafe_pref_path_falls_back() {
+        put("${root()}/vita/ux0/user/00/savedata/PCSE00004/a.bin")
+        for (bad in listOf("/data/x", "/storage/emulated/0/../../data/x", "/storage/emulated/0", "relative/x", "/storage/ABCD-12/../x")) {
+            put("${root()}/config.yml", "pref-path: $bad\n")
+            assertEquals(bad, listOf("PCSE00004"), m().saveItems(fs, m().detect(fs, none)!!).map { it.gameKey })
+        }
+    }
+
+    @Test fun sd_volume_pref_path_accepted() {
+        put("${root()}/config.yml", "pref-path: /storage/ABCD-1234/Vita\n")
+        assertEquals("/storage/ABCD-1234/Vita/ux0/user/00/savedata", m().targetDirFor(fs, m().detect(fs, none)!!, ItemKind.Save, "PCSE00001", "", "").substringBeforeLast('/'))
     }
 }

@@ -9,7 +9,11 @@ import dev.emusync.app.modules.*
 class PpssppModule(
     private val internalRoot: String = "/storage/emulated/0",
     private val storageRoot: String = "/storage",
+    private val now: () -> Long = System::currentTimeMillis,
 ) : EmulatorModule {
+    private var cached: Pair<Long, String>? = null
+    private val cacheMillis = 10 * 60 * 1000L
+
     private fun rooted(p: String): String {
         val c = Paths.canonical(p)
         return if (internalRoot != "/storage/emulated/0" && c.startsWith("/storage/emulated/0")) internalRoot + c.removePrefix("/storage/emulated/0") else c
@@ -25,11 +29,22 @@ class PpssppModule(
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {
         val pkg = packages.firstOrNull { it in fs.installedPackages() } ?: return null
         val ms = settings.overrides["ppsspp.memstick"]?.takeIf { it.isNotBlank() }?.let { rooted(it).trimEnd('/') }
-            ?: (listOf(rooted("/sdcard")) + DirSearch.sdVolumes(fs, storageRoot)).firstNotNullOfOrNull { start ->
-                DirSearch.find(fs, start, 4) { fs.exists("$it/PSP/SYSTEM/ppsspp.ini") }
-            }
+            ?: findMemstick(fs, pkg)
             ?: rooted("/sdcard/Android/data/$pkg/files")
         return Detected(emulatorId, pkg, "", ms, mapOf("INTERNAL" to internalRoot, "memstick" to ms))
+    }
+
+    private fun isMemstick(fs: Fs, dir: String) = fs.exists("$dir/PSP/SYSTEM/ppsspp.ini")
+
+    private fun findMemstick(fs: Fs, pkg: String): String? {
+        cached?.let { (t, r) -> if (now() - t < cacheMillis && isMemstick(fs, r)) return r }
+        val volumes = DirSearch.sdVolumes(fs, storageRoot)
+        val known = listOf(rooted("/sdcard"), rooted("/sdcard/Android/data/$pkg/files")) +
+            volumes.flatMap { listOf(it, "$it/Android/data/$pkg/files") }
+        val found = DirSearch.locate(fs, known, listOf(rooted("/sdcard")) + volumes, 4,
+            rank = { fs.stat("$it/PSP/SAVEDATA")?.mtimeMillis ?: 0L }) { isMemstick(fs, it) }
+        if (found != null) cached = now() to found
+        return found
     }
 
     private fun ms(d: Detected) = d.extraRoots["memstick"] ?: d.dataRoot
