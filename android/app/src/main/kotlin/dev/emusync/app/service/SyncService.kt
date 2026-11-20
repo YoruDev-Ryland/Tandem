@@ -221,7 +221,7 @@ class SyncService : Service() {
             val opens = java.util.concurrent.atomic.AtomicInteger(0)
             val events = EventStream(
                 defaultHttpClient(), url, key,
-                onDeliveries = { offer(planner.deliveriesEvent()) },
+                onDeliveries = { AppGraph.sessionFlows.nudgeDeliveries(flows); offer(planner.deliveriesEvent()) },
                 onState = { up ->
                     if (up != online) log(if (up) "server events connected" else "server events disconnected")
                     online = up

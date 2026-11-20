@@ -18,6 +18,11 @@ class SessionFlows {
     private val waitingState = MutableStateFlow<List<WaitingDelivery>>(emptyList())
     private val runningState = MutableStateFlow<Set<String>>(emptySet())
 
+    private val nudgeState = MutableStateFlow(0L)
+
+    /** Counts the server's `deliveries` events (monotonic, never reset); the UI refetches on every change. */
+    val deliveryNudges: StateFlow<Long> get() = nudgeState
+
     val waiting: StateFlow<List<WaitingDelivery>> get() = waitingState
     val running: StateFlow<Set<String>> get() = runningState
 
@@ -43,5 +48,9 @@ class SessionFlows {
 
     fun publishRunning(token: Token, v: Set<String>) = synchronized(lock) {
         if (live === token) runningState.value = v
+    }
+
+    fun nudgeDeliveries(token: Token) = synchronized(lock) {
+        if (live === token) nudgeState.value += 1
     }
 }

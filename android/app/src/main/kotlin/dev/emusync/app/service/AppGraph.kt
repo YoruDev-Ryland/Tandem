@@ -44,6 +44,9 @@ object AppGraph {
     /** The emulator ids running, refreshed on every process monitor tick; empty while sync is off. */
     val running: StateFlow<Set<String>> get() = sessionFlows.running
 
+    /** Bumped on each SSE `deliveries` event of the live session, so the UI needs no second connection. */
+    val deliveryNudges: StateFlow<Long> get() = sessionFlows.deliveryNudges
+
     fun store(context: Context): StateStore = storeRef ?: synchronized(this) {
         storeRef ?: StateStore(File(context.applicationContext.filesDir, "state.json")).also { storeRef = it }
     }

@@ -58,3 +58,15 @@ class SessionFlowsTest {
         assertEquals(1, ran)
     }
 }
+
+class SessionFlowsNudgeTest {
+    @Test fun delivery_nudges_count_only_for_the_live_session() {
+        val f = SessionFlows()
+        val t = f.begin()
+        f.nudgeDeliveries(t)
+        assertEquals(1L, f.deliveryNudges.value)
+        f.end(t)
+        f.nudgeDeliveries(t)
+        assertEquals(1L, f.deliveryNudges.value)
+    }
+}
