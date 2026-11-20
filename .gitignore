@@ -1,0 +1,9 @@
+.superpowers/
+bin/
+obj/
+*.user
+.vs/
+.idea/
+node_modules/
+data/
+TestResults/
