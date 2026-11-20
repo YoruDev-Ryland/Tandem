@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EmuSync.Protocol/EmuSync.Protocol.csproj" />
+    <Project Path="src/EmuSync.Server/EmuSync.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EmuSync.Server.Tests/EmuSync.Server.Tests.csproj" />
+  </Folder>
+</Solution>
