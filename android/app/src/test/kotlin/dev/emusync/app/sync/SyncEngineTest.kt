@@ -1,0 +1,377 @@
+package dev.emusync.app.sync
+
+import dev.emusync.app.api.Api
+import dev.emusync.app.api.ApiException
+import dev.emusync.app.fs.Fs
+import dev.emusync.app.fs.FsUnavailableException
+import dev.emusync.app.fs.LocalFs
+import dev.emusync.app.model.*
+import dev.emusync.app.modules.*
+import dev.emusync.app.modules.eden.EdenModule
+import java.io.File
+import java.io.InputStream
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+
+class SyncEngineTest {
+    @get:Rule val tmp = TemporaryFolder()
+
+    // ---- fakes ----
+
+    class FakeApi : Api {
+        val statuses = mutableListOf<DeviceStatusRequest>()
+        val installs = mutableListOf<Pair<String, List<InstalledGame>>>()
+        val missingQueries = mutableListOf<List<String>>()
+        val putBlobs = mutableListOf<String>()
+        val saves = mutableListOf<SaveUploadRequest>()
+        val configs = mutableListOf<ConfigUploadRequest>()
+        val serverBlobs = mutableSetOf<String>()
+        var saveStatus = SaveUploadStatus.Accepted
+        var configStatus = SaveUploadStatus.Accepted
+        var failSaveFor: String? = null
+        private var n = 0
+
+        override suspend fun register(email: String, password: String, deviceName: String) = error("unused")
+        override suspend fun login(email: String, password: String, deviceName: String) = error("unused")
+        override suspend fun redeemPairing(code: String, deviceName: String) = error("unused")
+        override suspend fun putStatus(req: DeviceStatusRequest) { statuses += req }
+        override suspend fun putInstalls(emulatorId: String, games: List<InstalledGame>): InstallsResponse {
+            installs += emulatorId to games; return InstallsResponse(games.size, 0)
+        }
+        override suspend fun missingBlobs(hashes: List<String>): List<String> {
+            missingQueries += hashes; return hashes.filter { it !in serverBlobs }
+        }
+        override suspend fun putBlob(hash: String, size: Long, source: () -> InputStream) {
+            source().use { it.readBytes() }; putBlobs += hash; serverBlobs += hash
+        }
+        override suspend fun getBlob(hash: String): InputStream = error("unused")
+        override suspend fun uploadSave(req: SaveUploadRequest): SaveUploadResponse {
+            if (req.gameKey == failSaveFor) throw ApiException(500, "boom", "boom")
+            saves += req; n++
+            return SaveUploadResponse(saveStatus, "item-${req.gameKey}", "v$n", "head$n")
+        }
+        override suspend fun uploadConfig(req: ConfigUploadRequest): ConfigUploadResponse {
+            configs += req; n++
+            return ConfigUploadResponse(configStatus, "bundle-${req.emulatorId}", "cv$n")
+        }
+        override suspend fun deliveries(): List<DeliveryDto> = emptyList()
+        override suspend fun ack(id: String, req: AckRequest) {}
+    }
+
+    /** Each dir under <root>/saves is one Save item; files in <root>/config form the config bundle. */
+    class FakeModule(val root: String, override val emulatorId: String = "fake") : EmulatorModule {
+        override val packages = listOf("com.fake.emu")
+        var throwOnItems = false
+        override fun detect(fs: Fs, settings: DeviceSettings): Detected? =
+            if ("com.fake.emu" in fs.installedPackages()) Detected(emulatorId, "com.fake.emu", "", root) else null
+        override fun saveItems(fs: Fs, d: Detected): List<LocalItem> {
+            if (throwOnItems) throw ModuleException("broken")
+            return fs.list("$root/saves").filter { it.isDir }.map { e ->
+                LocalItem(ItemKind.Save, e.path.substringAfterLast('/'), "", "core1", e.path,
+                    fs.walk(e.path).map { it.path.removePrefix(e.path + "/") })
+            }
+        }
+        override fun watchDirs(fs: Fs, d: Detected) = listOf("$root/saves")
+        override fun installedGames(fs: Fs, d: Detected, settings: DeviceSettings) =
+            saveItems(fs, d).map { InstalledGame(it.gameKey) }
+        override fun configBundle(fs: Fs, d: Detected) = ConfigBundleFiles(
+            fs.list("$root/config").filter { !it.isDir }.associate { "data/${it.path.substringAfterLast('/')}" to it.path })
+        override fun targetDirFor(fs: Fs, d: Detected, kind: ItemKind, gameKey: String, slot: String, core: String) = "$root/saves/$gameKey"
+        override fun cores(fs: Fs, d: Detected) = listOf("core1", "core2")
+    }
+
+    // ---- harness ----
+
+    private var now = 1_000_000L
+    private val logs = mutableListOf<String>()
+    private val conflicts = mutableListOf<SyncConflict>()
+    private val api = FakeApi()
+    private val root by lazy { tmp.newFolder("emu").path }
+    private val storage by lazy { tmp.newFolder("storage").path }
+    private val store by lazy { StateStore(File(tmp.root, "state.json")) }
+    private val module by lazy { FakeModule(root) }
+
+    private fun fs() = LocalFs().apply { packages.add("com.fake.emu") }
+
+    private fun engine(
+        fs: Fs = fs(),
+        modules: List<EmulatorModule> = listOf(module),
+    ) = SyncEngine(
+        fs, api, store, ModuleRegistry(modules), DeviceSettings(emptyList(), emptyMap()),
+        clock = { now }, log = { logs += it },
+        versionOf = { if (it == "com.fake.emu") "1.2.3" else null },
+        appVersion = "0.1.0", shizukuOk = { true },
+        onConflict = { conflicts += it },
+        storageRoot = storage,
+    )
+
+    private fun put(rel: String, text: String, mtime: Long = 5_000) {
+        val f = File(root, rel); f.parentFile!!.mkdirs(); f.writeText(text); f.setLastModified(mtime)
+    }
+
+    private fun saveKey(game: String) = ItemKey.of("fake", "Save", game, "", "")
+
+    // ---- tests ----
+
+    @Test fun first_scan_uploads_items_with_null_base() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        put("saves/GAME1/sub/b.sav", "world")
+        engine().fullScan()
+        assertEquals(1, api.saves.size)
+        val r = api.saves[0]
+        assertNull(r.baseVersionId)
+        assertEquals("fake", r.emulatorId)
+        assertEquals("GAME1", r.gameKey)
+        assertEquals(ItemKind.Save, r.kind)
+        assertEquals("", r.slot)
+        assertEquals("core1", r.core)  // wire still carries the core
+        assertEquals(listOf("a.sav", "sub/b.sav"), r.manifest.map { it.path })
+    }
+
+    @Test fun unchanged_item_not_reuploaded() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        val e = engine()
+        e.fullScan()
+        e.fullScan()
+        assertEquals(1, api.saves.size)
+        // and a new engine instance (process restart) also skips it
+        engine().fullScan()
+        assertEquals(1, api.saves.size)
+    }
+
+    @Test fun accepted_stores_known_version() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        engine().fullScan()
+        val s = store.get(saveKey("GAME1"))!!
+        assertEquals("v1", s.knownVersionId)
+        assertEquals(Manifests.hash(api.saves[0].manifest), s.knownManifestHash)
+        assertNull(store.get(ItemKey.of("fake", "Save", "GAME1", "", "core1")))  // save key ignores core
+        put("saves/GAME1/a.sav", "hello2", 6_000)
+        engine().fullScan()
+        assertEquals("v1", api.saves[1].baseVersionId)
+        assertEquals("v2", store.get(saveKey("GAME1"))!!.knownVersionId)
+    }
+
+    @Test fun unchanged_response_stores_head_version() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.saveStatus = SaveUploadStatus.Unchanged
+        engine().fullScan()
+        assertEquals("head1", store.get(saveKey("GAME1"))!!.knownVersionId)
+    }
+
+    @Test fun conflict_does_not_store_and_notifies() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.saveStatus = SaveUploadStatus.Conflict
+        engine().fullScan()
+        assertNull(store.get(saveKey("GAME1")))
+        assertEquals(1, conflicts.size)
+        assertEquals("fake", conflicts[0].emulatorId)
+        assertEquals("GAME1", conflicts[0].gameKey)
+        assertTrue(logs.any { it.contains("conflict", ignoreCase = true) })
+    }
+
+    @Test fun only_missing_blobs_are_put() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        put("saves/GAME1/b.sav", "world")
+        put("saves/GAME1/c.sav", "hello")  // duplicate content -> one hash
+        val helloHash = Manifests.build(LocalFs(), "$root/saves/GAME1", listOf("a.sav")).single().hash
+        api.serverBlobs += helloHash
+        engine().fullScan()
+        assertEquals(1, api.missingQueries.size)
+        assertEquals(2, api.missingQueries[0].size)  // distinct hashes
+        assertEquals(1, api.putBlobs.size)
+        assertNotEquals(helloHash, api.putBlobs[0])
+    }
+
+    @Test fun event_then_quiet_period_uploads_once() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        val e = engine()
+        e.fullScan()
+        assertEquals(1, api.saves.size)
+        put("saves/GAME1/a.sav", "changed", 9_000)
+        now += 10_000; e.onFsEvent("$root/saves/GAME1")
+        now += 1_000; e.onFsEvent("$root/saves/GAME1")
+        now += 1_000; e.onFsEvent("$root/saves/GAME1")
+        val last = now
+        now = last + 2_000; e.tick()
+        assertEquals(1, api.saves.size)
+        now = last + 3_100; e.tick()
+        assertEquals(2, api.saves.size)
+        now = last + 10_000; e.tick()
+        assertEquals(2, api.saves.size)
+    }
+
+    @Test fun event_in_parent_dir_picks_up_new_item() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        val e = engine()
+        e.fullScan()
+        put("saves/GAME2/x.sav", "new")
+        e.onFsEvent("$root/saves")
+        e.tick()
+        assertEquals(1, api.saves.size)  // not quiet yet
+        now += 3_000; e.tick()
+        assertEquals(listOf("GAME1", "GAME2"), api.saves.map { it.gameKey })
+    }
+
+    @Test fun file_changing_during_upload_defers() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        var changes = 1
+        val fs = object : LocalFs() {
+            override fun openRead(path: String): InputStream {
+                val s = super.openRead(path)
+                if (changes > 0 && path.endsWith("a.sav")) {
+                    changes--
+                    File(path).appendText("more"); File(path).setLastModified(7_000)
+                }
+                return s
+            }
+        }.apply { packages.add("com.fake.emu") }
+        val e = engine(fs)
+        e.fullScan()
+        assertEquals(0, api.saves.size)
+        assertNull(store.get(saveKey("GAME1")))
+        now += 2_000; e.tick()
+        assertEquals(0, api.saves.size)
+        now += 1_100; e.tick()
+        assertEquals(1, api.saves.size)
+        assertEquals("hellomore".length.toLong(), api.saves[0].manifest.single().size)
+    }
+
+    @Test fun fs_unavailable_aborts_without_state_change() {
+        put("saves/GAME1/a.sav", "hello")
+        val fs = object : LocalFs() {
+            override fun openRead(path: String): InputStream = throw FsUnavailableException("shizuku gone")
+        }.apply { packages.add("com.fake.emu") }
+        try {
+            runBlocking { engine(fs).fullScan() }
+            fail("expected FsUnavailableException")
+        } catch (_: FsUnavailableException) {}
+        assertEquals(0, api.saves.size)
+        assertNull(store.get(saveKey("GAME1")))
+    }
+
+    @Test fun api_error_on_one_item_continues() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        put("saves/GAME2/a.sav", "world")
+        api.failSaveFor = "GAME1"
+        engine().fullScan()
+        assertEquals(listOf("GAME2"), api.saves.map { it.gameKey })
+        assertNull(store.get(saveKey("GAME1")))
+        assertNotNull(store.get(saveKey("GAME2")))
+    }
+
+    @Test fun module_error_skips_module() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        val other = FakeModule(tmp.newFolder("emu2").path, "other").also {
+            File(it.root, "saves/G2").mkdirs(); File(it.root, "saves/G2/x").writeText("x")
+        }
+        module.throwOnItems = true
+        engine(modules = listOf(module, other)).fullScan()
+        assertEquals(listOf("other"), api.saves.map { it.emulatorId })
+    }
+
+    @Test fun empty_item_not_uploaded() = runBlocking {
+        File(root, "saves/EMPTY").mkdirs()
+        engine().fullScan()
+        assertEquals(0, api.saves.size)
+    }
+
+    @Test fun status_reports_roots_and_emulators() = runBlocking {
+        File(storage, "emulated/0").mkdirs()
+        File(storage, "self").mkdirs()
+        File(storage, "1A2B-3C4D").mkdirs()
+        engine().fullScan()
+        val s = api.statuses.single()
+        assertEquals("android", s.platform)
+        assertEquals("0.1.0", s.appVersion)
+        assertTrue(s.shizukuOk)
+        assertEquals(listOf(EmulatorStatus("fake", "com.fake.emu", "1.2.3", listOf("core1", "core2"))), s.emulators)
+        assertEquals(
+            mapOf("{INTERNAL}" to "$storage/emulated/0", "{SD}" to "$storage/1A2B-3C4D", "{EMU:fake}" to root),
+            s.roots,
+        )
+    }
+
+    @Test fun status_without_sd() = runBlocking {
+        File(storage, "emulated/0").mkdirs()
+        engine().fullScan()
+        assertFalse(api.statuses.single().roots.containsKey("{SD}"))
+    }
+
+    @Test fun installs_sent_on_scan_and_deduplicated() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        val e = engine()
+        e.fullScan()
+        e.fullScan()
+        assertEquals(1, api.installs.size)
+        assertEquals("fake" to listOf(InstalledGame("GAME1")), api.installs[0])
+        put("saves/GAME2/a.sav", "x")
+        e.onEmulatorExited("fake")
+        assertEquals(2, api.installs.size)
+    }
+
+    @Test fun emulator_exit_uploads_config_bundle() = runBlocking {
+        put("config/emu.cfg", "a=1")
+        val e = engine()
+        e.fullScan()
+        val before = api.configs.size
+        put("config/emu.cfg", "a=2", 8_000)
+        e.onEmulatorExited("fake")
+        assertEquals(before + 1, api.configs.size)
+        val req = api.configs.last()
+        assertEquals("fake", req.emulatorId)
+        assertEquals(listOf("data/emu.cfg"), req.files.map { it.path })
+        val cs = store.configState("fake")!!
+        assertEquals(Manifests.hash(req.files), cs.knownManifestHash)
+        assertEquals("bundle-fake", cs.bundleId)
+        e.onEmulatorExited("fake")
+        assertEquals(before + 1, api.configs.size)  // unchanged
+    }
+
+    @Test fun config_conflict_does_not_store() = runBlocking {
+        put("config/emu.cfg", "a=1")
+        api.configStatus = SaveUploadStatus.Conflict
+        val e = engine()
+        assertEquals(SaveUploadStatus.Conflict, e.uploadConfig(module, Detected("fake", "com.fake.emu", "", root)))
+        assertNull(store.configState("fake"))
+        assertTrue(conflicts.any { it.kind == null && it.emulatorId == "fake" })
+    }
+
+    @Test fun oversize_blob_skips_item() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        val fs = object : LocalFs() {
+            // Reports just over the limit; the engine must skip on the stat, before hashing.
+            override fun stat(path: String) = super.stat(path)?.let {
+                if (path.endsWith("a.sav")) it.copy(size = SyncConfig.maxBlobBytes + 1) else it
+            }
+            override fun openRead(path: String): InputStream = throw AssertionError("must not read $path")
+        }.apply { packages.add("com.fake.emu") }
+        assertNull(engine(fs).upload(module, Detected("fake", "com.fake.emu", "", root),
+            LocalItem(ItemKind.Save, "GAME1", "", "core1", "$root/saves/GAME1", listOf("a.sav"))))
+        assertEquals(0, api.saves.size)
+        assertTrue(logs.any { it.contains("too large") })
+    }
+
+    @Test fun real_eden_module_with_thor_config() = runBlocking {
+        val internal = tmp.newFolder("internal").path
+        val pkg = "dev.eden.eden_emulator"
+        val cfg = File(internal, "Android/data/$pkg/files/config/config.ini")
+        cfg.parentFile!!.mkdirs()
+        File(javaClass.getResource("/fixtures/eden/thor/config.ini")!!.toURI()).copyTo(cfg)
+        val title = "01002C9022770000"
+        val save = File(internal, "Games/switch-saves/user/save/0000000000000000/23E468EE7BBC25842DE9EAD88AB25814/$title/data.dat")
+        save.parentFile!!.mkdirs(); save.writeText("zelda")
+        val fs = LocalFs().apply { packages.add(pkg) }
+        engine(fs, listOf(EdenModule(internal))).fullScan()
+        val r = api.saves.single()
+        assertEquals("eden", r.emulatorId)
+        assertEquals(title, r.gameKey)
+        assertEquals(listOf("data.dat"), r.manifest.map { it.path })
+        assertNotNull(store.get(ItemKey.of("eden", "Save", title, "", "")))
+        assertEquals("eden", api.installs.single().first)
+        assertEquals("{EMU:eden}" to "$internal/Android/data/$pkg/files", api.statuses.single().roots.entries.first { it.key == "{EMU:eden}" }.toPair())
+    }
+}
