@@ -16,6 +16,7 @@ public sealed class ServerOptions
     public string? WebRoot { get; set; }
     public long MaxBlobBytes { get; set; } = 8L * 1024 * 1024 * 1024;
     public int AuthRequestsPerMinute { get; set; } = 10;
+    public int EventHeartbeatSeconds { get; set; } = 25;
 
     public string ServerName
     {

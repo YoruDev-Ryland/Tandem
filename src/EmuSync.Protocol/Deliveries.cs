@@ -12,3 +12,9 @@ public sealed record DeliveryDto(Guid Id, DeliveryKind Kind, Guid TargetId, Guid
 public sealed record DeliveryList(IReadOnlyList<DeliveryDto> Items);
 
 public sealed record AckRequest(DeliveryResult Result, string? Detail);
+
+public sealed record ActivityItem(long Id, DateTimeOffset Utc, string Kind, string Message, Guid? DeviceId, string? DeviceName,
+    string? EmulatorId, string? GameKey);
+
+/// <param name="NextBefore">Pass as <c>before</c> to fetch the next (older) page, or null when there is no more.</param>
+public sealed record ActivityPage(IReadOnlyList<ActivityItem> Items, long? NextBefore);

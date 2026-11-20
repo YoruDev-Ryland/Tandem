@@ -13,7 +13,8 @@ namespace EmuSync.Server.Saves;
 /// Save/state versioning. Ordering never uses device clocks: an upload names the version it was based on and the
 /// server decides head vs conflict from that alone. A conflict version is never head until resolved.
 /// </summary>
-public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLocks locks, IDomainEvents events, TimeProvider time)
+public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLocks locks, IDomainEvents events, TimeProvider time,
+    IActivityLog activity)
 {
     public const int MaxGameKey = 300;
     public const int MaxSlot = 100;
@@ -34,6 +35,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
 
         SaveUploadResponse response;
         object? evt = null;
+        string label = request.GameKey;
         using (await locks.Acquire(userId, ct))
         {
             var itemId = await FindOrCreateItemAsync(userId, request.EmulatorId, request.Kind, request.GameKey, slot, itemCore, ct);
@@ -41,6 +43,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             var item = await LoadItemForUpdateAsync(userId, itemId, ct)
                 ?? throw new InvalidOperationException("Save item vanished while locked.");
             if (request.DisplayName is not null) item.DisplayName = request.DisplayName;
+            label = item.DisplayName ?? item.GameKey;
 
             var head = item.HeadVersionId is Guid headId
                 ? await db.SaveVersions.SingleAsync(v => v.Id == headId, ct)
@@ -93,8 +96,21 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         }
 
         if (evt is not null) await events.Raise(evt, ct);
+        if (response.Status != SaveUploadStatus.Unchanged)
+        {
+            var device = await DeviceNameAsync(deviceId, ct);
+            var what = request.Kind == ItemKind.Save ? "save" : "state";
+            if (response.Status == SaveUploadStatus.Accepted)
+                await activity.WriteAsync(userId, "save_uploaded", $"{device} uploaded {what} for {label}", deviceId, request.EmulatorId, request.GameKey, ct: ct);
+            else
+                await activity.WriteAsync(userId, "conflict_opened", $"{device} uploaded {what} for {label}, which conflicts", deviceId, request.EmulatorId, request.GameKey,
+                    new { itemId = response.ItemId, versionId = response.VersionId }, ct);
+        }
         return response;
     }
+
+    private async Task<string> DeviceNameAsync(Guid deviceId, CancellationToken ct) =>
+        await db.Devices.AsNoTracking().Where(d => d.Id == deviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "A device";
 
     public async Task ResolveAsync(Guid userId, Guid itemId, ResolveConflictRequest request, CancellationToken ct)
     {
@@ -102,6 +118,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             throw new ApiException(400, "bad_request", "Unknown choice.");
 
         SaveHeadChanged evt;
+        string emulatorId, gameKey, label;
         using (await locks.Acquire(userId, ct))
         {
             await using var tx = await BeginAsync(ct);
@@ -135,9 +152,11 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             await db.SaveChangesAsync(ct);
             if (tx is not null) await tx.CommitAsync(ct);
             evt = new SaveHeadChanged(userId, item.Id, keep.Id);
+            (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey);
         }
 
         await events.Raise(evt, ct);
+        await activity.WriteAsync(userId, "conflict_resolved", $"Conflict resolved for {label}", null, emulatorId, gameKey, ct: ct);
     }
 
     public async Task ResolveFirstSyncAsync(Guid userId, BulkFirstSyncRequest request, CancellationToken ct)
@@ -150,6 +169,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             throw new ApiException(404, "device_not_found", "Device not found.");
 
         var raised = new List<SaveHeadChanged>();
+        var resolved = new List<(string Emulator, string Game, string Label)>();
         using (await locks.Acquire(userId, ct))
         {
             await using var tx = await BeginAsync(ct);
@@ -182,6 +202,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 foreach (var v in mine) v.Resolved = true;
                 item.OpenConflict = open.Count > mine.Count;
                 raised.Add(new SaveHeadChanged(userId, item.Id, item.HeadVersionId!.Value));
+                resolved.Add((item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey));
             }
 
             await db.SaveChangesAsync(ct);
@@ -189,6 +210,8 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         }
 
         foreach (var evt in raised) await events.Raise(evt, ct);
+        foreach (var (emulator, game, label) in resolved)
+            await activity.WriteAsync(userId, "conflict_resolved", $"First-sync conflict resolved for {label}", request.DeviceId, emulator, game, ct: ct);
     }
 
     /// <summary>
@@ -202,6 +225,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
 
         RestoreResponse response;
         SaveHeadChanged? evt = null;
+        string emulatorId, gameKey, label;
         using (await locks.Acquire(userId, ct))
         {
             await using var tx = await BeginAsync(ct);
@@ -234,12 +258,17 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 response = new RestoreResponse(item.Id, copy.Id);
                 evt = new SaveHeadChanged(userId, item.Id, copy.Id);
             }
+            (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey);
 
             await db.SaveChangesAsync(ct);
             if (tx is not null) await tx.CommitAsync(ct);
         }
 
-        if (evt is not null) await events.Raise(evt, ct);
+        if (evt is not null)
+        {
+            await events.Raise(evt, ct);
+            await activity.WriteAsync(userId, "save_uploaded", $"Restored an earlier version of {label}", request.DeviceId, emulatorId, gameKey, ct: ct);
+        }
         return response;
     }
 

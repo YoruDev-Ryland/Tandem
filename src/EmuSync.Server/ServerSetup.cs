@@ -32,7 +32,8 @@ public static class ServerSetup
         builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
         builder.Services.AddSingleton<UserLocks>();
         builder.Services.AddScoped<SaveService>();
-        builder.Services.TryAddSingleton<IEventHub, NoOpEventHub>();
+        builder.Services.AddSingleton<IEventHub, EventHub>();
+        builder.Services.AddScoped<IActivityLog, ActivityLog>();
         builder.Services.AddScoped<DeliveryService>();
         builder.Services.AddHostedService<DeliveryHandlers>();
     }
@@ -57,5 +58,6 @@ public static class ServerSetup
         app.MapBlobEndpoints();
         app.MapSaveEndpoints();
         app.MapDeliveryEndpoints();
+        app.MapEventEndpoints();
     }
 }

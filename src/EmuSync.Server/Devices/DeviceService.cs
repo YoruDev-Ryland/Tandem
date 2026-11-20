@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace EmuSync.Server.Devices;
 
-public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time, IDomainEvents events)
+public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time, IDomainEvents events, IActivityLog activity)
 {
     public const int MaxGames = 20000;
     public const int MaxCores = 500;
@@ -158,8 +158,11 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
     public async Task Revoke(Guid userId, Guid id, CancellationToken ct)
     {
         var device = await Owned(userId, id, ct);
+        var firstRevoke = device.RevokedUtc is null;
         device.RevokedUtc ??= time.GetUtcNow();
         await db.SaveChangesAsync(ct);
+        if (firstRevoke)
+            await activity.WriteAsync(userId, "device_revoked", $"{device.Name} was revoked", device.Id, ct: ct);
     }
 
     private async Task<Device> Owned(Guid userId, Guid id, CancellationToken ct) =>

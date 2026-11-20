@@ -742,5 +742,8 @@ public class DeliveryTests
         public void NotifyDevice(Guid deviceId) => _devices.Enqueue(deviceId);
 
         public void NotifyUser(Guid userId, string topic) { }
+
+        public IAsyncEnumerable<ServerEvent> Subscribe(Guid userId, Guid? deviceId, CancellationToken ct) =>
+            AsyncEnumerable.Empty<ServerEvent>();
     }
 }

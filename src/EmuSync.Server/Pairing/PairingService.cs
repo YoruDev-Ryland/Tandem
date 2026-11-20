@@ -9,7 +9,8 @@ using Microsoft.Extensions.Options;
 
 namespace EmuSync.Server.Pairing;
 
-public sealed class PairingService(EmuSyncDbContext db, AccountService accounts, IOptions<ServerOptions> options, TimeProvider time)
+public sealed class PairingService(EmuSyncDbContext db, AccountService accounts, IOptions<ServerOptions> options, TimeProvider time,
+    EmuSync.Server.Events.IActivityLog activity)
 {
     public const string Alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     public const int CodeLength = 8;
@@ -51,6 +52,9 @@ public sealed class PairingService(EmuSyncDbContext db, AccountService accounts,
             .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedUtc, now), ct);
         if (claimed == 0)
             throw new ApiException(410, "code_used", "That pairing code has already been used.");
-        return await accounts.CreateDevice(row.UserId, deviceName, platform, ct);
+        var created = await accounts.CreateDevice(row.UserId, deviceName, platform, ct);
+        var name = await db.Devices.AsNoTracking().Where(d => d.Id == created.DeviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "Device";
+        await activity.WriteAsync(row.UserId, "device_paired", $"{name} paired", created.DeviceId, ct: ct);
+        return created;
     }
 }

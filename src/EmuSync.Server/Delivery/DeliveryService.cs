@@ -15,7 +15,7 @@ namespace EmuSync.Server.Deliveries;
 /// interleaves with an upload's read-decide-write.
 /// </summary>
 public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomainEvents events, IEventHub hub,
-    TimeProvider time, ILogger<DeliveryService> logger)
+    TimeProvider time, ILogger<DeliveryService> logger, IActivityLog activity)
 {
     /// <summary>After a Failed ack, the same device+target gets no new delivery for this long.</summary>
     public static readonly TimeSpan FailedBackoff = TimeSpan.FromMinutes(10);
@@ -92,6 +92,7 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
 
         List<Guid> notify = [];
         var wasSuperseded = false;
+        string? emulatorId = null, gameKey = null, label = null;
         using (await locks.Acquire(userId, ct))
         {
             var delivery = await db.Deliveries.FirstOrDefaultAsync(d => d.Id == deliveryId && d.DeviceId == deviceId, ct)
@@ -117,15 +118,31 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
             }
 
             if (delivery.Kind == DeliveryKind.Save)
+            {
+                var item = await db.SaveItems.AsNoTracking().Where(i => i.Id == delivery.TargetId)
+                    .Select(i => new { i.EmulatorId, i.GameKey, i.DisplayName }).FirstOrDefaultAsync(ct);
+                if (item is not null) (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey);
+            }
+            label ??= delivery.Kind == DeliveryKind.Save ? "a save" : delivery.Kind.ToString().ToLowerInvariant();
+            if (delivery.Kind == DeliveryKind.Save)
                 notify = await ReconcileAsync(userId, delivery.TargetId, null, ct);
             notify.Remove(deviceId); // the acking device is talking to us; never push it from its own ack
         }
         Notify(notify);
 
+        if (request.Result == DeliveryResult.Applied)
+        {
+            var name = await db.Devices.AsNoTracking().Where(d => d.Id == deviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "A device";
+            await activity.WriteAsync(userId, "delivered", $"{name} received {label}", deviceId, emulatorId, gameKey, ct: ct);
+        }
+
         if (request.Result == DeliveryResult.Failed && !wasSuperseded)
         {
             logger.LogWarning("Delivery {DeliveryId} failed on device {DeviceId}: {Detail}", deliveryId, deviceId, detail);
             await events.Raise(new DeliveryFailed(userId, deviceId, deliveryId, detail), ct);
+            var name = await db.Devices.AsNoTracking().Where(d => d.Id == deviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "A device";
+            await activity.WriteAsync(userId, "delivery_failed", $"{name} failed to apply {label}", deviceId, emulatorId, gameKey,
+                new { deliveryId, detail }, ct);
         }
     }
 
