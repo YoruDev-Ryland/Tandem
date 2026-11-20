@@ -54,6 +54,9 @@ public sealed class ActivityLog(EmuSyncDbContext db, IEventHub hub, TimeProvider
                 case "config_uploaded" or "group_changed" or "config_applied":
                     hub.NotifyUser(userId, "configs");
                     break;
+                case "vault_uploaded" or "vault_placed":
+                    hub.NotifyUser(userId, "vault");
+                    break;
                 case "device_paired" or "device_revoked":
                     hub.NotifyUser(userId, "devices");
                     break;

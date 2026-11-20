@@ -178,6 +178,14 @@ public class VaultVersion
     public long TotalSize { get; set; }
 }
 
+/// <summary>The vault version a device last acknowledged applying (a Vault delivery acked Applied).</summary>
+public class DeviceVaultState
+{
+    public Guid DeviceId { get; set; }
+    public Guid ItemId { get; set; }
+    public Guid VersionId { get; set; }
+}
+
 public class Delivery
 {
     public Guid Id { get; set; }

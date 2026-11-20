@@ -6,6 +6,7 @@ using EmuSync.Server.Data;
 using EmuSync.Server.Deliveries;
 using EmuSync.Server.Devices;
 using EmuSync.Server.Events;
+using EmuSync.Server.Vault;
 using EmuSync.Server.Http;
 using EmuSync.Server.Pairing;
 using EmuSync.Server.Saves;
@@ -39,6 +40,7 @@ public static class ServerSetup
         builder.Services.AddScoped<ConfigService>();
         builder.Services.AddScoped<ConfigDiffService>();
         builder.Services.AddScoped<DeliveryService>();
+        builder.Services.AddScoped<VaultService>();
         builder.Services.AddHostedService<DeliveryHandlers>();
     }
 
@@ -63,6 +65,7 @@ public static class ServerSetup
         app.MapSaveEndpoints();
         app.MapConfigEndpoints();
         app.MapDeliveryEndpoints();
+        app.MapVaultEndpoints();
         app.MapEventEndpoints();
     }
 }

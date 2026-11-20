@@ -24,6 +24,7 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
     public DbSet<RawConfigUpload> RawConfigUploads => Set<RawConfigUpload>();
     public DbSet<VaultItem> VaultItems => Set<VaultItem>();
     public DbSet<VaultVersion> VaultVersions => Set<VaultVersion>();
+    public DbSet<DeviceVaultState> DeviceVaultStates => Set<DeviceVaultState>();
     public DbSet<Delivery> Deliveries => Set<Delivery>();
     public DbSet<UserBlob> UserBlobs => Set<UserBlob>();
     public DbSet<PairingCode> PairingCodes => Set<PairingCode>();
@@ -139,6 +140,13 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
         {
             e.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => new { x.ItemId, x.Seq }).IsUnique();
+            e.HasOne<VaultItem>().WithMany().HasForeignKey(x => x.ItemId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        m.Entity<DeviceVaultState>(e =>
+        {
+            e.HasKey(x => new { x.DeviceId, x.ItemId });
+            e.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<VaultItem>().WithMany().HasForeignKey(x => x.ItemId).OnDelete(DeleteBehavior.Cascade);
         });
 

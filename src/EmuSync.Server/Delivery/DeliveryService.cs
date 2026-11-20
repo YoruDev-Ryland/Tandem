@@ -92,9 +92,26 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
         var applied = await db.DeviceConfigs.AsNoTracking().Where(c => c.DeviceId == deviceId && configTargets.Contains(c.BundleId))
             .ToDictionaryAsync(c => c.BundleId, c => c.AppliedVersionId, ct);
 
+        var vaultTargets = pending.Where(d => d.Kind == DeliveryKind.Vault).Select(d => d.TargetId).Distinct().ToList();
+        var vaultVersionIds = pending.Where(d => d.Kind == DeliveryKind.Vault).Select(d => d.VersionId).Distinct().ToList();
+        var vaultItems = await db.VaultItems.AsNoTracking().Where(i => vaultTargets.Contains(i.Id) && i.UserId == userId)
+            .ToDictionaryAsync(i => i.Id, ct);
+        var vaultVersions = await db.VaultVersions.AsNoTracking().Where(v => vaultVersionIds.Contains(v.Id))
+            .ToDictionaryAsync(v => v.Id, v => v.ManifestJson, ct);
+
         var result = new List<DeliveryDto>();
         foreach (var d in pending)
         {
+            if (d.Kind == DeliveryKind.Vault
+                && vaultItems.TryGetValue(d.TargetId, out var vaultItem)
+                && vaultVersions.TryGetValue(d.VersionId, out var vaultManifest))
+            {
+                // Only the item id and manifest identify a vault delivery; the emulator is "" when the item has none.
+                result.Add(new DeliveryDto(d.Id, d.Kind, d.TargetId, d.VersionId, null, vaultItem.EmulatorId ?? "",
+                    null, null, null, null, Manifests.FromJson(vaultManifest), null));
+                continue;
+            }
+
             if (d.Kind == DeliveryKind.Save
                 && items.TryGetValue(d.TargetId, out var item)
                 && versions.TryGetValue(d.VersionId, out var version))
@@ -127,9 +144,10 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
         List<Guid> notify = [];
         var wasSuperseded = false;
         string? emulatorId = null, gameKey = null, label = null;
+        DeliveryRow delivery;
         using (await locks.Acquire(userId, ct))
         {
-            var delivery = await db.Deliveries.FirstOrDefaultAsync(d => d.Id == deliveryId && d.DeviceId == deviceId, ct)
+            delivery = await db.Deliveries.FirstOrDefaultAsync(d => d.Id == deliveryId && d.DeviceId == deviceId, ct)
                 ?? throw new ApiException(404, "delivery_not_found", "Delivery not found.");
             wasSuperseded = delivery.Superseded;
             if (delivery.Superseded)
@@ -157,6 +175,12 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
                     .Select(i => new { i.EmulatorId, i.GameKey, i.DisplayName }).FirstOrDefaultAsync(ct);
                 if (item is not null) (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey);
             }
+            else if (delivery.Kind == DeliveryKind.Vault)
+            {
+                var item = await db.VaultItems.AsNoTracking().Where(i => i.Id == delivery.TargetId)
+                    .Select(i => new { i.EmulatorId, i.Name }).FirstOrDefaultAsync(ct);
+                if (item is not null) (emulatorId, label) = (item.EmulatorId, item.Name);
+            }
             else if (delivery.Kind == DeliveryKind.Config)
             {
                 emulatorId = await db.ConfigBundles.AsNoTracking().Where(b => b.Id == delivery.TargetId)
@@ -175,7 +199,11 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
         if (request.Result == DeliveryResult.Applied)
         {
             var name = await db.Devices.AsNoTracking().Where(d => d.Id == deviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "A device";
-            await activity.WriteAsync(userId, "delivered", $"{name} received {label}", deviceId, emulatorId, gameKey);
+            if (delivery.Kind == DeliveryKind.Vault)
+                await activity.WriteAsync(userId, "vault_placed", $"{name} received {label} from the vault", deviceId, emulatorId,
+                    data: new { itemId = delivery.TargetId, versionId = delivery.VersionId });
+            else
+                await activity.WriteAsync(userId, "delivered", $"{name} received {label}", deviceId, emulatorId, gameKey);
         }
 
         if (request.Result == DeliveryResult.Failed && !wasSuperseded)
@@ -235,6 +263,27 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
                     if (!seqs.TryGetValue(config.AppliedVersionId.Value, out var appliedSeq)
                         || (seqs.TryGetValue(delivery.VersionId, out var deliveredSeq) && deliveredSeq > appliedSeq))
                         config.AppliedVersionId = delivery.VersionId;
+                }
+                break;
+            case DeliveryKind.Vault:
+                if (!await db.VaultItems.AnyAsync(i => i.Id == delivery.TargetId, ct)) return;
+                var held = await db.DeviceVaultStates.FirstOrDefaultAsync(s => s.DeviceId == delivery.DeviceId && s.ItemId == delivery.TargetId, ct);
+                if (held is null)
+                {
+                    db.DeviceVaultStates.Add(new DeviceVaultState { DeviceId = delivery.DeviceId, ItemId = delivery.TargetId, VersionId = delivery.VersionId });
+                }
+                else if (!lateAck)
+                {
+                    held.VersionId = delivery.VersionId;
+                }
+                else if (held.VersionId != delivery.VersionId)
+                {
+                    // A late ack of a superseded delivery must not move the device back to an older version.
+                    var seqs = await db.VaultVersions.Where(v => v.Id == held.VersionId || v.Id == delivery.VersionId)
+                        .ToDictionaryAsync(v => v.Id, v => v.Seq, ct);
+                    if (!seqs.TryGetValue(held.VersionId, out var heldSeq)
+                        || (seqs.TryGetValue(delivery.VersionId, out var sentSeq) && sentSeq > heldSeq))
+                        held.VersionId = delivery.VersionId;
                 }
                 break;
         }

@@ -335,6 +335,24 @@ namespace EmuSync.Server.Data.Migrations.Postgres
                     b.ToTable("DeviceRoots");
                 });
 
+            modelBuilder.Entity("EmuSync.Server.Data.DeviceVaultState", b =>
+                {
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("VersionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("DeviceId", "ItemId");
+
+                    b.HasIndex("ItemId");
+
+                    b.ToTable("DeviceVaultStates");
+                });
+
             modelBuilder.Entity("EmuSync.Server.Data.InstallRecord", b =>
                 {
                     b.Property<Guid>("DeviceId")
@@ -816,6 +834,21 @@ namespace EmuSync.Server.Data.Migrations.Postgres
                     b.HasOne("EmuSync.Server.Data.Device", null)
                         .WithMany()
                         .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EmuSync.Server.Data.DeviceVaultState", b =>
+                {
+                    b.HasOne("EmuSync.Server.Data.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("EmuSync.Server.Data.VaultItem", null)
+                        .WithMany()
+                        .HasForeignKey("ItemId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
