@@ -1,4 +1,6 @@
+using System.Text.Json;
 using EmuSync.Protocol;
+using EmuSync.Server.Configs;
 using EmuSync.Server.Data;
 using EmuSync.Server.Events;
 using EmuSync.Server.Http;
@@ -15,8 +17,13 @@ namespace EmuSync.Server.Deliveries;
 /// interleaves with an upload's read-decide-write.
 /// </summary>
 public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomainEvents events, IEventHub hub,
-    TimeProvider time, ILogger<DeliveryService> logger, IActivityLog activity)
+    TimeProvider time, ILogger<DeliveryService> logger, IActivityLog activity, ConfigTransform configs)
 {
+    private static readonly JsonSerializerOptions NotesJson = new(JsonSerializerDefaults.Web);
+
+    /// <summary>A Config delivery's <see cref="DeliveryRow.NotesJson"/>: the version expanded for the target device.</summary>
+    public sealed record ConfigNotes(List<ManifestEntry> Manifest, List<string> MissingLocalKeys);
+
     /// <summary>After a Failed ack, the same device+target gets no new delivery for this long.</summary>
     public static readonly TimeSpan FailedBackoff = TimeSpan.FromMinutes(10);
 
@@ -36,6 +43,15 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
         Notify(notify);
     }
 
+    /// <summary>Reconciles every Config delivery of the user (bundle head, conflict or membership changed).</summary>
+    public async Task RecomputeConfigsAsync(Guid userId, CancellationToken ct)
+    {
+        List<Guid> notify;
+        using (await locks.Acquire(userId, ct))
+            notify = await ReconcileConfigsAsync(userId, null, ct);
+        Notify(notify);
+    }
+
     public async Task RecomputeForDeviceAsync(Guid deviceId, CancellationToken ct)
     {
         var userId = await db.Devices.Where(d => d.Id == deviceId).Select(d => (Guid?)d.UserId).FirstOrDefaultAsync(ct);
@@ -51,13 +67,16 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
     public async Task<DeliveryList> ListAsync(Guid userId, Guid deviceId, CancellationToken ct)
     {
         using (await locks.Acquire(userId, ct))
-            await ReconcileAsync(userId, null, deviceId, ct); // no push: the device is reading the list right now
+        {
+            // No push: the device is reading the list right now.
+            await ReconcileAsync(userId, null, deviceId, ct);
+            await ReconcileConfigsAsync(userId, deviceId, ct);
+        }
 
         var pending = await db.Deliveries.AsNoTracking()
             .Where(d => d.DeviceId == deviceId && d.AckedUtc == null)
             .OrderBy(d => d.CreatedUtc).ThenBy(d => d.Id)
             .ToListAsync(ct);
-        // Task 11 adds Config (and vault) deliveries; until then only saves/states are produced.
         var saveTargets = pending.Where(d => d.Kind == DeliveryKind.Save).Select(d => d.TargetId).Distinct().ToList();
         var versionIds = pending.Where(d => d.Kind == DeliveryKind.Save).Select(d => d.VersionId).Distinct().ToList();
         var items = await db.SaveItems.AsNoTracking().Where(i => saveTargets.Contains(i.Id) && i.UserId == userId)
@@ -67,18 +86,33 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
         var known = await db.DeviceItemStates.AsNoTracking()
             .Where(s => s.DeviceId == deviceId && saveTargets.Contains(s.ItemId))
             .ToDictionaryAsync(s => s.ItemId, s => s.KnownVersionId, ct);
+        var configTargets = pending.Where(d => d.Kind == DeliveryKind.Config).Select(d => d.TargetId).Distinct().ToList();
+        var bundles = await db.ConfigBundles.AsNoTracking().Where(b => configTargets.Contains(b.Id) && b.UserId == userId)
+            .ToDictionaryAsync(b => b.Id, ct);
+        var applied = await db.DeviceConfigs.AsNoTracking().Where(c => c.DeviceId == deviceId && configTargets.Contains(c.BundleId))
+            .ToDictionaryAsync(c => c.BundleId, c => c.AppliedVersionId, ct);
 
         var result = new List<DeliveryDto>();
         foreach (var d in pending)
         {
-            if (d.Kind != DeliveryKind.Save
-                || !items.TryGetValue(d.TargetId, out var item)
-                || !versions.TryGetValue(d.VersionId, out var version))
-                continue;
-            result.Add(new DeliveryDto(d.Id, d.Kind, d.TargetId, d.VersionId,
-                known.TryGetValue(item.Id, out var k) ? k : null,
-                item.EmulatorId, item.GameKey, item.Kind, item.Slot, version.Core,
-                Manifests.FromJson(version.ManifestJson), null));
+            if (d.Kind == DeliveryKind.Save
+                && items.TryGetValue(d.TargetId, out var item)
+                && versions.TryGetValue(d.VersionId, out var version))
+            {
+                result.Add(new DeliveryDto(d.Id, d.Kind, d.TargetId, d.VersionId,
+                    known.TryGetValue(item.Id, out var k) ? k : null,
+                    item.EmulatorId, item.GameKey, item.Kind, item.Slot, version.Core,
+                    Manifests.FromJson(version.ManifestJson), null));
+            }
+            else if (d.Kind == DeliveryKind.Config
+                     && bundles.TryGetValue(d.TargetId, out var bundle)
+                     && d.NotesJson is not null
+                     && JsonSerializer.Deserialize<ConfigNotes>(d.NotesJson, NotesJson) is { } notes)
+            {
+                result.Add(new DeliveryDto(d.Id, d.Kind, d.TargetId, d.VersionId,
+                    applied.TryGetValue(bundle.Id, out var a) ? a : null,
+                    bundle.EmulatorId, null, null, null, null, notes.Manifest, notes.MissingLocalKeys));
+            }
         }
         return new DeliveryList(result);
     }
@@ -123,9 +157,17 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
                     .Select(i => new { i.EmulatorId, i.GameKey, i.DisplayName }).FirstOrDefaultAsync(ct);
                 if (item is not null) (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey);
             }
+            else if (delivery.Kind == DeliveryKind.Config)
+            {
+                emulatorId = await db.ConfigBundles.AsNoTracking().Where(b => b.Id == delivery.TargetId)
+                    .Select(b => b.EmulatorId).FirstOrDefaultAsync(ct);
+                if (emulatorId is not null) label = $"the {emulatorId} config";
+            }
             label ??= delivery.Kind == DeliveryKind.Save ? "a save" : delivery.Kind.ToString().ToLowerInvariant();
             if (delivery.Kind == DeliveryKind.Save)
                 notify = await ReconcileAsync(userId, delivery.TargetId, null, ct);
+            else if (delivery.Kind == DeliveryKind.Config)
+                notify = await ReconcileConfigsAsync(userId, null, ct);
             notify.Remove(deviceId); // the acking device is talking to us; never push it from its own ack
         }
         Notify(notify);
@@ -176,8 +218,24 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
                 }
                 break;
             case DeliveryKind.Config:
+                // Only while the device still follows that bundle (after leaving a group it has its own copy).
                 var config = await db.DeviceConfigs.FirstOrDefaultAsync(c => c.DeviceId == delivery.DeviceId && c.BundleId == delivery.TargetId, ct);
-                if (config is not null) config.AppliedVersionId = delivery.VersionId;
+                if (config is null) return;
+                if (!lateAck || config.AppliedVersionId is null)
+                {
+                    config.AppliedVersionId = delivery.VersionId;
+                }
+                else if (config.AppliedVersionId != delivery.VersionId)
+                {
+                    // Never backwards on a late ack: compare Seq within the bundle; an applied version from another
+                    // bundle (the device's solo history before joining) is older than anything in this one.
+                    var seqs = await db.ConfigVersions
+                        .Where(v => v.BundleId == delivery.TargetId && (v.Id == config.AppliedVersionId || v.Id == delivery.VersionId))
+                        .ToDictionaryAsync(v => v.Id, v => v.Seq, ct);
+                    if (!seqs.TryGetValue(config.AppliedVersionId.Value, out var appliedSeq)
+                        || (seqs.TryGetValue(delivery.VersionId, out var deliveredSeq) && deliveredSeq > appliedSeq))
+                        config.AppliedVersionId = delivery.VersionId;
+                }
                 break;
         }
     }
@@ -209,20 +267,8 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
         if (deviceId is Guid deviceFilter) scope = scope.Where(d => d.DeviceId == deviceFilter);
 
         var now = time.GetUtcNow();
-        var cutoff = now - (FailedBackoff > SkippedBackoff ? FailedBackoff : SkippedBackoff);
         var pending = await scope.Where(d => d.AckedUtc == null).OrderBy(d => d.CreatedUtc).ThenBy(d => d.Id).ToListAsync(ct);
-        // Backoff looks at the device's own latest real ack; server-side supersedes don't count.
-        var recentAcks = await scope.Where(d => !d.Superseded && d.AckedUtc != null && d.AckedUtc > cutoff)
-            .Select(d => new { d.DeviceId, d.TargetId, AckedUtc = d.AckedUtc!.Value, d.Result }).ToListAsync(ct);
-        var backingOff = recentAcks
-            .GroupBy(a => (a.DeviceId, a.TargetId))
-            .Where(g => g.MaxBy(a => a.AckedUtc) is { } last && last.Result switch
-            {
-                DeliveryResult.Failed => last.AckedUtc > now - FailedBackoff,
-                DeliveryResult.SkippedLocalChanged => last.AckedUtc > now - SkippedBackoff,
-                _ => false,
-            })
-            .Select(g => g.Key).ToHashSet();
+        var backingOff = await BackingOffAsync(scope, now, ct);
 
         var covered = new HashSet<(Guid, Guid)>();
         foreach (var d in pending)
@@ -249,6 +295,94 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
 
         await db.SaveChangesAsync(ct);
         return notify.Distinct().ToList();
+    }
+
+    /// <summary>Device+target pairs whose latest real ack (server-side supersedes don't count) was a recent Failed
+    /// or SkippedLocalChanged.</summary>
+    private static async Task<HashSet<(Guid DeviceId, Guid TargetId)>> BackingOffAsync(IQueryable<DeliveryRow> scope,
+        DateTimeOffset now, CancellationToken ct)
+    {
+        var cutoff = now - (FailedBackoff > SkippedBackoff ? FailedBackoff : SkippedBackoff);
+        var recentAcks = await scope.Where(d => !d.Superseded && d.AckedUtc != null && d.AckedUtc > cutoff)
+            .Select(d => new { d.DeviceId, d.TargetId, AckedUtc = d.AckedUtc!.Value, d.Result }).ToListAsync(ct);
+        return recentAcks
+            .GroupBy(a => (a.DeviceId, a.TargetId))
+            .Where(g => g.MaxBy(a => a.AckedUtc) is { } last && last.Result switch
+            {
+                DeliveryResult.Failed => last.AckedUtc > now - FailedBackoff,
+                DeliveryResult.SkippedLocalChanged => last.AckedUtc > now - SkippedBackoff,
+                _ => false,
+            })
+            .Select(g => g.Key).ToHashSet();
+    }
+
+    /// <summary>
+    /// Reconciles Config deliveries of the user (optionally one device). A device gets its bundle's head when it is
+    /// not revoked, the bundle has a head and no open conflict, and the device has not applied the head. The files
+    /// are expanded for the device when the delivery is created (stored in NotesJson). Caller holds the user lock.
+    /// Returns the devices that got a new delivery.
+    /// </summary>
+    private async Task<List<Guid>> ReconcileConfigsAsync(Guid userId, Guid? deviceId, CancellationToken ct)
+    {
+        var devices = db.Devices.Where(d => d.UserId == userId && d.RevokedUtc == null);
+        if (deviceId is Guid onlyDevice) devices = devices.Where(d => d.Id == onlyDevice);
+        var wanted = await (
+                from c in db.DeviceConfigs
+                join d in devices on c.DeviceId equals d.Id
+                join b in db.ConfigBundles on c.BundleId equals b.Id
+                where b.UserId == userId && b.HeadVersionId != null && !b.OpenConflict
+                      && (c.AppliedVersionId == null || c.AppliedVersionId != b.HeadVersionId)
+                select new { c.DeviceId, BundleId = b.Id, Head = b.HeadVersionId!.Value, b.EmulatorId })
+            .AsNoTracking().ToListAsync(ct);
+        var wantedHead = wanted.ToDictionary(w => (w.DeviceId, w.BundleId));
+
+        // Scoped by the user's devices (not bundles), so deliveries of a deleted group bundle are closed too.
+        var userDevices = db.Devices.Where(d => d.UserId == userId).Select(d => d.Id);
+        var scope = db.Deliveries.Where(d => d.Kind == DeliveryKind.Config && userDevices.Contains(d.DeviceId));
+        if (deviceId is Guid deviceFilter) scope = scope.Where(d => d.DeviceId == deviceFilter);
+
+        var now = time.GetUtcNow();
+        var pending = await scope.AsNoTracking().Where(d => d.AckedUtc == null)
+            .OrderBy(d => d.CreatedUtc).ThenBy(d => d.Id).ToListAsync(ct);
+        var backingOff = await BackingOffAsync(scope, now, ct);
+
+        var covered = new HashSet<(Guid, Guid)>();
+        var stale = new List<Guid>();
+        foreach (var d in pending)
+        {
+            var key = (d.DeviceId, d.TargetId);
+            if (wantedHead.TryGetValue(key, out var w) && d.VersionId == w.Head && covered.Add(key)) continue;
+            stale.Add(d.Id);
+        }
+
+        // Expand before any tracked change: storing expanded blobs saves.
+        var created = new List<DeliveryRow>();
+        foreach (var w in wanted)
+        {
+            if (covered.Contains((w.DeviceId, w.BundleId)) || backingOff.Contains((w.DeviceId, w.BundleId))) continue;
+            var manifestJson = await db.ConfigVersions.AsNoTracking().Where(v => v.Id == w.Head).Select(v => v.ManifestJson).SingleAsync(ct);
+            var (manifest, missing) = await configs.ExpandAsync(userId, w.DeviceId, w.EmulatorId, Manifests.FromJson(manifestJson), ct);
+            created.Add(new DeliveryRow
+            {
+                Id = Guid.NewGuid(), DeviceId = w.DeviceId, Kind = DeliveryKind.Config, TargetId = w.BundleId, VersionId = w.Head,
+                CreatedUtc = now, NotesJson = JsonSerializer.Serialize(new ConfigNotes(manifest, missing), NotesJson),
+            });
+        }
+
+        if (stale.Count > 0)
+        {
+            // Superseded, held by a conflict, membership changed, revoked, or already applied: soft-close, so a late
+            // ack of it can still be honoured.
+            foreach (var d in await db.Deliveries.Where(d => stale.Contains(d.Id)).ToListAsync(ct))
+            {
+                d.Superseded = true;
+                d.AckedUtc = now;
+                d.Result = null;
+            }
+        }
+        db.Deliveries.AddRange(created);
+        await db.SaveChangesAsync(ct);
+        return created.Select(d => d.DeviceId).Distinct().ToList();
     }
 
     private void Notify(List<Guid> devices)

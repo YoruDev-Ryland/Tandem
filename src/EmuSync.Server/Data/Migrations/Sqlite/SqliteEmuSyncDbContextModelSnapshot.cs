@@ -128,6 +128,9 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                     b.Property<long>("ReceivedUtc")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("Resolved")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("Seq")
                         .HasColumnType("INTEGER");
 

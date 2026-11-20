@@ -124,6 +124,8 @@ public class ConfigVersion
     public long TotalSize { get; set; }
     public bool Pinned { get; set; }
     public ConflictReason? ConflictReason { get; set; }
+    /// <summary>Set once a conflict version has been settled. Open conflicts: ConflictReason != null and !Resolved.</summary>
+    public bool Resolved { get; set; }
 }
 
 public class SyncGroup

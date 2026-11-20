@@ -49,6 +49,10 @@ public sealed class ActivityLog(EmuSyncDbContext db, IEventHub hub, TimeProvider
                 case "conflict_opened" or "conflict_resolved":
                     hub.NotifyUser(userId, "conflicts");
                     hub.NotifyUser(userId, "saves");
+                    hub.NotifyUser(userId, "configs");
+                    break;
+                case "config_uploaded" or "group_changed" or "config_applied":
+                    hub.NotifyUser(userId, "configs");
                     break;
                 case "device_paired" or "device_revoked":
                     hub.NotifyUser(userId, "devices");

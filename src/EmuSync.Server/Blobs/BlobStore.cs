@@ -133,6 +133,21 @@ public sealed class BlobService(EmuSyncDbContext db, TimeProvider time)
             throw new ApiException(400, "missing_blobs", "Missing blobs: " + string.Join(",", missing));
     }
 
+    /// <summary>A manifest's sizes must match the stored blobs, or the same content would hash differently.</summary>
+    public async Task RequireSizesAsync(Guid userId, IReadOnlyList<EmuSync.Protocol.ManifestEntry> manifest, CancellationToken ct = default)
+    {
+        var hashes = manifest.Select(e => e.Hash).Distinct().ToList();
+        var sizes = await db.UserBlobs.Where(b => b.UserId == userId && hashes.Contains(b.Hash))
+            .ToDictionaryAsync(b => b.Hash, b => b.Size, ct);
+        foreach (var e in manifest)
+        {
+            if (!sizes.TryGetValue(e.Hash, out var size))
+                throw new ApiException(400, "missing_blobs", "Missing blobs: " + e.Hash);
+            if (size != e.Size)
+                throw new ApiException(400, "bad_manifest", $"Size of '{e.Path}' does not match its blob.");
+        }
+    }
+
     public Task<bool> HasAsync(Guid userId, string hash, CancellationToken ct = default) =>
         db.UserBlobs.AnyAsync(b => b.UserId == userId && b.Hash == hash, ct);
 }

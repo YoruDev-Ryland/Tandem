@@ -1,6 +1,7 @@
 using EmuSync.Server.Accounts;
 using EmuSync.Server.Auth;
 using EmuSync.Server.Blobs;
+using EmuSync.Server.Configs;
 using EmuSync.Server.Data;
 using EmuSync.Server.Deliveries;
 using EmuSync.Server.Devices;
@@ -34,6 +35,8 @@ public static class ServerSetup
         builder.Services.AddScoped<SaveService>();
         builder.Services.AddSingleton<IEventHub, EventHub>();
         builder.Services.AddScoped<IActivityLog, ActivityLog>();
+        builder.Services.AddScoped<ConfigTransform>();
+        builder.Services.AddScoped<ConfigService>();
         builder.Services.AddScoped<DeliveryService>();
         builder.Services.AddHostedService<DeliveryHandlers>();
     }
@@ -57,6 +60,7 @@ public static class ServerSetup
         app.MapPairingEndpoints();
         app.MapBlobEndpoints();
         app.MapSaveEndpoints();
+        app.MapConfigEndpoints();
         app.MapDeliveryEndpoints();
         app.MapEventEndpoints();
     }

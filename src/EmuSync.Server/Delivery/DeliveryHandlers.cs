@@ -13,6 +13,7 @@ public sealed class DeliveryHandlers(IDomainEvents events, IServiceScopeFactory 
         events.Subscribe<SaveHeadChanged>((e, ct) => Run(svc => svc.RecomputeForItemAsync(e.ItemId, ct)));
         // With an open conflict the recompute soft-closes (supersedes) every un-acked delivery of the item.
         events.Subscribe<ConflictOpened>((e, ct) => Run(svc => svc.RecomputeForItemAsync(e.ItemId, ct)));
+        events.Subscribe<ConfigsChanged>((e, ct) => Run(svc => svc.RecomputeConfigsAsync(e.UserId, ct)));
         events.Subscribe<InstallsChanged>((e, ct) => Run(svc => svc.RecomputeForDeviceAsync(e.DeviceId, ct)));
         return Task.CompletedTask;
     }

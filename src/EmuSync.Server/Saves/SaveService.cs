@@ -27,7 +27,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         ValidateIdentity(request);
         var manifest = Manifests.Normalize(request.Manifest);
         await blobs.RequireAllAsync(userId, manifest.Select(e => e.Hash), ct);
-        await RequireSizesAsync(userId, manifest, ct);
+        await blobs.RequireSizesAsync(userId, manifest, ct);
         var manifestHash = Manifests.Hash(manifest);
         var slot = request.Slot ?? "";
         var core = request.Core ?? "";
@@ -315,21 +315,6 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             throw new ApiException(400, "bad_request", $"Core must be at most {MaxCore} characters.");
         if (r.DisplayName is { Length: > MaxDisplayName })
             throw new ApiException(400, "bad_request", $"DisplayName must be at most {MaxDisplayName} characters.");
-    }
-
-    /// <summary>A manifest's sizes must match the stored blobs, or the same content would hash differently.</summary>
-    private async Task RequireSizesAsync(Guid userId, List<ManifestEntry> manifest, CancellationToken ct)
-    {
-        var hashes = manifest.Select(e => e.Hash).Distinct().ToList();
-        var sizes = await db.UserBlobs.Where(b => b.UserId == userId && hashes.Contains(b.Hash))
-            .ToDictionaryAsync(b => b.Hash, b => b.Size, ct);
-        foreach (var e in manifest)
-        {
-            if (!sizes.TryGetValue(e.Hash, out var size))
-                throw new ApiException(400, "missing_blobs", "Missing blobs: " + e.Hash);
-            if (size != e.Size)
-                throw new ApiException(400, "bad_manifest", $"Size of '{e.Path}' does not match its blob.");
-        }
     }
 
     private async Task<Guid> FindOrCreateItemAsync(Guid userId, string emulatorId, ItemKind kind, string gameKey,
