@@ -189,16 +189,16 @@
   {:else if items.length === 0}
     <Empty text="No activity matches these filters." />
   {:else}
-    <List {rows} columns="140px 160px minmax(0,1fr)" header={["Time", "Device", "What happened"]} bind:index onOpen={open} minWidth="720px"
+    <List {rows} columns="140px 160px minmax(0,1fr)" header={["Time", "Device", "What happened"]} bind:index onOpen={open} minWidth="0px" phoneColumns="84px minmax(0,1fr)" phoneHide={[1]}
       key={(r) => (r.kind === "item" ? r.item.id : "older")} disabled={(r) => r.kind === "older" && loadingOlder}>
       {#snippet row(r: Row)}
         {#if r.kind === "item"}
           {@const bad = r.item.kind.includes("conflict")}
           <span class="mono ink3">{time(r.item.utc)}</span>
-          <span class="ink2 ellipsis">{r.item.deviceName ?? "Server"}</span>
+          <span class="ink2 ellipsis sm-hide">{r.item.deviceName ?? "Server"}</span>
           <span class="ellipsis" class:fault={bad} title={r.item.message}>{r.item.message}</span>
         {:else}
-          <span></span><span></span>
+          <span></span><span class="sm-hide"></span>
           <span class={loadingOlder ? "ink3" : "strong"}>{loadingOlder ? "Loading…" : "Load older"}</span>
         {/if}
       {/snippet}

@@ -244,4 +244,41 @@ public class EventsTests
         Assert.Equal(6, got.Count(e => e.Type == "changed"));
         Assert.Equal(got.Count, got.Distinct().Count());
     }
+
+    private static async Task<DateTimeOffset?> LastSeen(HttpClient asDevice, Guid id)
+    {
+        var all = await (await asDevice.GetAsync("/v1/devices")).ReadAsync<List<DeviceSummary>>();
+        return all.Single(d => d.Id == id).LastSeenUtc;
+    }
+
+    [Fact]
+    public async Task Connected_device_stays_seen_while_its_stream_is_open_and_stops_after_disconnect()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("e3@example.com", deviceName: "Thor");
+        var (b, bKey) = await factory.PairSecondDevice(a, "Pocket");
+
+        using var cts = Timeout();
+        var sse = await Open(b, cts.Token);
+        await sse.Next(cts.Token); // connected
+
+        // No other requests from B: only the stream heartbeat can keep it seen.
+        for (var i = 0; i < 8; i++) // 4 minutes in 30 s steps
+        {
+            factory.Time.Advance(TimeSpan.FromSeconds(30));
+            await Task.Delay(30);
+        }
+        while (factory.Time.GetUtcNow() - (await LastSeen(a, bKey.DeviceId)) > TimeSpan.FromMinutes(2))
+        {
+            cts.Token.ThrowIfCancellationRequested();
+            await Task.Delay(20);
+        }
+
+        await sse.DisposeAsync();
+        await Task.Delay(100);
+        var after = await LastSeen(a, bKey.DeviceId);
+        factory.Time.Advance(TimeSpan.FromMinutes(5));
+        await Task.Delay(100);
+        Assert.Equal(after, await LastSeen(a, bKey.DeviceId));
+    }
 }

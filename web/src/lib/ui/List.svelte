@@ -25,6 +25,10 @@
     disabled?: (row: T) => boolean;
     /** Narrowest width the table keeps on a phone before it scrolls sideways. */
     minWidth?: string;
+    /** Phone (640px and narrower): a different column template, with the cells marked `sm-hide` left out. */
+    phoneColumns?: string;
+    /** Header cells (by index) that go with the hidden columns. */
+    phoneHide?: number[];
   }
   let {
     rows,
@@ -39,6 +43,8 @@
     key = (_r: T, i: number) => i,
     disabled = () => false,
     minWidth = "1040px",
+    phoneColumns,
+    phoneHide = [],
   }: Props = $props();
 
   const c = cursor(() => rows.length);
@@ -121,17 +127,17 @@
   }
 </script>
 
-<div class="list" style:--list-min={minWidth} bind:this={list}>
+<div class="list" style:--list-min={minWidth} style:--cols={columns} style:--cols-phone={phoneColumns ?? columns} bind:this={list}>
   {#if header}
-    <div class="head {size}" style:grid-template-columns={columns} aria-hidden="true">
-      {#each header as h, i (i)}<span class:end={headerEnd.includes(i)}>{h}</span>{/each}
+    <div class="head {size}" aria-hidden="true">
+      {#each header as h, i (i)}<span class:end={headerEnd.includes(i)} class:sm-hide={phoneHide.includes(i)}>{h}</span>{/each}
     </div>
   {/if}
   {#each rows as r, i (key(r, i))}
     <Row
       focused={active && i === c.index}
       disabled={disabled(r)}
-      {columns}
+      columns="var(--cols)"
       {size}
       onpointermove={(e) => pointerMove(e, i)}
       onfocus={() => put(i)}
@@ -144,6 +150,7 @@
 
 <style>
   .head {
+    grid-template-columns: var(--cols);
     display: grid;
     align-items: end;
     font: 600 12px "Barlow", system-ui, sans-serif;
@@ -172,6 +179,13 @@
   }
   /* On a phone the table keeps its columns and scrolls sideways inside its own box. */
   @media (max-width: 640px) {
+    .list :global(.sm-hide) {
+      display: none;
+    }
+    .head,
+    .list :global(.row) {
+      grid-template-columns: var(--cols-phone) !important;
+    }
     .list {
       overflow-x: auto;
     }

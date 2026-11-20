@@ -76,4 +76,12 @@
   a[aria-current="page"] {
     color: var(--ink);
   }
+  /* On a phone the page tabs wrap to a second line: nothing is hidden behind a scroll. */
+  @media (max-width: 640px) {
+    .level1 {
+      flex-wrap: wrap;
+      overflow: visible;
+      gap: 6px 22px;
+    }
+  }
 </style>

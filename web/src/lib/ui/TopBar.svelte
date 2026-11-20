@@ -88,6 +88,9 @@
     }
   }
   @media (max-width: 640px) {
+    header :global(.tabs.level1) {
+      flex: 1 1 100%;
+    }
     header {
       padding-inline: 16px;
     }

@@ -71,15 +71,15 @@
   {:else if !games.data}
     <p class="loading" aria-busy="true">— — —</p>
   {:else}
-    <List {rows} columns={COLUMNS} header={HEADER} headerEnd={[5]} bind:index onOpen={open} key={(g) => g.emulatorId + "/" + g.gameKey}>
+    <List {rows} columns={COLUMNS} header={HEADER} headerEnd={[5]} phoneColumns="minmax(0,1fr) 96px 72px" phoneHide={[0, 2, 4]} minWidth="0px" bind:index onOpen={open} key={(g) => g.emulatorId + "/" + g.gameKey}>
       {#snippet row(g: GameRow)}
         {@const bad = g.openConflict}
-        <span class="sys ink3">{systemLabel(g.emulatorId, g.gameKey)}</span>
+        <span class="sys ink3 sm-hide">{systemLabel(g.emulatorId, g.gameKey)}</span>
         <span class="name ellipsis" class:fault={bad} title={title(g)}>{title(g)}</span>
-        <span class="ink2">{emulatorName(g.emulatorId)}</span>
+        <span class="ink2 sm-hide">{emulatorName(g.emulatorId)}</span>
         {#if bad}
           <span class="strong fault">Two saves</span>
-          <span class="fault">{differing(g)}</span>
+          <span class="fault sm-hide">{differing(g)}</span>
           <span class="end fault">choose</span>
         {:else}
           {#if g.newestOnDeviceName}
@@ -87,7 +87,7 @@
           {:else}
             <span class="ink3">—</span>
           {/if}
-          <span class="others">
+          <span class="others sm-hide">
             {#each otherDevices(g) as d, i (d.deviceId)}
               {@const c = deviceStateCopy(d, g.emulatorId)}{#if i > 0}<span class="ink2">;&nbsp;</span>{/if}<span class={c.tone || "ink2"}>{c.text}</span>
             {/each}

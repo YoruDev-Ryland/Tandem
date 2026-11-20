@@ -222,6 +222,9 @@
               columns={COLUMNS}
               header={HEADER}
               size="detail"
+              minWidth="0px"
+              phoneColumns="64px minmax(0,1fr) 84px"
+              phoneHide={[1, 3]}
               bind:index
               onOpen={activate}
               key={(l) => (l.kind === "slot" ? "slot/" + l.item.itemId : l.item.itemId + "/" + l.v.id)}
@@ -230,15 +233,15 @@
                 {#if l.kind === "slot"}
                   {@const h = head(l.item)}
                   <span class="name">Slot {l.item.slot}</span>
-                  <span>{h?.deviceName ?? ""}</span>
+                  <span class="sm-hide">{h?.deviceName ?? ""}</span>
                   <span class="ink2">{h ? formatWhen(h.receivedUtc) : ""}</span>
-                  <span class="mono ink2">{l.item.versions.length} {l.item.versions.length === 1 ? "version" : "versions"}</span>
+                  <span class="mono ink2 sm-hide">{l.item.versions.length} {l.item.versions.length === 1 ? "version" : "versions"}</span>
                   <span class="end ink3">{open[l.item.itemId] ? "hide" : "show"}</span>
                 {:else}
                   <span class="name" class:nested={l.item.kind === "State"}>{label(l.v)}</span>
-                  <span>{l.v.deviceName ?? ""}</span>
+                  <span class="sm-hide">{l.v.deviceName ?? ""}</span>
                   <span class="ink2">{formatWhen(l.v.receivedUtc)}</span>
-                  <span class="mono ink2">{formatSize(l.v.totalSize)}</span>
+                  <span class="mono ink2 sm-hide">{formatSize(l.v.totalSize)}</span>
                   <span class="end ink2">{notes(l.v)}{#if l.v.conflictReason === "FirstSync"}<span class="ink3">{notes(l.v) ? ", " : ""}first sync</span>{/if}</span>
                 {/if}
               {/snippet}
