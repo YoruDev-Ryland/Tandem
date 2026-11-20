@@ -97,6 +97,8 @@
   let progress = $state("");
   let upError = $state<unknown>(undefined);
   let upBusy = $state(false);
+  /** Set when the browser can't hash files (crypto.subtle exists only over HTTPS or on localhost). */
+  let insecure = $state(false);
   let filePicker = $state<HTMLInputElement>()!;
   let folderPicker = $state<HTMLInputElement>()!;
 
@@ -107,6 +109,7 @@
     picked = [];
     progress = "";
     upError = undefined;
+    insecure = false;
     uploading = true;
   }
 
@@ -127,6 +130,8 @@
 
   async function upload() {
     if (!canUpload) return;
+    insecure = !globalThis.crypto?.subtle;
+    if (insecure) return;
     upBusy = true;
     upError = undefined;
     const files = picked;
@@ -240,7 +245,9 @@
       {/if}
       {#if replaces}<p class="note">This replaces {replaces.name}. The old version stays in history.</p>{/if}
       {#if progress}<p class="note" aria-live="polite">{progress}</p>{/if}
-      {#if upError}<ErrorLine error={upError} />{/if}
+      {#if insecure}
+        <p class="fault" role="alert">Vault uploads need the web UI over HTTPS (or on this machine as localhost). Saves upload fine either way.</p>
+      {:else if upError}<ErrorLine error={upError} />{/if}
       <div class="actions">
         <Button variant="primary" type="submit" disabled={!canUpload}>Upload</Button>
         <Button onclick={() => (uploading = false)}>Cancel</Button>
@@ -317,6 +324,11 @@
     margin: 14px 0 0;
     color: var(--ink2);
     font-size: 14px;
+  }
+  .fault {
+    margin: 14px 0 0;
+    color: var(--fault);
+    font-size: 15px;
   }
   .devices {
     list-style: none;

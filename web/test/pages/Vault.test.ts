@@ -96,6 +96,38 @@ describe("Vault", () => {
     });
   });
 
+  it("explains in place that a vault upload needs HTTPS when crypto.subtle is missing, and sends nothing", async () => {
+    const calls = serve([bios]);
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    render(Vault);
+    await screen.findByText("PlayStation BIOS");
+    await fireEvent.click(screen.getByRole("button", { name: /Upload from this PC/ }));
+    const dialog = await screen.findByRole("dialog");
+    await fireEvent.change(within(dialog).getByLabelText("Files") as HTMLInputElement, { target: { files: [new File(["abc"], "scph1001.bin")] } });
+    const before = calls.length;
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "Vault uploads need the web UI over HTTPS (or on this machine as localhost). Saves upload fine either way.",
+    );
+    expect(calls.length).toBe(before);
+    expect(within(dialog).queryByText(/Hashing/)).toBeNull();
+  });
+
+  it("moves through the upload dialog with the D-pad, skipping the hidden file inputs and the disabled Upload", async () => {
+    serve([bios]);
+    render(Vault);
+    await screen.findByText("PlayStation BIOS");
+    await fireEvent.click(screen.getByRole("button", { name: /Upload from this PC/ }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByLabelText("Kind")));
+    const order = ["Emulator (optional)", "Name"].map((l) => within(dialog).getByLabelText(l));
+    order.push(...["Choose files", "Choose a folder", "Cancel"].map((n) => within(dialog).getByRole("button", { name: n })));
+    for (const want of order) {
+      dispatch("down");
+      expect(document.activeElement).toBe(want);
+    }
+  });
+
   describe("upload with blobs to send", () => {
     const ABC = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     type Call = { method: string; url: string };
