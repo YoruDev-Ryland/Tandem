@@ -137,7 +137,8 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
             emulatorId = bundle.EmulatorId;
             if (bundle.GroupId is not null && deviceId is null)
                 throw new ApiException(400, "device_required", "Say which device's view of the file this is (?device=).");
-            var device = deviceId ?? bundle.OwnerDeviceId!.Value;
+            var device = deviceId ?? bundle.OwnerDeviceId
+                ?? throw new ApiException(400, "bad_request", "The bundle has no owner device; say which device (?device=).");
             var isMember = bundle.GroupId is null
                 ? bundle.OwnerDeviceId == device
                 : await db.DeviceConfigs.AnyAsync(c => c.BundleId == bundle.Id && c.DeviceId == device, ct);

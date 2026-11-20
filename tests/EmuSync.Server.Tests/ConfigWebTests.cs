@@ -146,6 +146,39 @@ public class ConfigWebTests
     }
 
     [Fact]
+    public void Diff_large_input_falls_back_to_whole_file_hunk()
+    {
+        var old = string.Concat(Enumerable.Range(0, 30000).Select(i => $"old {i}\n"));
+        var @new = string.Concat(Enumerable.Range(0, 30000).Select(i => $"new {i}\n"));
+
+        var hunk = Assert.Single(ConfigDiff.Hunks(old, @new));
+
+        Assert.Equal((1, 1), (hunk.OldStart, hunk.NewStart));
+        Assert.Equal(60000, hunk.Lines.Count);
+        Assert.All(hunk.Lines.Take(30000), l => Assert.Equal('-', l.Op));
+        Assert.All(hunk.Lines.Skip(30000), l => Assert.Equal('+', l.Op));
+    }
+
+    [Fact]
+    public void Diff_memory_is_bounded()
+    {
+        // 10k lines, every 10th line replaced: D = 2000 edits.
+        string Make(bool changed) => string.Concat(Enumerable.Range(0, 10000)
+            .Select(i => (changed && i % 10 == 0 ? $"changed {i}" : $"line {i}") + "\n"));
+        var old = Make(false);
+        var @new = Make(true);
+        GC.Collect();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var hunks = ConfigDiff.Hunks(old, @new);
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 200_000_000, $"allocated {allocated} bytes");
+        Assert.NotEmpty(hunks);
+        Assert.Equal(1000, hunks.SelectMany(h => h.Lines).Count(l => l.Op == '-'));
+    }
+
+    [Fact]
     public async Task Diff_reports_changed_lines_with_context()
     {
         using var f = NewFactory();

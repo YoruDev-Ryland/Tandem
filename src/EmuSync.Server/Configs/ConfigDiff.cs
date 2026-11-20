@@ -17,12 +17,23 @@ public static class ConfigDiff
     /// <summary>Beyond this many edits the exact script is not worth its memory: report the whole file as replaced.</summary>
     private const int MaxEdits = 3000;
 
+    /// <summary>The differing middle (after trimming the common prefix and suffix) may have at most this many lines in total.</summary>
+    private const int MaxLines = 20000;
+
+    /// <summary>Cap on edits * lines, the work and (squared edits) memory of the search.</summary>
+    private const long MaxWork = 50_000_000;
+
     public static List<DiffHunk> Hunks(string oldText, string newText)
     {
         var a = Lines(oldText);
         var b = Lines(newText);
-        return Group(Script(a, b));
+        return Script(a, b) is { } script ? Group(script) : WholeFile(a, b);
     }
+
+    /// <summary>One hunk replacing the whole file; used when an exact diff would cost too much.</summary>
+    private static List<DiffHunk> WholeFile(string[] a, string[] b) =>
+        a.Length + b.Length == 0 ? [] :
+        [new DiffHunk(1, 1, a.Select(l => new DiffLine('-', l)).Concat(b.Select(l => new DiffLine('+', l))).ToList())];
 
     public static string[] Lines(string text)
     {
@@ -34,10 +45,10 @@ public static class ConfigDiff
         return lines;
     }
 
-    private readonly record struct Edit(char Op, string Text);
+    internal readonly record struct Edit(char Op, string Text);
 
-    /// <summary>The full edit script: every line of both files, as ' ', '-' or '+'.</summary>
-    private static List<Edit> Script(string[] a, string[] b)
+    /// <summary>The full edit script: every line of both files, as ' ', '-' or '+'. Null when the input is too big.</summary>
+    private static List<Edit>? Script(string[] a, string[] b)
     {
         var start = 0;
         while (start < a.Length && start < b.Length && a[start] == b[start]) start++;
@@ -45,14 +56,19 @@ public static class ConfigDiff
         var endB = b.Length;
         while (endA > start && endB > start && a[endA - 1] == b[endB - 1]) { endA--; endB--; }
 
+        if ((endA - start) + (endB - start) > MaxLines) return null;
+        var middle = Myers(a[start..endA], b[start..endB]);
+        if (middle is null) return null;
         var script = new List<Edit>(a.Length + b.Length);
         for (var i = 0; i < start; i++) script.Add(new Edit(' ', a[i]));
-        script.AddRange(Myers(a[start..endA], b[start..endB]));
+        script.AddRange(middle);
         for (var i = endA; i < a.Length; i++) script.Add(new Edit(' ', a[i]));
         return script;
     }
 
-    private static List<Edit> Myers(string[] a, string[] b)
+    /// <summary>Myers O(ND). Keeps only the live slice (k = -d..d) of each round, so memory is about D^2 ints.
+    /// Null when the work estimate or edit count is over the caps.</summary>
+    internal static List<Edit>? Myers(string[] a, string[] b)
     {
         int n = a.Length, m = b.Length;
         if (n == 0) return b.Select(l => new Edit('+', l)).ToList();
@@ -61,12 +77,11 @@ public static class ConfigDiff
         var max = n + m;
         var offset = max + 1;
         var v = new int[2 * max + 3];
-        var trace = new List<int[]>();
+        var trace = new List<int[]>(); // trace[d][k + d] = furthest x on diagonal k after round d
         var found = false;
         for (var d = 0; d <= max && !found; d++)
         {
-            if (d > MaxEdits) return a.Select(l => new Edit('-', l)).Concat(b.Select(l => new Edit('+', l))).ToList();
-            trace.Add((int[])v.Clone());
+            if (d > MaxEdits || (long)d * max > MaxWork) return null;
             for (var k = -d; k <= d; k += 2)
             {
                 int x = k == -d || (k != d && v[offset + k - 1] < v[offset + k + 1]) ? v[offset + k + 1] : v[offset + k - 1] + 1;
@@ -75,27 +90,27 @@ public static class ConfigDiff
                 v[offset + k] = x;
                 if (x >= n && y >= m) { found = true; break; }
             }
+            trace.Add(v[(offset - d)..(offset + d + 1)]);
         }
 
-        // Walk back through the saved frontiers.
+        // Walk back: round d was computed from round d-1's slice.
         var edits = new List<Edit>();
         int px = n, py = m;
-        for (var d = trace.Count - 1; d >= 0; d--)
+        for (var d = trace.Count - 1; d >= 1; d--)
         {
-            var frontier = trace[d];
+            var f = trace[d - 1];
+            int At(int k) => f[k + d - 1];
             var k = px - py;
-            int prevK = k == -d || (k != d && frontier[offset + k - 1] < frontier[offset + k + 1]) ? k + 1 : k - 1;
-            var prevX = frontier[offset + prevK];
+            int prevK = k == -d || (k != d && At(k - 1) < At(k + 1)) ? k + 1 : k - 1;
+            var prevX = At(prevK);
             var prevY = prevX - prevK;
             while (px > prevX && py > prevY) { edits.Add(new Edit(' ', a[px - 1])); px--; py--; }
-            if (d > 0)
-            {
-                if (px == prevX) edits.Add(new Edit('+', b[py - 1]));
-                else edits.Add(new Edit('-', a[px - 1]));
-            }
+            if (px == prevX) edits.Add(new Edit('+', b[py - 1]));
+            else edits.Add(new Edit('-', a[px - 1]));
             px = prevX;
             py = prevY;
         }
+        while (px > 0 && py > 0) { edits.Add(new Edit(' ', a[px - 1])); px--; py--; }
         edits.Reverse();
         return edits;
     }
