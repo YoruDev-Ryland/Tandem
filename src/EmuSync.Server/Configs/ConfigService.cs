@@ -424,7 +424,17 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
                         throw new ApiException(400, "same_device", "The source is the target's own config.");
                     (group, groupBundle) = await CreateGroupCoreAsync(userId, emulatorId, $"{emulatorId} group", seed, ct);
                 }
-                changed = await JoinCoreAsync(userId, groupBundle, targetId, ct) || ownerGroup is null;
+                // The group must carry the chosen version: when its head differs, that version's files become a new head.
+                var groupHead = await db.ConfigVersions.FindAsync([groupBundle.HeadVersionId!.Value], ct)
+                    ?? throw new InvalidOperationException("Group head version missing."); // FindAsync sees a just-created, unsaved head
+                var headChanged = groupHead.ManifestHash != source.Version.ManifestHash;
+                if (headChanged)
+                {
+                    var copy = await NewVersionAsync(groupBundle.Id, groupHead.Id, null, ConfigSource.Copy, source.Version.ManifestJson,
+                        source.Version.ManifestHash, source.Version.TotalSize, ct);
+                    groupBundle.HeadVersionId = copy.Id;
+                }
+                changed = await JoinCoreAsync(userId, groupBundle, targetId, ct) || ownerGroup is null || headChanged;
                 response = new ApplyConfigResponse(groupBundle.Id, groupBundle.HeadVersionId!.Value, group.Id);
             }
             else
@@ -521,7 +531,9 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
     private async Task<ConfigVersion> NewVersionAsync(Guid bundleId, Guid? baseId, Guid? deviceId, ConfigSource source,
         string manifestJson, string manifestHash, long totalSize, CancellationToken ct)
     {
-        var seq = (await db.ConfigVersions.Where(v => v.BundleId == bundleId).MaxAsync(v => (int?)v.Seq, ct) ?? 0) + 1;
+        // Versions added earlier in this unit of work are not in the database yet.
+        var pending = db.ConfigVersions.Local.Where(v => v.BundleId == bundleId).Select(v => (int?)v.Seq).Max();
+        var seq = Math.Max(await db.ConfigVersions.Where(v => v.BundleId == bundleId).MaxAsync(v => (int?)v.Seq, ct) ?? 0, pending ?? 0) + 1;
         var version = new ConfigVersion
         {
             Id = Guid.NewGuid(), BundleId = bundleId, Seq = seq, BaseVersionId = baseId, DeviceId = deviceId, Source = source,

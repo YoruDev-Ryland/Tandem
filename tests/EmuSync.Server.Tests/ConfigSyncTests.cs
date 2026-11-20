@@ -11,7 +11,7 @@ using Testcontainers.PostgreSql;
 
 namespace EmuSync.Server.Tests;
 
-public class ConfigSyncTests
+public partial class ConfigSyncTests
 {
     private const string Email = "a@example.com";
     private const string Ini = "config/qt-config.ini";
