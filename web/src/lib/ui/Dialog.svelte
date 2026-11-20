@@ -6,9 +6,11 @@
     open: boolean;
     title: string;
     onclose?: () => void;
+    /** Room for an editor: up to 960 px wide instead of 520. */
+    wide?: boolean;
     children: Snippet;
   }
-  let { open = $bindable(false), title, onclose, children }: Props = $props();
+  let { open = $bindable(false), title, onclose, wide = false, children }: Props = $props();
 
   let el: HTMLDialogElement;
   /** Children render only while shown, so their action handlers stack above the dialog's. */
@@ -59,7 +61,7 @@
   }
 </script>
 
-<dialog bind:this={el} aria-label={title} onclose={closed} oncancel={(e) => { e.preventDefault(); open = false; }}>
+<dialog bind:this={el} class:wide aria-label={title} onclose={closed} oncancel={(e) => { e.preventDefault(); open = false; }}>
   {#if shown}
     <h2>{title}</h2>
     {@render children()}
@@ -75,6 +77,9 @@
     border-radius: 3px;
     background: var(--bg);
     color: var(--ink);
+  }
+  dialog.wide {
+    width: min(960px, calc(100vw - 32px));
   }
   dialog:focus-visible {
     outline: none;

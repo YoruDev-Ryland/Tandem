@@ -27,7 +27,8 @@ export function otherDevices(g: GameRow): GameDeviceState[] {
   return g.devices.filter((d) => d.state !== "Newest" && d.deviceId !== g.newestOnDeviceId);
 }
 
-const list = (names: string[]) => (names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? ""));
+/** "Odin 3", "Odin 3 and Thor", "Ayn, Odin 3 and Thor". */
+export const nameList = (names: string[]) => (names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? ""));
 
 /** The line under a game's title: what each device holds, framed so bare names mean something. */
 export function deviceLine(g: GameRow): { text: string; tone: StateTone }[] {
@@ -36,12 +37,12 @@ export function deviceLine(g: GameRow): { text: string; tone: StateTone }[] {
   const synced = g.devices.length > 0 && holders.length === g.devices.length;
   if (synced) {
     const both = names.length === 1 ? "" : names.length === 2 ? "both have the newest save" : "all have the newest save";
-    const parts = [{ text: `installed on ${list(names)}`, tone: "" as StateTone }];
+    const parts = [{ text: `installed on ${nameList(names)}`, tone: "" as StateTone }];
     if (g.newestUtc && both) parts.push({ text: both, tone: "" });
     return parts;
   }
   const parts: { text: string; tone: StateTone }[] = [];
-  if (g.newestUtc && names.length > 0) parts.push({ text: `newest on ${list(names)}`, tone: "" });
+  if (g.newestUtc && names.length > 0) parts.push({ text: `newest on ${nameList(names)}`, tone: "" });
   for (const d of g.devices) {
     if (d.state === "Newest" || d.state === "HasIt") {
       if (!g.newestUtc) parts.push({ text: `on ${d.deviceName}`, tone: "" });
