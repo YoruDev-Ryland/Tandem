@@ -219,6 +219,37 @@ class SyncEngineTest {
         assertEquals(2, api.saves.size)
     }
 
+    private fun hashOf(text: String) = Manifests.hash(listOf(ManifestEntry("a.sav",
+        java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) },
+        text.length.toLong())))
+    private fun blobHash(text: String) =
+        java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
+
+    @Test fun same_size_same_mtime_rewrite_is_uploaded_with_true_content() = runBlocking {
+        put("saves/GAME1/a.sav", "AAAA")
+        val e = engine()
+        e.fullScan()
+        assertEquals(1, api.saves.size)
+        put("saves/GAME1/a.sav", "BBBB", 5_000)   // same size, old mtime forced
+        now += 10_000; e.onFsEvent("$root/saves/GAME1")
+        now += 4_000; e.tick()
+        assertEquals(2, api.saves.size)
+        assertEquals(hashOf("BBBB"), Manifests.hash(api.saves[1].manifest))
+        assertTrue(blobHash("BBBB") in api.putBlobs)
+    }
+
+    @Test fun cache_never_feeds_upload_manifest() = runBlocking {
+        put("saves/GAME1/a.sav", "AAAA")
+        api.saveStatus = SaveUploadStatus.Conflict   // nothing stored; the cache is primed with A
+        val e = engine()
+        e.fullScan()
+        put("saves/GAME1/a.sav", "BBBB", 5_000)      // same size and mtime, no event
+        val d = module.detect(fs(), DeviceSettings(emptyList(), emptyMap()))!!
+        val item = module.saveItems(fs(), d).single()
+        e.upload(module, d, item)
+        assertEquals(hashOf("BBBB"), Manifests.hash(api.saves.last().manifest))
+    }
+
     @Test fun event_in_parent_dir_picks_up_new_item() = runBlocking {
         put("saves/GAME1/a.sav", "hello")
         val e = engine()
@@ -409,7 +440,7 @@ class SyncEngineTest {
         assertEquals(first, reads)
         put("saves/GAME2/b.sav", "world2", 6_000)
         e.fullScan()
-        assertEquals(first + 2, reads)     // one rehash + one blob upload
+        assertEquals(first + 3, reads)     // cached-path rehash + fresh upload hash + one blob upload
     }
 
     @Test fun repeated_conflict_for_same_content_notifies_once() = runBlocking {

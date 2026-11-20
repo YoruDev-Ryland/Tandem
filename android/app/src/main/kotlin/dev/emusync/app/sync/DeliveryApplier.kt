@@ -375,6 +375,9 @@ class DeliveryApplier(
             else if (notifiedRecovery.add(t.markerKey)) notifier("Restore failed for ${t.name} — backup at ${backupDir ?: "none"}")
             if (e is FsUnavailableException) throw e
             throw Reject("write failed: ${e.message}")
+        } finally {
+            // The storage stack may keep a stale mtime after a rewrite; never let the engine trust a cached hash.
+            engine.invalidate(t.files.map { it.abs } + extras)
         }
         try {
             store.finishApply(t.markerKey, t.item, t.config)   // state + marker clear in one atomic write
@@ -429,6 +432,10 @@ class DeliveryApplier(
      * handled. [FsUnavailableException] propagates.
      */
     private fun undo(mk: ApplyMarker): Boolean {
+        try { return undoInner(mk) } finally { engine.invalidate(mk.files.keys) }
+    }
+
+    private fun undoInner(mk: ApplyMarker): Boolean {
         val errors = mutableListOf<String>()
         val ours = ArrayList<Pair<String, MarkerFile>>()
         var userChanged = false

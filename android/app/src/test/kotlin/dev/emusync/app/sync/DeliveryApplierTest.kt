@@ -286,6 +286,20 @@ class DeliveryApplierTest {
         assertTrue(cache.walk().none { it.isFile })
     }
 
+    @Test fun applier_write_invalidates_engine_cache() = runBlocking {
+        put("saves/G1/a.sav", "aaaa"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "bbbb", version = "v9"))
+        val a = applier()
+        engine.fullScan()                       // primes the engine's hash cache with "aaaa"
+        a.applyAll()
+        assertEquals("bbbb", read("saves/G1/a.sav"))
+        File(root, "saves/G1/a.sav").setLastModified(5_000)   // storage keeps a stale mtime
+        api.standing = emptyList()
+        now += 100_000
+        engine.fullScan()
+        assertTrue("stale cached hash was uploaded", api.saves.isEmpty())
+    }
+
     @Test fun new_item_written_to_module_target_dir() = runBlocking {
         api.standing = listOf(saveDelivery("d1", "G2", "x/y.sav" to "hi"))
         applier().applyAll()
