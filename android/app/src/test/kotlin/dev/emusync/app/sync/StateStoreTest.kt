@@ -153,29 +153,27 @@ class StateStoreTest {
         assertNull(r.get("eden|Save|G||")); assertNull(r.get("eden|Save|H||")); assertNull(r.configState("eden"))
         assertEquals("v2", r.get("edenx|Save|G||")?.knownVersionId)
         assertEquals(emptySet<String>(), r.pendingForget)
-        assertEquals(setOf("eden"), r.freshEmulators)
-        assertTrue(r.isFresh("eden", "eden|Save|G||"))
-        assertFalse(r.isFresh("edenx", "edenx|Save|G||"))
+        assertEquals(setOf("eden"), r.serverForgetPending)
+        assertTrue(r.isFresh("eden"))
+        assertFalse(r.isFresh("edenx"))
         assertEquals(emptySet<String>(), r.applyPendingForget())   // nothing pending: a no-op
     }
 
-    @Test fun an_answer_settles_an_item_and_a_fully_answered_emulator_stops_being_fresh() {
-        val s = StateStore(File(tmp.root, "state.json"))
+    @Test fun uploads_stay_fresh_until_the_server_forget_is_done() {
+        val f = File(tmp.root, "state.json")
+        val s = StateStore(f)
         s.setVariant("eden", "p", forgetState = true)
+        s.setVariant("ppsspp", "q", forgetState = true)
         s.applyPendingForget()
-        s.put("eden|Save|A||", ItemState("v1", "m", "m"), settleFresh = true)
-        assertFalse(s.isFresh("eden", "eden|Save|A||"))
-        assertTrue(s.isFresh("eden", "eden|Save|B||"))
-        s.settleFresh("eden|Save|B||")   // a conflict answer stores no state but still counts
-        s.clearFreshIfSettled("eden", listOf("eden|Save|A||", "eden|Save|B||", "eden|config"))
-        assertEquals(setOf("eden"), s.freshEmulators)   // the config hasn't had its answer
-        s.putConfigState("eden", ConfigState("b", "c", "m", "m"), settleFresh = true)
-        s.clearFreshIfSettled("eden", listOf("eden|Save|A||", "eden|Save|B||", "eden|config"))
-        assertEquals(emptySet<String>(), s.freshEmulators)
-        assertFalse(s.isFresh("eden", "eden|Save|C||"))
+        s.put("eden|Save|A||", ItemState("v1", "m", "m"))   // answers store state but never end it
+        assertTrue(s.isFresh("eden"))
+        s.forgetDone(listOf("eden"))
+        assertFalse(s.isFresh("eden"))
+        assertTrue(s.isFresh("ppsspp"))
+        assertEquals(setOf("ppsspp"), StateStore(f).serverForgetPending)
     }
 
-    @Test fun signing_in_marks_every_emulator_to_be_forgotten_and_fresh() {
+    @Test fun signing_in_marks_every_emulator_to_be_forgotten_here_and_on_the_server() {
         val s = StateStore(File(tmp.root, "state.json"))
         s.put("eden|Save|G||", ItemState("v1", "m", "m"))   // from another account
         s.signIn("http://x", "dk", "d1", listOf("eden", "dolphin"))
@@ -183,6 +181,6 @@ class StateStoreTest {
         assertEquals(setOf("eden", "dolphin"), s.pendingForget)
         s.applyPendingForget()
         assertNull(s.get("eden|Save|G||"))
-        assertTrue(s.isFresh("dolphin", "dolphin|Save|X||"))
+        assertEquals(setOf("eden", "dolphin"), s.serverForgetPending)
     }
 }

@@ -86,6 +86,10 @@ class ApiClient(
         call("PUT", "/v1/devices/me/installs/$emulatorId", InstallsRequest.serializer(),
             InstallsRequest(games), InstallsResponse.serializer())!!
 
+    override suspend fun forget(emulatorIds: List<String>) {
+        call("POST", "/v1/devices/me/forget", ForgetRequest.serializer(), ForgetRequest(emulatorIds), null as KSerializer<Unit>?)
+    }
+
     override suspend fun missingBlobs(hashes: List<String>): List<String> =
         call("POST", "/v1/blobs/missing", MissingBlobsRequest.serializer(),
             MissingBlobsRequest(hashes), MissingBlobsResponse.serializer())!!.missing

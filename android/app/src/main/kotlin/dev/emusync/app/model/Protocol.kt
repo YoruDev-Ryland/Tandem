@@ -41,6 +41,8 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val crc32: String? = null,
 )
 @Serializable data class InstallsRequest(val games: List<InstalledGame>)
+/** POST /v1/devices/me/forget: the server drops what it recorded this device as holding for these emulators. */
+@Serializable data class ForgetRequest(val emulatorIds: List<String>)
 @Serializable data class InstallsResponse(val added: Int = 0, val removed: Int = 0)
 
 @Serializable data class SaveUploadRequest(

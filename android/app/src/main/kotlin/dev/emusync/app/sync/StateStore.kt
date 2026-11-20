@@ -76,10 +76,11 @@ private data class StateData(
     val signInForm: SignInForm = SignInForm(),
     /** Emulators whose sync state the next session start forgets (see StateStore.applyPendingForget). */
     val pendingForget: Set<String> = emptySet(),
-    /** Emulators whose items upload with fresh=true until each has had an answer (see StateStore.isFresh). */
-    val freshEmulators: Set<String> = emptySet(),
-    /** Store keys (items, and ItemKey.config for configs) of fresh emulators that have had their answer. */
-    val freshSettled: Set<String> = emptySet(),
+    /**
+     * Emulators forgotten locally whose server records (POST /v1/devices/me/forget) are not yet dropped. Until they
+     * are, every upload of theirs is sent with fresh=true (see StateStore.isFresh).
+     */
+    val serverForgetPending: Set<String> = emptySet(),
 )
 
 /**
@@ -194,8 +195,8 @@ class StateStore(
     }
 
     /**
-     * Forgets the per-item and config sync state of every emulator in [pendingForget] and marks it fresh, in one
-     * write. Called by the service at the start of a session, after the previous session has ended, so nothing that
+     * Forgets the per-item and config sync state of every emulator in [pendingForget] and marks its server records
+     * to be dropped ([serverForgetPending]), in one write. Called by the service at the start of a session, after the previous session has ended, so nothing that
      * session still writes can survive it. Returns the emulator ids it forgot.
      */
     fun applyPendingForget(): Set<String> = synchronized(lock) {
@@ -206,8 +207,7 @@ class StateStore(
             it.copy(
                 items = it.items.filterKeys { k -> !of(k) },
                 configs = it.configs - ids,
-                freshEmulators = it.freshEmulators + ids,
-                freshSettled = it.freshSettled.filterNot(::of).toSet(),
+                serverForgetPending = it.serverForgetPending + ids,
                 pendingForget = emptySet(),
             )
         }
@@ -215,39 +215,17 @@ class StateStore(
     }
 
     val pendingForget: Set<String> get() = synchronized(lock) { data.pendingForget }
-    val freshEmulators: Set<String> get() = synchronized(lock) { data.freshEmulators }
+    /** Emulators whose server records still have to be dropped (POST /v1/devices/me/forget). */
+    val serverForgetPending: Set<String> get() = synchronized(lock) { data.serverForgetPending }
+
+    /** The server dropped its records for [ids]: their uploads are ordinary again. */
+    fun forgetDone(ids: Collection<String>) = mutate { it.copy(serverForgetPending = it.serverForgetPending - ids.toSet()) }
 
     /**
-     * Whether an upload of [key] (an item key, or ItemKey.config) of [emulatorId] is sent with fresh=true: the
-     * emulator was forgotten and this key has had no answer since.
+     * Whether uploads of [emulatorId] are sent with fresh=true: its state was forgotten here and the server may still
+     * record this device as holding versions it no longer has. Answers to uploads never end it; [forgetDone] does.
      */
-    fun isFresh(emulatorId: String, key: String): Boolean =
-        synchronized(lock) { emulatorId in data.freshEmulators && key !in data.freshSettled }
-
-    /** Stores [s] for [itemKey]; with [settleFresh] the key's fresh mark goes in the same write. */
-    fun put(itemKey: String, s: ItemState, settleFresh: Boolean) = mutate {
-        it.copy(items = it.items + (itemKey to s), freshSettled = if (settleFresh) it.freshSettled + itemKey else it.freshSettled)
-    }
-
-    /** Stores [s] for [emulatorId]'s config; with [settleFresh] its fresh mark goes in the same write. */
-    fun putConfigState(emulatorId: String, s: ConfigState, settleFresh: Boolean) = mutate {
-        val key = ItemKey.config(emulatorId)
-        it.copy(configs = it.configs + (emulatorId to s), freshSettled = if (settleFresh) it.freshSettled + key else it.freshSettled)
-    }
-
-    /** [key] had its answer without state to store (a conflict). */
-    fun settleFresh(key: String) = mutate { it.copy(freshSettled = it.freshSettled + key) }
-
-    /** Ends [emulatorId]'s fresh period once every key in [keys] (its current items and config) has had its answer. */
-    fun clearFreshIfSettled(emulatorId: String, keys: Collection<String>) = synchronized(lock) {
-        if (emulatorId !in data.freshEmulators || !data.freshSettled.containsAll(keys)) return
-        mutate {
-            it.copy(
-                freshEmulators = it.freshEmulators - emulatorId,
-                freshSettled = it.freshSettled.filterNot { k -> k.startsWith("$emulatorId|") }.toSet(),
-            )
-        }
-    }
+    fun isFresh(emulatorId: String): Boolean = synchronized(lock) { emulatorId in data.serverForgetPending }
 
     /**
      * Forgets this device's key and id, and what it knew of the server's versions (per-item and config state), in one

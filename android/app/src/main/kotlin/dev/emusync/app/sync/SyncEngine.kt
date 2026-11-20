@@ -107,12 +107,14 @@ class SyncEngine(
     private val hashCache = java.util.concurrent.ConcurrentHashMap<String, CachedHash>()
     /** Bumped (under [ev]) by every invalidation; a build commits its hashes only if it didn't change meanwhile. */
     private var cacheEpoch = 0L
-    private val notified = HashSet<String>()                  // "<key>|<manifest hash>" conflicts already reported
+    private val notified = HashSet<String>()
+    private var forgetTriedAt: Long? = null                   // the last forget attempt (see dropServerRecords)                  // "<key>|<manifest hash>" conflicts already reported
 
     // ---- public API ----
 
     /** Detects modules, reports status and installs, then uploads every changed item and idle config bundle. */
     suspend fun fullScan(): Unit = mutex.withLock {
+        dropServerRecords(force = true)
         val found = LinkedHashMap<String, Pair<EmulatorModule, Detected>>()
         for (m in registry.all()) detectOne(m)?.let { found[m.emulatorId] = m to it }
         val dirs = found.mapValues { (_, p) -> moduleCall(p.first, "watchDirs") { p.first.watchDirs(fs, p.second) } ?: emptyList() }
@@ -124,10 +126,8 @@ class SyncEngine(
         reportStatus(found.values.toList())
         for ((m, d) in found.values) reportInstalls(m, d)
         val now = clock()
-        val scanned = HashMap<String, List<String>>()
         for ((m, d) in found.values) {
             val items = scanModule(m, d) ?: continue
-            scanned[m.emulatorId] = items.map { storeKey(m.emulatorId, it) }
             for (item in items) {
                 val key = storeKey(m.emulatorId, item)
                 val pending = synchronized(ev) { dirty[key] }
@@ -136,8 +136,7 @@ class SyncEngine(
             }
         }
         for ((m, d) in found.values) if (!fs.isEmulatorRunning(m, d)) uploadConfigBundle(m, d)
-        // A forgotten emulator stops being fresh once every current item and its config have had an answer.
-        for ((id, keys) in scanned) store.clearFreshIfSettled(id, keys + ItemKey.config(id))
+
     }
 
     /**
@@ -212,6 +211,7 @@ class SyncEngine(
 
     /** Rescans modules that saw events, then uploads dirty items quiet for at least quietMillis. */
     suspend fun tick(): Unit = mutex.withLock {
+        dropServerRecords()
         val now = clock()
         val (rescans, mods) = synchronized(ev) {
             val r = HashMap(rescan); rescan.clear()
@@ -335,8 +335,9 @@ class SyncEngine(
         }
         val hash = Manifests.hash(fresh.entries)
         if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= key }; return null }
-        // Forgotten (variant switch, new sign-in): until its first answer, the server must take the base as sent.
-        val isFresh = store.isFresh(id, key)
+        // Forgotten (variant switch, new sign-in) and the server's records not yet dropped: it must take the base as sent.
+        dropServerRecords()
+        val isFresh = store.isFresh(id)
         return queueing(key, apiCall(name) {
             val built = fresh
             pushBlobs(built)
@@ -345,16 +346,15 @@ class SyncEngine(
             when (r.status) {
                 SaveUploadStatus.Accepted, SaveUploadStatus.Unchanged -> {
                     val v = if (r.status == SaveUploadStatus.Accepted) r.versionId else r.headVersionId
-                    store.put(key, ItemState(v, hash, hash), settleFresh = isFresh)
+                    store.put(key, ItemState(v, hash, hash))
                     log("$name: ${r.status} $v")
                 }
                 SaveUploadStatus.Superseded -> {
                     // content equals a version the user already decided against; adopt the matched version
-                    store.put(key, ItemState(r.versionId, hash, hash), settleFresh = isFresh)
+                    store.put(key, ItemState(r.versionId, hash, hash))
                     log("$name: superseded by ${r.versionId}")
                 }
                 SaveUploadStatus.Conflict -> {
-                    if (isFresh) store.settleFresh(key)
                     log("$name: conflict (head ${r.headVersionId})")
                     if (notified.add("$key|$hash"))
                         onConflict(SyncConflict(id, item.kind, item.gameKey, item.slot, item.core,
@@ -384,28 +384,47 @@ class SyncEngine(
         val known = store.configState(id)
         val hash = Manifests.hash(fresh.entries)
         if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= ItemKey.config(id) }; return null }
-        val isFresh = store.isFresh(id, ItemKey.config(id))
+        dropServerRecords()
+        val isFresh = store.isFresh(id)
         return queueing(ItemKey.config(id), apiCall(name) {
             val built = fresh
             pushBlobs(built)
             val r = api.uploadConfig(ConfigUploadRequest(id, known?.knownVersionId, built.entries, fresh = if (isFresh) true else null))
             when (r.status) {
                 SaveUploadStatus.Accepted, SaveUploadStatus.Unchanged -> {
-                    store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash), settleFresh = isFresh)
+                    store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash))
                     log("$name: ${r.status} ${r.versionId}")
                 }
                 SaveUploadStatus.Superseded -> {
-                    store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash), settleFresh = isFresh)
+                    store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash))
                     log("$name: superseded by ${r.versionId}")
                 }
                 SaveUploadStatus.Conflict -> {
-                    if (isFresh) store.settleFresh(ItemKey.config(id))
                     log("$name: conflict")
                     if (notified.add("config:$id|$hash")) onConflict(SyncConflict(id, null, null, "", "", null, m.displayName))
                 }
             }
             r.status
         })
+    }
+
+    /**
+     * Asks the server to drop what it recorded this device as holding for the emulators forgotten here (variant
+     * switch, new sign-in), before their next upload. Until that succeeds their uploads are sent fresh. A failure is
+     * retried no more than every [FORGET_RETRY_MS] (each full scan always tries), so an offline device doesn't send it
+     * every tick. Called under [mutex].
+     */
+    private suspend fun dropServerRecords(force: Boolean = false) {
+        val ids = store.serverForgetPending
+        if (ids.isEmpty()) return
+        val at = forgetTriedAt
+        if (!force && at != null && clock() - at in 0 until FORGET_RETRY_MS) return
+        forgetTriedAt = clock()
+        apiCall("forget") {
+            api.forget(ids.sorted())
+            store.forgetDone(ids)
+            log("server forgot what this device held for ${ids.sorted()}")
+        }
     }
 
     /** Records whether the upload of [key] failed ([status] null from [apiCall]) for [queuedCount]. */
@@ -635,6 +654,7 @@ class SyncEngine(
 
     private companion object {
         const val UNKNOWN_VERSION = "unknown"
+        const val FORGET_RETRY_MS = 30_000L
         val BLOB_RETRY_DELAYS = longArrayOf(1_000L, 2_000L, 4_000L)
         val sdName = Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")
     }

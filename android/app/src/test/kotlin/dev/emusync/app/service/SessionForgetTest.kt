@@ -52,6 +52,6 @@ class SessionForgetTest {
         supervisor.cancel()
         assertEquals(listOf(emptySet(), setOf("eden")), forgotten)
         assertNull(store.get("eden|Save|G||"))
-        assertTrue(store.isFresh("eden", "eden|Save|G||"))
+        assertTrue(store.isFresh("eden"))
     }
 }

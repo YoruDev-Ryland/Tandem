@@ -13,6 +13,8 @@ interface Api {
     /** [putStatus] that fails (an IOException) once [callTimeoutMillis] pass, instead of completing late. */
     suspend fun putStatus(req: DeviceStatusRequest, callTimeoutMillis: Long) = putStatus(req)
     suspend fun putInstalls(emulatorId: String, games: List<InstalledGame>): InstallsResponse
+    /** Drops the server's record of what this device holds for [emulatorIds] (after a local forget). */
+    suspend fun forget(emulatorIds: List<String>)
     suspend fun missingBlobs(hashes: List<String>): List<String>
     suspend fun putBlob(hash: String, size: Long, source: () -> InputStream)
     suspend fun getBlob(hash: String): InputStream

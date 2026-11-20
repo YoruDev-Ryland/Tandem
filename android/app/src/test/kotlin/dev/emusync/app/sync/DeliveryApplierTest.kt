@@ -66,6 +66,7 @@ class DeliveryApplierTest {
         override suspend fun redeemPairing(code: String, deviceName: String) = error("unused")
         override suspend fun putStatus(req: DeviceStatusRequest) {}
         override suspend fun putInstalls(emulatorId: String, games: List<InstalledGame>) = InstallsResponse()
+        override suspend fun forget(emulatorIds: List<String>) {}
         override suspend fun missingBlobs(hashes: List<String>): List<String> = hashes
         override suspend fun putBlob(hash: String, size: Long, source: () -> InputStream) { source().use { it.readBytes() } }
         override suspend fun getBlob(hash: String): InputStream {

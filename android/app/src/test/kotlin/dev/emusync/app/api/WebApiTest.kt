@@ -143,6 +143,15 @@ class WebApiTest {
         assertNull(resp.groupId)
     }
 
+    @Test fun forget_posts_the_emulator_ids() = runBlocking {
+        noContent()
+        client().forget(listOf("eden", "ppsspp"))
+        val r = server.takeRequest(2, java.util.concurrent.TimeUnit.SECONDS) ?: error("no request sent")
+        assertEquals("POST", r.method); assertHeaders(r)
+        assertEquals("/v1/devices/me/forget", r.target)
+        assertEquals("""{"emulatorIds":["eden","ppsspp"]}""", r.body!!.utf8())
+    }
+
     @Test fun keepOwn_posts_to_device_setup() = runBlocking {
         noContent()
         client().keepOwn("d1", "eden")
