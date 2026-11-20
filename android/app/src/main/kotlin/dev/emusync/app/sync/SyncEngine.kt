@@ -296,23 +296,15 @@ class SyncEngine(
             return null
         }
         val files = moduleCall(m, "configBundle") { m.configBundle(fs, d).files } ?: return null
-        val built = buildOrNull(name, files.entries.map { it.key to it.value }, rejectFresh = false) as Built? ?: return null
-        if (!stable(built)) {
+        // Always hashed fresh: config files are small, uploaded only on exit, and exFAT/FUSE can keep size and mtime
+        // across a rewrite, so even an "unchanged" conclusion from the cache could hide a change.
+        val fresh = buildOrNull(name, files.entries.map { it.key to it.value }, rejectFresh = false, useCache = false) as Built? ?: return null
+        if (!stable(fresh)) {
             log("$name: changed while reading, skipped")
             return null
         }
-        commit(built)
+        commit(fresh)
         val known = store.configState(id)
-        if (Manifests.hash(built.entries) == known?.knownManifestHash) { synchronized(ev) { queued -= ItemKey.config(id) }; return null }
-        val fresh = if (built.cacheHits == 0) built else {
-            val b = buildOrNull(name, files.entries.map { it.key to it.value }, rejectFresh = false, useCache = false) as Built? ?: return null
-            if (!stable(b)) {
-                log("$name: changed while reading, skipped")
-                return null
-            }
-            commit(b)
-            b
-        }
         val hash = Manifests.hash(fresh.entries)
         if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= ItemKey.config(id) }; return null }
         return queueing(ItemKey.config(id), apiCall(name) {

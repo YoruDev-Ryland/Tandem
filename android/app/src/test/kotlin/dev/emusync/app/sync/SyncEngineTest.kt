@@ -286,6 +286,17 @@ class SyncEngineTest {
         assertTrue(api.configs.last().files.any { it.hash == blobHash("BBBB") })
     }
 
+    @Test fun config_change_with_same_size_and_mtime_uploaded() = runBlocking {
+        put("config/c.ini", "AAAA")
+        val e = engine()
+        e.fullScan()                                   // Accepted: known hash is A
+        assertEquals(1, api.configs.size)
+        put("config/c.ini", "BBBB", 5_000)             // exFAT/FUSE: same size and mtime, no event
+        e.onEmulatorExited("fake")
+        assertEquals(2, api.configs.size)
+        assertTrue(api.configs.last().files.any { it.hash == blobHash("BBBB") })
+    }
+
     @Test fun event_in_parent_dir_picks_up_new_item() = runBlocking {
         put("saves/GAME1/a.sav", "hello")
         val e = engine()
