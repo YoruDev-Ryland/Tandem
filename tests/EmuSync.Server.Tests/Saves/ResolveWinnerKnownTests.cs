@@ -114,4 +114,25 @@ public class ResolveWinnerKnownTests
         var next = await Upload(a, Req(await Files(a, "next"), c.VersionId));
         Assert.Equal(SaveUploadStatus.Accepted, next.Status);
     }
+
+    [Fact]
+    public async Task KeepVersion_DisplacedHead_IsPinnedAndLabelled_SoRetentionKeepsIt()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        await Install(a);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var h = await Upload(b, Req(await Files(b, "h"), v1.VersionId));
+        var c = await Upload(a, Req(await Files(a, "c"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, c.Status);
+
+        (await KeepVersion(a, v1.ItemId, c.VersionId)).EnsureSuccessStatusCode();
+
+        using var scope = factory.Services.CreateScope();
+        var displaced = await scope.ServiceProvider.GetRequiredService<EmuSyncDbContext>().SaveVersions.AsNoTracking()
+            .SingleAsync(v => v.Id == h.VersionId);
+        Assert.True(displaced.Pinned);
+        Assert.Equal("From B", displaced.Variant);
+    }
 }

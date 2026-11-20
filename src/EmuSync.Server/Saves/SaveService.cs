@@ -181,6 +181,12 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 if (variantName is not null) foreach (var v in losers) v.Variant = variantName; // the user's own label wins
             }
 
+            else if (item.HeadVersionId is Guid displacedId && displacedId != keep.Id && open.All(v => v.Id != displacedId))
+            {
+                // The displaced head stays as a pinned, labelled version so retention cannot prune it.
+                await LabelVariantsAsync([await db.SaveVersions.SingleAsync(v => v.Id == displacedId, ct)], ct, name => $"From {name}");
+            }
+
             foreach (var v in open) v.Resolved = true;
             item.HeadVersionId = keep.Id;
             item.OpenConflict = false;
