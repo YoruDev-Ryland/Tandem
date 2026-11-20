@@ -38,21 +38,35 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         device.ShizukuOk = request.ShizukuOk;
         device.LastSeenUtc = now;
 
-        db.DeviceEmulators.RemoveRange(await db.DeviceEmulators.Where(e => e.DeviceId == deviceId).ToListAsync(ct));
-        db.DeviceRoots.RemoveRange(await db.DeviceRoots.Where(r => r.DeviceId == deviceId).ToListAsync(ct));
-        await db.SaveChangesAsync(ct);
+        var emulators = request.Emulators ?? [];
+        var roots = request.Roots ?? new Dictionary<string, string>();
 
-        foreach (var e in request.Emulators)
-            db.DeviceEmulators.Add(new DeviceEmulator
+        var oldEmus = await db.DeviceEmulators.Where(e => e.DeviceId == deviceId).ToListAsync(ct);
+        db.DeviceEmulators.RemoveRange(oldEmus.Where(o => emulators.All(e => e.EmulatorId != o.EmulatorId)));
+        foreach (var e in emulators)
+        {
+            var cores = e.Cores is null ? null : JsonSerializer.Serialize(e.Cores);
+            var row = oldEmus.FirstOrDefault(o => o.EmulatorId == e.EmulatorId);
+            if (row is null)
+                db.DeviceEmulators.Add(new DeviceEmulator { DeviceId = deviceId, EmulatorId = e.EmulatorId, Package = e.Package, Version = e.Version, CoresJson = cores });
+            else
             {
-                DeviceId = deviceId,
-                EmulatorId = e.EmulatorId,
-                Package = e.Package,
-                Version = e.Version,
-                CoresJson = e.Cores is null ? null : JsonSerializer.Serialize(e.Cores),
-            });
-        foreach (var (token, path) in request.Roots)
-            db.DeviceRoots.Add(new DeviceRoot { DeviceId = deviceId, Token = token, Path = path });
+                row.Package = e.Package;
+                row.Version = e.Version;
+                row.CoresJson = cores;
+            }
+        }
+
+        var oldRoots = await db.DeviceRoots.Where(r => r.DeviceId == deviceId).ToListAsync(ct);
+        db.DeviceRoots.RemoveRange(oldRoots.Where(o => !roots.ContainsKey(o.Token)));
+        foreach (var (token, path) in roots)
+        {
+            var row = oldRoots.FirstOrDefault(o => o.Token == token);
+            if (row is null)
+                db.DeviceRoots.Add(new DeviceRoot { DeviceId = deviceId, Token = token, Path = path });
+            else
+                row.Path = path;
+        }
         await db.SaveChangesAsync(ct);
     }
 
@@ -109,9 +123,10 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         var added = games.Where(g => !existingKeys.Contains(g.GameKey)).ToList();
 
         db.InstallRecords.RemoveRange(removed);
+        var byKey = games.ToDictionary(g => g.GameKey, StringComparer.Ordinal);
         foreach (var r in existing.Where(r => keys.Contains(r.GameKey)))
         {
-            var g = games.First(x => x.GameKey == r.GameKey);
+            var g = byKey[r.GameKey];
             r.DisplayName = g.DisplayName;
             r.Crc32 = g.Crc32;
             r.SeenUtc = now;
@@ -129,7 +144,7 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         return new InstallsResponse(added.Count, removed.Count);
     }
 
-    public async Task<DeviceSummary> Rename(Guid userId, Guid id, string? name, CancellationToken ct)
+    public async Task<DeviceSummary> Rename(Guid userId, Guid? currentDeviceId, Guid id, string? name, CancellationToken ct)
     {
         var trimmed = name?.Trim() ?? "";
         if (trimmed.Length is < 1 or > 80)
@@ -137,7 +152,7 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         var device = await Owned(userId, id, ct);
         device.Name = trimmed;
         await db.SaveChangesAsync(ct);
-        return new DeviceSummary(device.Id, device.Name, device.Platform, device.LastSeenUtc, device.ShizukuOk, false);
+        return new DeviceSummary(device.Id, device.Name, device.Platform, device.LastSeenUtc, device.ShizukuOk, device.Id == currentDeviceId);
     }
 
     public async Task Revoke(Guid userId, Guid id, CancellationToken ct)

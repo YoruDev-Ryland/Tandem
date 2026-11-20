@@ -42,7 +42,7 @@ public static class DeviceEndpoints
             svc.ReplaceInstalls(http.User.UserId(), RequireDevice(http), emulatorId, request, ct));
 
         devices.MapPatch("/{id:guid}", (HttpContext http, Guid id, RenameDeviceRequest request, DeviceService svc, CancellationToken ct) =>
-            svc.Rename(http.User.UserId(), id, request.Name, ct));
+            svc.Rename(http.User.UserId(), http.User.DeviceId(), id, request.Name, ct));
 
         devices.MapDelete("/{id:guid}", async (HttpContext http, Guid id, DeviceService svc, CancellationToken ct) =>
         {

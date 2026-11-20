@@ -179,7 +179,9 @@ public class DeviceTests
         var (other, otherKey) = await factory.Register("b@example.com");
 
         var r = await device.PatchAsJsonAsync($"/v1/devices/{key.DeviceId}", new RenameDeviceRequest("  Deck  "));
-        Assert.Equal("Deck", (await r.ReadAsync<DeviceSummary>()).Name);
+        var renamed = await r.ReadAsync<DeviceSummary>();
+        Assert.Equal("Deck", renamed.Name);
+        Assert.True(renamed.IsCurrent);
         await AssertError(await device.PatchAsJsonAsync($"/v1/devices/{key.DeviceId}", new RenameDeviceRequest("   ")),
             HttpStatusCode.BadRequest, "bad_name");
         await AssertError(await device.PatchAsJsonAsync($"/v1/devices/{key.DeviceId}", new RenameDeviceRequest(new string('x', 81))),
@@ -214,5 +216,52 @@ public class DeviceTests
         var web = await factory.WebLogin("a@example.com");
         Assert.True((await web.DeleteAsync($"/v1/devices/{key.DeviceId}")).IsSuccessStatusCode);
         await AssertError(await device.GetAsync("/v1/devices/me"), HttpStatusCode.Unauthorized, "device_revoked");
+    }
+
+    [Fact]
+    public async Task Status_with_null_emulators_and_roots_clears_them()
+    {
+        using var factory = new ServerFactory();
+        var (device, key) = await factory.Register("a@example.com");
+        (await device.PutAsJsonAsync("/v1/devices/me/status", Status())).EnsureSuccessStatusCode();
+        var r = await device.PutAsync("/v1/devices/me/status",
+            new StringContent("""{"platform":"android","appVersion":"1","shizukuOk":true}""", System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.NoContent, r.StatusCode);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<EmuSyncDbContext>();
+        Assert.Empty(await db.DeviceEmulators.Where(e => e.DeviceId == key.DeviceId).ToListAsync());
+        Assert.Empty(await db.DeviceRoots.Where(e => e.DeviceId == key.DeviceId).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Throwing_handler_does_not_fail_request_and_other_handlers_run()
+    {
+        using var factory = new ServerFactory();
+        var (device, key) = await factory.Register("a@example.com");
+        var events = factory.Services.GetRequiredService<IDomainEvents>();
+        var received = new List<InstallsChanged>();
+        events.Subscribe<InstallsChanged>((_, _) => throw new InvalidOperationException("boom"));
+        events.Subscribe<InstallsChanged>((e, _) => { received.Add(e); return Task.CompletedTask; });
+
+        var r = await device.PutAsJsonAsync("/v1/devices/me/installs/eden", Games("a"));
+        Assert.Equal(new InstallsResponse(1, 0), await r.ReadAsync<InstallsResponse>());
+        Assert.Single(received);
+        using var scope = factory.Services.CreateScope();
+        Assert.True(await scope.ServiceProvider.GetRequiredService<DeviceService>().HasInstalled(key.DeviceId, "eden", "a"));
+    }
+
+    [Fact]
+    public async Task Installs_resend_of_20000_games_completes_quickly()
+    {
+        using var factory = new ServerFactory();
+        var (device, _) = await factory.Register("a@example.com");
+        var req = Games(Enumerable.Range(0, 20000).Select(i => "g" + i).ToArray());
+        var first = await device.PutAsJsonAsync("/v1/devices/me/installs/eden", req);
+        Assert.Equal(new InstallsResponse(20000, 0), await first.ReadAsync<InstallsResponse>());
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var again = await device.PutAsJsonAsync("/v1/devices/me/installs/eden", req);
+        sw.Stop();
+        Assert.Equal(new InstallsResponse(0, 0), await again.ReadAsync<InstallsResponse>());
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"took {sw.Elapsed}");
     }
 }

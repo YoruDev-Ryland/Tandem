@@ -3,13 +3,13 @@ namespace EmuSync.Server.Events;
 /// <summary>In-process synchronous domain event dispatcher.</summary>
 public interface IDomainEvents
 {
-    /// <summary>Awaits every handler subscribed for the event's runtime type (or a base type/interface).</summary>
+    /// <summary>Awaits every (isolated; failures are logged, handlers get CancellationToken.None) handler subscribed for the event's runtime type (or a base type/interface).</summary>
     Task Raise(object evt, CancellationToken ct);
 
     void Subscribe<T>(Func<T, CancellationToken, Task> handler);
 }
 
-public sealed class DomainEvents : IDomainEvents
+public sealed class DomainEvents(ILogger<DomainEvents> logger) : IDomainEvents
 {
     private readonly object _gate = new();
     private readonly List<(Type Type, Func<object, CancellationToken, Task> Handler)> _handlers = [];
@@ -27,6 +27,9 @@ public sealed class DomainEvents : IDomainEvents
             snapshot = [.. _handlers];
         foreach (var (type, handler) in snapshot)
             if (type.IsInstanceOfType(evt))
-                await handler(evt, ct);
+            {
+                try { await handler(evt, CancellationToken.None); }
+                catch (Exception ex) { logger.LogError(ex, "Domain event handler for {Event} failed", evt.GetType().Name); }
+            }
     }
 }
