@@ -97,6 +97,7 @@ fun HintBar(status: String?, hints: List<Hint>) {
                 Modifier
                     .requiredHeight(48.dp)
                     .widthIn(min = 48.dp)
+                    .noKeyFocus()
                     .clickable(interactionSource = null, indication = PressIndication, role = Role.Button, onClick = h.onClick),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),

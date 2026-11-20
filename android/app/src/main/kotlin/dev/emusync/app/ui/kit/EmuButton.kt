@@ -57,6 +57,7 @@ fun EmuButton(
     Box(
         modifier
             .height(48.dp)
+            .noKeyFocus()
             .clickable(interactionSource = source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

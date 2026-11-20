@@ -16,6 +16,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
@@ -28,6 +29,13 @@ import androidx.compose.ui.unit.dp
 import dev.emusync.app.ui.theme.EmuColors
 import dev.emusync.app.ui.theme.EmuType
 import dev.emusync.app.ui.theme.LocalEmu
+
+/**
+ * Keeps a kit control out of keyboard focus: keys reach it only through the scaffold's routing, so Compose's own
+ * focus (TAB, unhandled arrows) can never sit somewhere other than the cursor. Click semantics are unaffected.
+ * Put it before the clickable.
+ */
+fun Modifier.noKeyFocus(): Modifier = focusProperties { canFocus = false }
 
 /** The only corner radius in the app. */
 val EmuRadius = RoundedCornerShape(3.dp)
@@ -97,6 +105,7 @@ fun CursorRow(
             .fillMaxWidth()
             .height(40.dp)
             .then(look)
+            .noKeyFocus()
             .clickable(interactionSource = null, indication = null, onClick = onClick)
             .semantics(mergeDescendants = true) { selected = focused }
             .padding(horizontal = 12.dp),

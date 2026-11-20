@@ -40,12 +40,15 @@ import dev.emusync.app.ui.theme.LocalEmu
  * [content] with 28 dp sides, and the [HintBar] with [status] and [hints].
  *
  * It owns the gamepad. A root onPreviewKeyEvent maps keys to actions and offers each one, in order, to:
- * 1. the handlers registered with OnAction inside it, newest first, so a sheet shown later gets B before the list
- *    under it (CursorList and BumperTabs register themselves);
- * 2. [onAction], the screen's own handler;
- * 3. the hint for that button, as if it were tapped.
- * Keys nobody takes pass on (an unhandled BACK leaves the app). Sheets and dialogs must draw inside [content], not
- * in a separate window, so their keys come through here.
+ * 1. the handlers registered with OnAction inside it, deepest ActionLayer first, so a sheet in its own layer gets B
+ *    before the list under it (CursorList and BumperTabs register themselves);
+ * 2. the hint for that button, as if it were tapped: a button with a hint runs only the hint;
+ * 3. [onAction], the screen's own handler, for buttons without a hint.
+ * Keys nobody takes pass on (an unhandled BACK leaves the app). Sheets and dialogs wrap their content in an
+ * ActionLayer and draw inside [content], not in a separate window, so their keys come through here.
+ *
+ * Kit controls never take keyboard focus (all key input goes through this routing, and the cursor is the only
+ * focus shown), but they keep their click semantics for TalkBack.
  */
 @Composable
 fun ConsoleScaffold(
@@ -62,7 +65,13 @@ fun ConsoleScaffold(
     val shown by rememberUpdatedState(hints)
     val keys = remember(router) {
         KeyRouter { a ->
-            router.dispatch(a) || screen(a) || shown.firstOrNull { it.action == a }?.let { it.onClick(); true } ?: false
+            val hint = shown.firstOrNull { it.action == a }
+            when {
+                router.dispatch(a) -> true
+                // A button with a hint does exactly what the hint says, once; the screen never sees it as well.
+                hint != null -> { hint.onClick(); true }
+                else -> screen(a)
+            }
         }
     }
     // The root holds focus so key events have somewhere to go; it takes it back whenever nothing inside has it.

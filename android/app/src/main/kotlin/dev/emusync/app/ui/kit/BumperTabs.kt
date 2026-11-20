@@ -58,6 +58,7 @@ fun BumperTabs(items: List<String>, active: Int, onChange: (Int) -> Unit, level:
                 Modifier
                     .heightIn(min = 48.dp)
                     .widthIn(min = 48.dp)
+                    .noKeyFocus()
                     .clickable(interactionSource = null, indication = null, role = Role.Tab) { if (!on) onChange(i) }
                     .semantics { selected = on },
                 contentAlignment = Alignment.Center,

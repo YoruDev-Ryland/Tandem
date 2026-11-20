@@ -15,6 +15,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import dev.emusync.app.ui.input.Action
+import dev.emusync.app.ui.input.ActionLayer
 import dev.emusync.app.ui.input.OnAction
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -31,7 +32,7 @@ class ConsoleScaffoldTest {
         var sheet by mutableStateOf(false)
         compose.host(onAction = { log += "screen $it"; true }) {
             CursorList(listOf("a", "b"), key = { it }, selected = 0, onSelect = {}, onOpen = { log += "open $it" }) { s, _ -> BasicText(s) }
-            if (sheet) OnAction { a -> log += "sheet $a"; true }
+            if (sheet) ActionLayer { OnAction { a -> log += "sheet $a"; true } }
         }
         compose.key(KeyEvent.KEYCODE_BUTTON_B)
         assertEquals(listOf("screen B"), log)
@@ -83,11 +84,47 @@ class ConsoleScaffoldTest {
         var rows by mutableStateOf(emptyList<String>())
         compose.host {
             CursorList(rows, key = { it }, selected = 0, onSelect = {}, onOpen = { log += "open $it" }) { s, _ -> BasicText(s) }
-            OnAction { a -> log += "sheet $a"; true }
+            ActionLayer { OnAction { a -> log += "sheet $a"; true } }
         }
         rows = listOf("a", "b")
         compose.waitForIdle()
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertEquals(listOf("sheet A"), log)
+    }
+
+    @Test fun aListThatEntersTheScreenUnderAnOpenSheetStaysUnderIt() {
+        val log = mutableListOf<String>()
+        var loaded by mutableStateOf(false)
+        compose.host {
+            // The sheet is open first; then a load swaps the empty line for a list, which registers after the sheet.
+            ActionLayer { OnAction { a -> log += "sheet $a"; true } }
+            if (loaded) {
+                CursorList(listOf("a", "b"), key = { it }, selected = 0, onSelect = {}, onOpen = { log += "open $it" }) { s, _ -> BasicText(s) }
+            } else {
+                EmptyLine("Nothing yet")
+            }
+        }
+        loaded = true
+        compose.waitForIdle()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        assertEquals(listOf("sheet A", "sheet Down"), log)
+    }
+
+    @Test fun anInnerLayerComesBeforeItsParentAndClosingItHandsBack() {
+        val log = mutableListOf<String>()
+        var confirm by mutableStateOf(true)
+        compose.host {
+            ActionLayer {
+                OnAction { a -> log += "sheet $a"; true }
+                if (confirm) ActionLayer { OnAction { a -> log += "confirm $a"; a == Action.B } }
+            }
+        }
+        compose.key(KeyEvent.KEYCODE_BUTTON_B)
+        compose.key(KeyEvent.KEYCODE_BUTTON_X) // not taken by the confirm: falls to the sheet
+        confirm = false
+        compose.waitForIdle()
+        compose.key(KeyEvent.KEYCODE_BUTTON_B)
+        assertEquals(listOf("confirm B", "confirm X", "sheet X", "sheet B"), log)
     }
 }

@@ -1,7 +1,16 @@
 package dev.emusync.app.ui.kit
 
 import android.view.KeyEvent
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertWidthIsAtLeast
@@ -54,13 +63,55 @@ class TouchParityTest {
         assertEquals(listOf("Sync now", "Emulator settings"), clicked)
     }
 
-    @Test fun theScreenHandlerComesBeforeTheHintFallback() {
+    @Test fun aButtonWithAHintRunsOnlyTheHintAndTheScreenGetsTheRest() {
         val screen = mutableListOf<Action>()
-        compose.host(hints, onAction = { screen += it; it == Action.X }) {}
+        // The screen claims nothing: X must still run once (the hint), never also reach the screen.
+        compose.host(hints, onAction = { screen += it; false }) {}
         compose.key(KeyEvent.KEYCODE_BUTTON_X)
         compose.key(KeyEvent.KEYCODE_BUTTON_B)
-        assertEquals(listOf(Action.X, Action.B), screen)
-        assertEquals(listOf("Back"), clicked)
+        compose.key(KeyEvent.KEYCODE_BUTTON_L2)
+        assertEquals(listOf("Sync now", "Back"), clicked)
+        assertEquals(listOf(Action.L2), screen)
+    }
+
+    @Test fun kitControlsNeverTakeKeyboardFocus() {
+        var page = 0
+        compose.host(hints) {
+            // A gamepad or keyboard puts Android in keyboard input mode, where clickables are focusable by default.
+            val mode = LocalInputModeManager.current
+            SideEffect { mode.requestInputMode(InputMode.Keyboard) }
+            Column {
+                BumperTabs(listOf("One", "Two"), page, { page = it })
+                CursorList(listOf("a", "b"), key = { it }, selected = 0, onSelect = {}, onOpen = {}, active = false) { s, _ -> BasicText(s) }
+                EmuButton("Keep both") {}
+            }
+        }
+        // TAB and unhandled arrows are Compose's focus navigation; none of it may land on a kit control.
+        repeat(6) { compose.key(KeyEvent.KEYCODE_TAB) }
+        compose.key(KeyEvent.KEYCODE_DPAD_RIGHT)
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onAllNodes(isFocused()).assertCountEquals(0)
+    }
+
+    @Test fun kitControlsKeepTheirAccessibilityClick() {
+        var opened = ""
+        var tab = 0
+        var button = 0
+        compose.host(hints) {
+            Column {
+                BumperTabs(listOf("One", "Two"), tab, { tab = it })
+                CursorList(listOf("a", "b"), key = { it }, selected = 0, onSelect = {}, onOpen = { opened = it }) { s, _ -> BasicText(s) }
+                EmuButton("Keep both") { button++ }
+            }
+        }
+        compose.onNodeWithText("Sync now").performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithText("Two").performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithText("a").performSemanticsAction(SemanticsActions.OnClick)
+        compose.onNodeWithText("Keep both").performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(listOf("Sync now"), clicked)
+        assertEquals(1, tab)
+        assertEquals("a", opened)
+        assertEquals(1, button)
     }
 
     @Test fun emuButtonIsATouchTargetThatClicks() {
