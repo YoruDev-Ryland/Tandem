@@ -8,9 +8,12 @@ import dev.emusync.app.api.ApiClient
 import dev.emusync.app.service.AppGraph
 import dev.emusync.app.modules.ModuleRegistry
 import dev.emusync.app.service.SyncService
+import dev.emusync.app.ui.screens.ActivityViewModel
 import dev.emusync.app.ui.screens.ConflictsViewModel
 import dev.emusync.app.ui.screens.DeviceViewModel
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import dev.emusync.app.ui.state.AppState
@@ -52,6 +55,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // A choice can change what this device should hold: apply it (the service holds it while the emulator runs).
         afterResolve = { SyncService.tryStart(app, SyncService.ACTION_APPLY); server.refresh() },
         emulatorName = { emulatorNames[it] ?: it },
+    )
+    // No device topic carries activity: refresh on the delivery signal and on every server cache refresh.
+    val activity = ActivityViewModel(
+        api = ::api,
+        deviceId = { store.deviceId },
+        scope = viewModelScope,
+        nudges = merge<Any?>(AppGraph.deliveryNudges, server.games.map { it.updatedAt }),
     )
 
     /** The server URL for links to the web app, or null when signed out. */

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -22,12 +23,15 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.emusync.app.debug.DebugActivity
 import dev.emusync.app.service.AppGraph
+import dev.emusync.app.service.LogBuffer
 import dev.emusync.app.service.SyncService
 import dev.emusync.app.ui.AppViewModel
 import dev.emusync.app.ui.input.Action
 import dev.emusync.app.ui.kit.ConsoleScaffold
 import dev.emusync.app.ui.kit.Hint
 import dev.emusync.app.ui.kit.TopBar
+import dev.emusync.app.ui.screens.ActivityActions
+import dev.emusync.app.ui.screens.ActivityScreen
 import dev.emusync.app.ui.screens.ConflictsActions
 import dev.emusync.app.ui.screens.ConflictsScreen
 import dev.emusync.app.ui.screens.DeviceActions
@@ -41,6 +45,7 @@ import dev.emusync.app.ui.theme.LocalEmu
 private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
 private val TABS = listOf("This device", "Activity", "Conflicts", "Settings")
 private const val TAB_DEVICE = 0
+private const val TAB_ACTIVITY = 1
 private const val TAB_CONFLICTS = 2
 private const val TAB_SETTINGS = 3
 
@@ -77,6 +82,8 @@ private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
     var tab by rememberSaveable { mutableIntStateOf(TAB_DEVICE) }
     val status by vm.state.top.collectAsStateWithLifecycle()
     val device by vm.device.ui.collectAsStateWithLifecycle()
+    val activityUi by vm.activity.ui.collectAsStateWithLifecycle()
+    val log by LogBuffer.lines.collectAsStateWithLifecycle()
     val conflictsUi by vm.conflicts.ui.collectAsStateWithLifecycle()
     val openConflicts = conflictsUi.entries.size   // the ones this device is part of, as the tab lists them
     // Shizuku help is a later task; until then the fix opens Shizuku itself, when it is installed.
@@ -103,6 +110,14 @@ private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
                 back = { activity.onBackPressedDispatcher.onBackPressed() },
             ),
         )
+        TAB_ACTIVITY -> {
+            // Visible: fetch now, and refresh on nudges until the tab changes.
+            DisposableEffect(Unit) { vm.activity.show(); onDispose { vm.activity.hide() } }
+            ActivityScreen(
+                activityUi, log, top,
+                ActivityActions(loadOlder = vm.activity::loadOlder, refresh = vm.activity::refresh, back = { tab = TAB_DEVICE }),
+            )
+        }
         TAB_CONFLICTS -> ConflictsScreen(
             conflictsUi, top,
             ConflictsActions(resolve = vm.conflicts::resolve, bulk = vm.conflicts::bulk, back = { tab = TAB_DEVICE }),

@@ -84,7 +84,7 @@ internal fun formatWhen(iso: String, zone: ZoneId): String = parseUtc(iso)?.let 
  * A server timestamp. The server writes DateTimeOffset ("…+00:00", up to seven fraction digits), which older
  * java.time (Instant.parse on Android before API 34) rejects; OffsetDateTime reads it everywhere.
  */
-private fun parseUtc(iso: String): Instant? = runCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
+internal fun parseUtc(iso: String): Instant? = runCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
 
 /**
  * One side per device: the server lists every open conflict version, and a device that kept uploading while the
