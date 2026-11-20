@@ -29,6 +29,7 @@
 ## Global Constraints
 
 **Visual system**
+- `EmuColors` must use the corrected hex values in spec §3 (ink3, wait, fault and the light diff-del ink were raised to pass 4.5:1), not any earlier draft values.
 - Colours come only from `EmuColors` (spec §3 tokens), in dark and light. The theme follows the system unless Settings overrides it (stored in `StateStore.settings.theme` as `"system"|"light"|"dark"`).
 - No Material styling shows: no ripples tinted with a brand colour, no elevation, no rounded cards, no FAB, no bottom navigation. Material 3 may be used only as plumbing (`MaterialTheme` wrapping text selection and colours from `EmuColors`). Its components are restyled through the `ui/kit` wrappers, never used raw on screens.
 - The spec §2 banned list applies. The only radius is 3 dp.

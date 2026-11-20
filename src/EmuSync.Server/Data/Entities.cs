@@ -30,6 +30,9 @@ public class Device
     /// <summary>When the Shizuku-off notification for the current off period was sent; cleared with ShizukuOffSinceUtc.</summary>
     public DateTimeOffset? ShizukuOffNotifiedUtc { get; set; }
     public DateTimeOffset? RevokedUtc { get; set; }
+    /// <summary>Emulator ids running at the last status report plus that report's time, as JSON ({at, ids}); read
+    /// through DeviceService.RunningEmulators.</summary>
+    public string? RunningEmulatorsJson { get; set; }
 }
 
 public class DeviceEmulator

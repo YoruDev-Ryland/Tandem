@@ -57,6 +57,25 @@ docker compose pull && docker compose up -d
 
 Database migrations run at startup. Back up before a major upgrade.
 
+## Develop the web UI
+
+The web UI is a Svelte app in `web/`. Run a server (the container above, on port 5100) and start the dev server, which
+proxies `/v1` and `/healthz` to it:
+
+```sh
+npm --prefix web install
+npm --prefix web run dev          # http://localhost:5173, proxies to http://localhost:5100
+npm --prefix web test && npm --prefix web run check && npm --prefix web run build
+```
+
+`web/scripts/screens.mjs` captures every page at 1440x900 and 390x844 in both themes into `design/screens/web/`:
+
+```sh
+EMUSYNC_EMAIL=you@example.com EMUSYNC_PASSWORD=... node web/scripts/screens.mjs http://localhost:5100
+```
+
+It uses `playwright-core` with a local Chromium (set `CHROMIUM` to its path if it is not the default Playwright cache).
+
 ## Admin commands
 
 The image has these commands on its path; run them with `docker exec`:

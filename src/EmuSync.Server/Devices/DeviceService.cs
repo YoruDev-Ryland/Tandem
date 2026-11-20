@@ -12,6 +12,40 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
 {
     public const int MaxGames = 20000;
     public const int MaxCores = 500;
+    public const int MaxRunningEmulators = 50;
+    /// <summary>The platform of devices an early build created when a browser signed in with a pairing code. They are
+    /// kept (never revoked automatically) but are not devices that sync, so device lists and game states leave them out.</summary>
+    public const string LegacyWebPlatform = "web";
+    /// <summary>A device without a status report for this long is offline: its running emulators read as empty. Other
+    /// requests (which refresh LastSeenUtc) do not count.</summary>
+    public static readonly TimeSpan OnlineWindow = TimeSpan.FromMinutes(2);
+
+    /// <summary>Stored in <see cref="Device.RunningEmulatorsJson"/>: the list and the time of the status report that sent it.</summary>
+    private sealed record RunningStatus(DateTimeOffset At, string[] Ids);
+
+    /// <summary>The device's running emulators; empty when its last status report is older than <see cref="OnlineWindow"/>
+    /// or Shizuku is off (the app cannot see the foreground app then). A value it cannot read (an older format, or
+    /// damaged) reads as empty too, so one bad row cannot fail every page that lists devices.</summary>
+    public static string[] RunningEmulators(string? json, bool? shizukuOk, DateTimeOffset now)
+    {
+        if (json is null || shizukuOk == false) return [];
+        RunningStatus? status;
+        try
+        {
+            status = JsonSerializer.Deserialize<RunningStatus>(json, Json);
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+        return status is null || now - status.At > OnlineWindow ? [] : status.Ids ?? [];
+    }
+
+    public static DeviceSummary Summary(Device d, Guid? currentDeviceId, DateTimeOffset now) =>
+        new(d.Id, d.Name, d.Platform, d.LastSeenUtc, d.ShizukuOk, d.Id == currentDeviceId,
+            RunningEmulators(d.RunningEmulatorsJson, d.ShizukuOk, now));
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     [GeneratedRegex(@"\A\{(INTERNAL|SD|EMU:[a-z0-9]+)\}\z")] // \z: "$" would also match before a trailing newline
     private static partial Regex RootToken();
@@ -40,6 +74,10 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         }
         device.ShizukuOk = request.ShizukuOk;
         device.LastSeenUtc = now;
+        // Ids this server does not know (a newer app) are dropped, not a reason to reject the whole report.
+        var running = (request.RunningEmulators ?? []).Where(id => id is not null && EmulatorIds.IsKnown(id))
+            .Distinct(StringComparer.Ordinal).ToArray();
+        device.RunningEmulatorsJson = running.Length > 0 ? JsonSerializer.Serialize(new RunningStatus(now, running), Json) : null;
 
         var emulators = request.Emulators ?? [];
         var roots = request.Roots ?? new Dictionary<string, string>();
@@ -91,6 +129,8 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
             if (e.Package is null || e.Version is null)
                 throw new ApiException(400, "bad_request", "Package and Version are required.");
         }
+        if (request.RunningEmulators is { Length: > MaxRunningEmulators })
+            throw new ApiException(400, "too_many", $"At most {MaxRunningEmulators} running emulators are allowed.");
         foreach (var (token, path) in request.Roots ?? new Dictionary<string, string>())
         {
             if (!RootToken().IsMatch(token))
@@ -155,7 +195,7 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         var device = await Owned(userId, id, ct);
         device.Name = trimmed;
         await db.SaveChangesAsync(ct);
-        return new DeviceSummary(device.Id, device.Name, device.Platform, device.LastSeenUtc, device.ShizukuOk, device.Id == currentDeviceId);
+        return Summary(device, currentDeviceId, time.GetUtcNow());
     }
 
     public async Task Revoke(Guid userId, Guid id, CancellationToken ct)

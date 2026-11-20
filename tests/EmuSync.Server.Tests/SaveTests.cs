@@ -357,7 +357,7 @@ public class SaveTests
         var (a, key) = await factory.Register("a@example.com");
         var (b, _) = await factory.PairSecondDevice(a, "B");
         var v1 = await Upload(a, Req(await Files(a, "v1"), null));
-        await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
         var c = await Upload(b, Req(await Files(b, "b"), v1.VersionId));
         var seen = Capture(factory);
 
@@ -374,7 +374,11 @@ public class SaveTests
         var conflict = versions.Single(v => v.Id == c.VersionId);
         Assert.Equal(ConflictReason.Concurrent, conflict.ConflictReason);
         Assert.True(conflict.Resolved);
-        Assert.All(versions, v => Assert.Null(v.Variant));
+        // Only the displaced head is kept aside, pinned and labelled.
+        var displaced = versions.Single(v => v.Id == v2.VersionId);
+        Assert.True(displaced.Pinned);
+        Assert.NotNull(displaced.Variant);
+        Assert.Equal(2, versions.Count(v => v.Variant is null));
         Assert.Equal(new SaveHeadChanged(key.UserId, v1.ItemId, c.VersionId), Assert.Single(seen));
 
         // Device B now bases on its own (head) version: accepted.
@@ -429,11 +433,11 @@ public class SaveTests
         Assert.Null(head.Variant);
         Assert.False(head.Pinned);
         var vb = versions.Single(v => v.Id == cb.VersionId);
-        Assert.Equal("Retroid 2026-11-20 08:05", vb.Variant);
+        Assert.Equal("From Retroid", vb.Variant);
         Assert.True(vb.Pinned);
         Assert.True(vb.Resolved);
         var vc = versions.Single(v => v.Id == cc.VersionId);
-        Assert.Equal("Ayn 2026-11-21 23:59", vc.Variant);
+        Assert.Equal("From Ayn", vc.Variant);
         Assert.True(vc.Pinned);
 
         // Keeping a conflict version as head labels the displaced head too, so neither is lost.
@@ -445,7 +449,7 @@ public class SaveTests
         Assert.Equal(cb2.VersionId, (await Item(factory, v1.ItemId)).HeadVersionId);
         Assert.Null(versions.Single(v => v.Id == cb2.VersionId).Variant);
         var displaced = versions.Single(v => v.Id == v2.VersionId);
-        Assert.Equal("Odin 2026-11-22 10:00", displaced.Variant);
+        Assert.Equal("From Odin", displaced.Variant);
         Assert.True(displaced.Pinned);
     }
 

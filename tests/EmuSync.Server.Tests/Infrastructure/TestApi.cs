@@ -68,4 +68,45 @@ public static class TestApi
     /// <summary>POST with the server's wire format (enums as strings).</summary>
     public static Task<HttpResponseMessage> PostJsonAsync<T>(this HttpClient client, string url, T body) =>
         client.PostAsync(url, JsonContent.Create(body, options: Json));
+
+    // ---- sync helpers ----
+
+    /// <summary>Uploads <paramref name="content"/> as a one-file save (data.dat) and returns the response.</summary>
+    public static async Task<SaveUploadResponse> UploadSave(this HttpClient device, string gameKey, string content, Guid? baseVersionId,
+        string emulatorId = "eden")
+    {
+        var manifest = await Fixtures.Manifest(device, ("data.dat", System.Text.Encoding.UTF8.GetBytes(content)));
+        var response = await device.PostJsonAsync("/v1/saves/upload",
+            new SaveUploadRequest(emulatorId, ItemKind.Save, gameKey, "", "", baseVersionId, manifest, null));
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"{response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+        return await response.ReadAsync<SaveUploadResponse>();
+    }
+
+    public static async Task Install(this HttpClient device, string gameKey, string emulatorId = "eden") =>
+        (await device.PutAsJsonAsync($"/v1/devices/me/installs/{emulatorId}",
+            new InstallsRequest([new InstalledGame(gameKey, null, null)]))).EnsureSuccessStatusCode();
+
+    public static Task<HttpResponseMessage> ReportStatus(this HttpClient device, string[]? runningEmulators) =>
+        device.PutAsJsonAsync("/v1/devices/me/status", new DeviceStatusRequest("android", "1.0", true, [],
+            new Dictionary<string, string>(), runningEmulators));
+
+    public static async Task<IReadOnlyList<DeliveryDto>> PendingDeliveries(this HttpClient device)
+    {
+        var response = await device.GetAsync("/v1/deliveries");
+        response.EnsureSuccessStatusCode();
+        return (await response.ReadAsync<DeliveryList>()).Items;
+    }
+
+    public static async Task AckApplied(this HttpClient device, Guid deliveryId) =>
+        (await device.PostJsonAsync($"/v1/deliveries/{deliveryId}/ack", new AckRequest(DeliveryResult.Applied, null)))
+            .EnsureSuccessStatusCode();
+
+    public static async Task<T> GetOk<T>(this HttpClient client, string url)
+    {
+        var response = await client.GetAsync(url);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"{response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+        return await response.ReadAsync<T>();
+    }
 }

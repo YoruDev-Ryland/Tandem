@@ -39,6 +39,18 @@ public sealed class PairingService(EmuSyncDbContext db, AccountService accounts,
     /// <summary>Consumes the code atomically and creates a device for its user.</summary>
     public async Task<DeviceKeyResponse> Redeem(string? rawCode, string? deviceName, string? platform, CancellationToken ct)
     {
+        var userId = await ConsumeCode(rawCode, ct);
+        var created = await accounts.CreateDevice(userId, deviceName, platform, ct);
+        var name = await db.Devices.AsNoTracking().Where(d => d.Id == created.DeviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "Device";
+        await activity.WriteAsync(userId, "device_paired", $"{name} paired", created.DeviceId);
+        return created;
+    }
+
+    /// <summary>Consumes the code for a browser sign-in. No device is created; returns the code's user.</summary>
+    public Task<Guid> RedeemForSession(string? rawCode, CancellationToken ct) => ConsumeCode(rawCode, ct);
+
+    private async Task<Guid> ConsumeCode(string? rawCode, CancellationToken ct)
+    {
         var hash = Secrets.Hash(Normalize(rawCode));
         var row = await db.PairingCodes.AsNoTracking().FirstOrDefaultAsync(c => c.CodeHash == hash, ct)
             ?? throw new ApiException(404, "code_not_found", "That pairing code does not exist.");
@@ -52,9 +64,6 @@ public sealed class PairingService(EmuSyncDbContext db, AccountService accounts,
             .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedUtc, now), ct);
         if (claimed == 0)
             throw new ApiException(410, "code_used", "That pairing code has already been used.");
-        var created = await accounts.CreateDevice(row.UserId, deviceName, platform, ct);
-        var name = await db.Devices.AsNoTracking().Where(d => d.Id == created.DeviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "Device";
-        await activity.WriteAsync(row.UserId, "device_paired", $"{name} paired", created.DeviceId);
-        return created;
+        return row.UserId;
     }
 }

@@ -21,10 +21,10 @@ public static class AccountEndpoints
         {
             if (!string.IsNullOrEmpty(request.PairingCode))
             {
-                var paired = await pairing.Redeem(request.PairingCode, string.IsNullOrWhiteSpace(request.DeviceName) ? "Web browser" : request.DeviceName, "web", ct);
-                var pairedToken = await accounts.CreateWebSession(paired.UserId, paired.DeviceId, ct);
+                var pairedUserId = await pairing.RedeemForSession(request.PairingCode, ct);
+                var pairedToken = await accounts.CreateWebSession(pairedUserId, null, ct);
                 WebSessionCookie.Append(http, pairedToken, time);
-                var info = await db.Users.AsNoTracking().Where(u => u.Id == paired.UserId)
+                var info = await db.Users.AsNoTracking().Where(u => u.Id == pairedUserId)
                     .Select(u => new AccountInfo(u.Id, u.Email, u.IsAdmin)).FirstAsync(ct);
                 return info;
             }

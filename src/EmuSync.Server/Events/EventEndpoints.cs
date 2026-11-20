@@ -12,6 +12,7 @@ public static class EventEndpoints
 {
     public const int DefaultLimit = 50;
     public const int MaxLimit = 200;
+    private static readonly TimeSpan SeenInterval = TimeSpan.FromSeconds(60);
 
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -20,18 +21,26 @@ public static class EventEndpoints
 
     public static IEndpointRouteBuilder MapEventEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/v1/events", async (HttpContext http, IEventHub hub) =>
+        app.MapGet("/v1/events", async (HttpContext http, IEventHub hub, EmuSyncDbContext db, TimeProvider time) =>
         {
             var ct = http.RequestAborted;
             await using var subscription = hub.Subscribe(http.User.UserId(), http.User.DeviceId(), ct); // registered before headers go out; disposed on any exit
             http.Response.Headers.ContentType = "text/event-stream";
             http.Response.Headers.CacheControl = "no-cache";
             http.Response.Headers["X-Accel-Buffering"] = "no";
+            var deviceId = http.User.DeviceId();
+            var lastTouch = time.GetUtcNow(); // device-key authentication stamped the connect
             try
             {
                 await http.Response.Body.FlushAsync(ct);
                 await foreach (var evt in subscription.Events.WithCancellation(ct))
                 {
+                    // An idle handheld only holds this stream open: its heartbeat keeps it "seen" (at most once a minute).
+                    if (evt.Type == "ping" && deviceId is { } id && time.GetUtcNow() - lastTouch >= SeenInterval)
+                    {
+                        lastTouch = time.GetUtcNow();
+                        await db.Devices.Where(d => d.Id == id).ExecuteUpdateAsync(u => u.SetProperty(d => d.LastSeenUtc, lastTouch), ct);
+                    }
                     var json = JsonSerializer.Serialize(new { type = evt.Type, topic = evt.Topic }, Wire);
                     await http.Response.WriteAsync($"event: {evt.Type}\ndata: {json}\n\n", ct);
                     await http.Response.Body.FlushAsync(ct);

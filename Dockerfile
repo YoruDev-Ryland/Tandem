@@ -14,13 +14,18 @@ RUN dotnet restore src/EmuSync.Server/EmuSync.Server.csproj -a "${TARGETARCH:-am
 COPY src/ src/
 RUN dotnet publish src/EmuSync.Server/EmuSync.Server.csproj -c Release -a "${TARGETARCH:-amd64}" --no-restore -o /out
 
-# web stage added by plan 4
-# It will build web/ and the runtime stage below will copy web/dist to /app/wwwroot (the server serves WEB_ROOT, which
-# defaults to wwwroot beside the app). Until then the server shows a "web app is not built" page.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /out/ ./
+# The server serves WEB_ROOT, which defaults to wwwroot beside the app.
+COPY --from=web /web/dist/ ./wwwroot/
 COPY docker/entrypoint.sh docker/admin-command.sh /app/docker/
 # curl for the healthcheck (the base image has none); setpriv, used to drop privileges, ships with util-linux.
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* \

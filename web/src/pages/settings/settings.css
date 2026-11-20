@@ -1,0 +1,101 @@
+/* Shared by the Settings sections. Colours come from the tokens only. */
+.sec {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 560px;
+}
+.sec.wide {
+  max-width: 880px;
+}
+.sec h2 {
+  margin: 0;
+  font: 600 22px/1.1 "Barlow Semi Condensed", sans-serif;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.sec h3 {
+  margin: 0;
+  font: 600 17px/1.1 "Barlow Semi Condensed", sans-serif;
+  color: var(--ink);
+}
+.sec form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.sec .note {
+  margin: 0;
+  color: var(--ink2);
+  font-size: 14px;
+}
+.sec .fault {
+  margin: 0;
+  color: var(--fault);
+  font-size: 14px;
+}
+.sec .done {
+  margin: 0;
+  color: var(--ink2);
+  font-size: 14px;
+}
+.sec .actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sec .check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  color: var(--ink);
+}
+.sec .check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--ink);
+}
+.sec .check input:focus-visible,
+.sec input[type="radio"]:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+.sec .mono {
+  font: 400 13px "JetBrains Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.sec .ink2 {
+  color: var(--ink2);
+}
+.sec .ink3 {
+  color: var(--ink3);
+}
+.sec ul.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sec ul.rows > li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 46px;
+  border-bottom: 1px solid var(--rule);
+}
+.sec fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sec legend {
+  padding: 0;
+  margin-bottom: 10px;
+  color: var(--ink2);
+  font-size: 14px;
+}

@@ -14,8 +14,11 @@ public enum SaveUploadStatus { Accepted, Unchanged, Conflict, Superseded }
 
 /// <param name="Core">For Kind=State it is part of the item identity; for Kind=Save it is only recorded on the version.</param>
 /// <param name="BaseVersionId">The last version this device saw for the item, or null if it never synced it.</param>
+/// <param name="Fresh">True when the device has forgotten what it knew of this item (it switched the emulator's
+/// variant, or signed in again), so its files may not descend from anything the server recorded for it: the server
+/// then takes BaseVersionId as sent, never the version it last recorded this device as holding.</param>
 public sealed record SaveUploadRequest(string EmulatorId, ItemKind Kind, string GameKey, string Slot, string Core,
-    Guid? BaseVersionId, IReadOnlyList<ManifestEntry> Manifest, string? DisplayName);
+    Guid? BaseVersionId, IReadOnlyList<ManifestEntry> Manifest, string? DisplayName, bool? Fresh = null);
 
 /// <param name="VersionId">The new (or matching) version. For Unchanged it is the head. For Superseded it is the
 /// existing settled version the content matched (no version is created); the device is then sent HeadVersionId.
@@ -24,7 +27,8 @@ public sealed record SaveUploadResponse(SaveUploadStatus Status, Guid ItemId, Gu
 
 public enum ResolveChoice { KeepVersion, KeepBoth }
 
-public sealed record ResolveConflictRequest(ResolveChoice Choice, Guid? KeepVersionId);
+/// <param name="VariantName">KeepBoth only: the label for the kept-aside version(s); null means "From {DeviceName}".</param>
+public sealed record ResolveConflictRequest(ResolveChoice Choice, Guid? KeepVersionId, string? VariantName = null);
 
 public enum FirstSyncChoice { UseDevice, UseServer }
 

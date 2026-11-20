@@ -84,8 +84,10 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
                 // The server may have recorded this device as holding the head without telling it (group creation,
                 // leaving a group, or a resolve made its files the head), so the device still names its older base.
                 // The server's own record, never the request, decides this: only then is the upload based on the head.
+                // A Fresh upload comes from a device that forgot what it knew (a variant switch, a new sign-in): its
+                // base is taken as sent.
                 var baseId = request.BaseVersionId;
-                if (head is not null && baseId != head.Id && config.AppliedVersionId == head.Id) baseId = head.Id;
+                if (head is not null && baseId != head.Id && request.Fresh != true && config.AppliedVersionId == head.Id) baseId = head.Id;
 
                 var version = await NewVersionAsync(bundle.Id, baseId, deviceId, ConfigSource.Device,
                     Manifests.ToJson(canonical), hash, canonical.Sum(e => e.Size), ct);
@@ -110,7 +112,8 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
 
         await events.Raise(new ConfigsChanged(userId), ct);
         if (opened is not null) await events.Raise(opened, ct);
-        if (response.Status is SaveUploadStatus.Accepted or SaveUploadStatus.Conflict)
+        // A retry of an upload that already opened a conflict creates nothing: only a new conflict version is logged.
+        if (response.Status == SaveUploadStatus.Accepted || opened is not null)
         {
             var device = await DeviceNameAsync(deviceId, ct);
             if (response.Status == SaveUploadStatus.Accepted)
@@ -424,7 +427,19 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
                         throw new ApiException(400, "same_device", "The source is the target's own config.");
                     (group, groupBundle) = await CreateGroupCoreAsync(userId, emulatorId, $"{emulatorId} group", seed, ct);
                 }
-                changed = await JoinCoreAsync(userId, groupBundle, targetId, ct) || ownerGroup is null;
+                // The group must carry the chosen version: when its head differs, that version's files become a new head.
+                var groupHead = await db.ConfigVersions.FindAsync([groupBundle.HeadVersionId!.Value], ct)
+                    ?? throw new InvalidOperationException("Group head version missing."); // FindAsync sees a just-created, unsaved head
+                var headChanged = groupHead.ManifestHash != source.Version.ManifestHash;
+                if (headChanged)
+                {
+                    if (groupBundle.OpenConflict)
+                        throw new ApiException(409, "conflict_open", "Resolve the group's open config conflict first.");
+                    var copy = await NewVersionAsync(groupBundle.Id, groupHead.Id, null, ConfigSource.Copy, source.Version.ManifestJson,
+                        source.Version.ManifestHash, source.Version.TotalSize, ct);
+                    groupBundle.HeadVersionId = copy.Id;
+                }
+                changed = await JoinCoreAsync(userId, groupBundle, targetId, ct) || ownerGroup is null || headChanged;
                 response = new ApplyConfigResponse(groupBundle.Id, groupBundle.HeadVersionId!.Value, group.Id);
             }
             else
@@ -521,7 +536,9 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
     private async Task<ConfigVersion> NewVersionAsync(Guid bundleId, Guid? baseId, Guid? deviceId, ConfigSource source,
         string manifestJson, string manifestHash, long totalSize, CancellationToken ct)
     {
-        var seq = (await db.ConfigVersions.Where(v => v.BundleId == bundleId).MaxAsync(v => (int?)v.Seq, ct) ?? 0) + 1;
+        // Versions added earlier in this unit of work are not in the database yet.
+        var pending = db.ConfigVersions.Local.Where(v => v.BundleId == bundleId).Select(v => (int?)v.Seq).Max();
+        var seq = Math.Max(await db.ConfigVersions.Where(v => v.BundleId == bundleId).MaxAsync(v => (int?)v.Seq, ct) ?? 0, pending ?? 0) + 1;
         var version = new ConfigVersion
         {
             Id = Guid.NewGuid(), BundleId = bundleId, Seq = seq, BaseVersionId = baseId, DeviceId = deviceId, Source = source,

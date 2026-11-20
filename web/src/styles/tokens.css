@@ -1,0 +1,77 @@
+/* Design tokens, spec section 3. Dark is the default; light follows the system or data-theme="light". */
+:root {
+  color-scheme: dark;
+  --bg: #121212;
+  --ink: #f2f2f0;
+  --ink2: #a3a3a0;
+  --ink3: #7e7e7b;
+  --rule: rgba(255, 255, 255, 0.07);
+  --rule2: rgba(255, 255, 255, 0.14);
+  --focus-bg: var(--ink);
+  --focus-ink: var(--bg);
+  --wait: #f0a030;
+  --fault: #ff6b55;
+  --glyph: #2a2a2a;
+  --diff-add: rgba(110, 170, 255, 0.1);
+  --diff-add-ink: #8ec0ff;
+  --diff-del: rgba(240, 160, 48, 0.1);
+  --diff-del-ink: #f0b060;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #ededea;
+    --ink: #141414;
+    --ink2: #55554f;
+    --ink3: #6b6b66;
+    --rule: rgba(0, 0, 0, 0.09);
+    --rule2: rgba(0, 0, 0, 0.18);
+    --wait: #9a5c00;
+    --fault: #c23824;
+    --glyph: #d6d6d1;
+    --diff-add: rgba(0, 103, 214, 0.08);
+    --diff-add-ink: #0057b8;
+    --diff-del: rgba(184, 110, 0, 0.1);
+    --diff-del-ink: #8c5200;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ededea;
+  --ink: #141414;
+  --ink2: #55554f;
+  --ink3: #6b6b66;
+  --rule: rgba(0, 0, 0, 0.09);
+  --rule2: rgba(0, 0, 0, 0.18);
+  --wait: #9a5c00;
+  --fault: #c23824;
+  --glyph: #d6d6d1;
+  --diff-add: rgba(0, 103, 214, 0.08);
+  --diff-add-ink: #0057b8;
+  --diff-del: rgba(184, 110, 0, 0.1);
+  --diff-del-ink: #8c5200;
+}
+
+/* A light island inside a dark page, such as the pairing QR. */
+[data-theme="light"]:not(:root) {
+  color-scheme: light;
+  --bg: #ededea;
+  --ink: #141414;
+  --ink2: #55554f;
+  --ink3: #6b6b66;
+  --rule: rgba(0, 0, 0, 0.09);
+  --rule2: rgba(0, 0, 0, 0.18);
+  --wait: #9a5c00;
+  --fault: #c23824;
+  --glyph: #d6d6d1;
+  --diff-add: rgba(0, 103, 214, 0.08);
+  --diff-add-ink: #0057b8;
+  --diff-del: rgba(184, 110, 0, 0.1);
+  --diff-del-ink: #8c5200;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}

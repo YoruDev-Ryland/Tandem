@@ -18,3 +18,4 @@ TestResults/
 *.md
 Dockerfile
 docker-compose.yml
+web/dist/

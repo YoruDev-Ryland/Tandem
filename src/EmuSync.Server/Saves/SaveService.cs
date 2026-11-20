@@ -21,6 +21,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     public const int MaxCore = 100;
     public const int MaxDisplayName = 300;
     public const int MaxBulkItems = 10000;
+    public const int MaxVariantName = 80;
 
     public async Task<SaveUploadResponse> UploadAsync(Guid userId, Guid? deviceId, SaveUploadRequest request, CancellationToken ct)
     {
@@ -83,8 +84,10 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 // The server may have recorded this device as holding the head without telling it (a resolve or a
                 // first-sync choice made its upload the head), so the device still names its older base. The
                 // server's own record, never the request, decides this: only then is the upload based on the head.
+                // A Fresh upload comes from a device that forgot what it knew (a variant switch, a new sign-in), so
+                // its files need not descend from that record: its base is taken as sent.
                 var baseId = request.BaseVersionId;
-                if (head is not null && baseId != head.Id && deviceId is Guid holder
+                if (head is not null && baseId != head.Id && request.Fresh != true && deviceId is Guid holder
                     && await db.DeviceItemStates.AnyAsync(s => s.DeviceId == holder && s.ItemId == item.Id && s.KnownVersionId == head.Id, ct))
                     baseId = head.Id;
 
@@ -119,7 +122,9 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         }
 
         if (evt is not null) await events.Raise(evt, ct);
-        if (response.Status is SaveUploadStatus.Accepted or SaveUploadStatus.Conflict)
+        // A retry of an upload that already opened a conflict answers Conflict again but creates nothing: only a new
+        // conflict version is logged, or every rescan of a device would add another conflict_opened row.
+        if (response.Status == SaveUploadStatus.Accepted || evt is ConflictOpened)
         {
             var device = deviceId is Guid dn ? await DeviceNameAsync(dn, ct) : "The web app";
             var what = request.Kind == ItemKind.Save ? "save" : "state";
@@ -149,6 +154,9 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     {
         if (!Enum.IsDefined(request.Choice))
             throw new ApiException(400, "bad_request", "Unknown choice.");
+        var variantName = string.IsNullOrWhiteSpace(request.VariantName) ? null : request.VariantName.Trim();
+        if (variantName is { Length: > MaxVariantName })
+            throw new ApiException(400, "bad_variant_name", $"Variant name must be at most {MaxVariantName} characters.");
 
         SaveHeadChanged evt;
         string emulatorId, gameKey, label;
@@ -173,7 +181,14 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 var losers = open.Where(v => v.Id != keep.Id).ToList();
                 if (item.HeadVersionId is Guid oldHead && oldHead != keep.Id && losers.All(v => v.Id != oldHead))
                     losers.Add(await db.SaveVersions.SingleAsync(v => v.Id == oldHead, ct));
-                await LabelVariantsAsync(losers, ct);
+                await LabelVariantsAsync(losers, ct, name => $"From {name}");
+                if (variantName is not null) foreach (var v in losers) v.Variant = variantName; // the user's own label wins
+            }
+
+            else if (item.HeadVersionId is Guid displacedId && displacedId != keep.Id && open.All(v => v.Id != displacedId))
+            {
+                // The displaced head stays as a pinned, labelled version so retention cannot prune it.
+                await LabelVariantsAsync([await db.SaveVersions.SingleAsync(v => v.Id == displacedId, ct)], ct, name => $"From {name}");
             }
 
             foreach (var v in open) v.Resolved = true;
@@ -326,14 +341,16 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     private IQueryable<SaveVersion> OpenConflicts(Guid itemId) =>
         db.SaveVersions.Where(v => v.ItemId == itemId && v.ConflictReason != null && !v.Resolved);
 
-    private async Task LabelVariantsAsync(List<SaveVersion> versions, CancellationToken ct)
+    /// <param name="label">Builds the label from the uploading device's name; by default "{name} {received}". An
+    /// existing label is kept.</param>
+    private async Task LabelVariantsAsync(List<SaveVersion> versions, CancellationToken ct, Func<string, string>? label = null)
     {
         var deviceIds = versions.Where(v => v.DeviceId is not null).Select(v => v.DeviceId!.Value).Distinct().ToList();
         var names = await db.Devices.Where(d => deviceIds.Contains(d.Id)).ToDictionaryAsync(d => d.Id, d => d.Name, ct);
         foreach (var v in versions)
         {
             var name = v.DeviceId is Guid id && names.TryGetValue(id, out var n) ? n : "Unknown device";
-            v.Variant ??= $"{name} {v.ReceivedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)}";
+            v.Variant ??= label?.Invoke(name) ?? $"{name} {v.ReceivedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)}";
             v.Pinned = true;
         }
     }
@@ -406,14 +423,20 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     /// <summary>
     /// After a resolve, the device that uploaded the winning version already holds it, so it needs no delivery.
     /// Callers only pass a winner that is one of the open conflict versions being resolved (a winner picked from
-    /// history says nothing about what its uploader holds now), and only when it is that device's latest upload.
+    /// history says nothing about what its uploader holds now), only when it is that device's latest upload, and only
+    /// while the device's known version is still the winner's base (or unset). If the device has since applied another
+    /// version its files are no longer the winner's, so marking the winner known would let a later upload based on
+    /// that version silently overwrite the resolved head.
     /// </summary>
     private async Task SetKnownForUploaderAsync(SaveVersion winner, CancellationToken ct)
     {
         if (winner.DeviceId is not Guid deviceId) return;
         var latest = await db.SaveVersions.Where(v => v.ItemId == winner.ItemId && v.DeviceId == deviceId)
             .OrderByDescending(v => v.Seq).Select(v => (Guid?)v.Id).FirstOrDefaultAsync(ct);
-        if (latest == winner.Id) await SetKnownAsync(deviceId, winner.ItemId, winner.Id, ct);
+        if (latest != winner.Id) return;
+        var known = await db.DeviceItemStates.Where(s => s.DeviceId == deviceId && s.ItemId == winner.ItemId)
+            .Select(s => (Guid?)s.KnownVersionId).FirstOrDefaultAsync(ct);
+        if (known is null || known == winner.BaseVersionId) await SetKnownAsync(deviceId, winner.ItemId, winner.Id, ct);
     }
 
     private async Task SetKnownAsync(Guid deviceId, Guid itemId, Guid versionId, CancellationToken ct)
