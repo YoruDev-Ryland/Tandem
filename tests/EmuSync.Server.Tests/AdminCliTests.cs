@@ -46,6 +46,19 @@ public class AdminCliTests
     }
 
     [Fact]
+    public async Task Cli_create_user_on_an_empty_server_makes_an_admin()
+    {
+        using var f = new ServerFactory();
+        var first = PasswordIn((await Cli(f, "create-user", "first@example.com")).Output);
+        var second = PasswordIn((await Cli(f, "create-user", "second@example.com")).Output);
+
+        var a = await (await (await f.WebLogin("first@example.com", first)).GetAsync("/v1/account")).ReadAsync<AccountInfo>();
+        var b = await (await (await f.WebLogin("second@example.com", second)).GetAsync("/v1/account")).ReadAsync<AccountInfo>();
+        Assert.True(a.IsAdmin);   // the first account is always admin
+        Assert.False(b.IsAdmin);
+    }
+
+    [Fact]
     public async Task Cli_reset_password_changes_it()
     {
         using var f = new ServerFactory();

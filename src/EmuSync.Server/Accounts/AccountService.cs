@@ -76,8 +76,10 @@ public sealed class AccountService(EmuSyncDbContext db, IOptions<ServerOptions> 
         }
     }
 
+    /// <summary>Creates an account. The first account on the server is always an admin.</summary>
     public async Task<User> CreateUser(string email, string password, bool isAdmin, CancellationToken ct)
     {
+        isAdmin = isAdmin || !await db.Users.AnyAsync(ct);
         if (await db.Users.AnyAsync(u => u.Email == email, ct))
             throw new ApiException(409, "email_taken", "An account with this email already exists.");
         var user = new User { Id = Guid.NewGuid(), Email = email, IsAdmin = isAdmin, CreatedUtc = time.GetUtcNow() };
