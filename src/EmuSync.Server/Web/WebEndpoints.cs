@@ -180,7 +180,7 @@ public static class WebEndpoints
             {
                 await using var content = new FileStream(f.Tmp, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
                 await store.PutAsync(userId, f.Hash, content, ct);
-                await blobs.RecordAsync(userId, f.Hash, f.Size, ct);
+                await blobs.ConfirmAsync(userId, f.Hash, f.Size, ct);
             }
             return Results.Ok(await saves.UploadAsync(userId, null,
                 new SaveUploadRequest(emulatorId, kind, gameKey, slot, core, head, manifest, null), ct));

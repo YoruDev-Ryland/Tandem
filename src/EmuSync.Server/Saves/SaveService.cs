@@ -38,6 +38,8 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         string label = request.GameKey;
         using (await locks.Acquire(userId, ct))
         {
+            // Again under the lock: the pruner (which holds it) may have removed an old unreferenced blob since.
+            await blobs.RequireSizesAsync(userId, manifest, ct);
             var itemId = await FindOrCreateItemAsync(userId, request.EmulatorId, request.Kind, request.GameKey, slot, itemCore, ct);
             await using var tx = await BeginAsync(ct);
             var item = await LoadItemForUpdateAsync(userId, itemId, ct)

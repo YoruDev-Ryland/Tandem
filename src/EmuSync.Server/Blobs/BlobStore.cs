@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using EmuSync.Server.Data;
 using EmuSync.Server.Http;
+using EmuSync.Server.Saves;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -103,18 +104,58 @@ public sealed class BlobStore(IOptions<ServerOptions> options) : IBlobStore
     }
 }
 
-public sealed class BlobService(EmuSyncDbContext db, TimeProvider time)
+/// <summary>
+/// The user's blob records. <see cref="UserBlob.CreatedUtc"/> is when the device last uploaded or was told it holds the
+/// blob: the pruner never deletes an unreferenced blob within an hour of that, because blobs are sent before the
+/// manifest that references them. The pruner deletes under the user's lock, so the steps here that must not interleave
+/// with it (confirm after a PUT, the missing check) take that lock too. Never call those while holding it.
+/// </summary>
+public sealed class BlobService(EmuSyncDbContext db, TimeProvider time, UserLocks locks, IBlobStore store)
 {
+    /// <summary>After <see cref="IBlobStore.PutAsync"/> (outside the lock): records the blob, or restarts its grace
+    /// period, under the user's lock, and only if the file is still there (the pruner may have removed an old copy
+    /// while the body streamed; the upload is then refused and the client sends it again).</summary>
+    public async Task ConfirmAsync(Guid userId, string hash, long size, CancellationToken ct = default)
+    {
+        using (await locks.Acquire(userId, ct))
+        {
+            if (!await store.ExistsAsync(userId, hash, ct))
+                throw new ApiException(503, "blob_retry", "The blob was removed while it was being uploaded; send it again.");
+            await RecordAsync(userId, hash, size, ct);
+        }
+    }
+
+    /// <summary>Records the blob, or restarts the grace period of an existing record.</summary>
     public async Task RecordAsync(Guid userId, string hash, long size, CancellationToken ct = default)
     {
-        if (await db.UserBlobs.AnyAsync(b => b.UserId == userId && b.Hash == hash, ct)) return;
-        db.UserBlobs.Add(new UserBlob { UserId = userId, Hash = hash, Size = size, CreatedUtc = time.GetUtcNow() });
+        var now = time.GetUtcNow();
+        if (await db.UserBlobs.Where(b => b.UserId == userId && b.Hash == hash)
+                .ExecuteUpdateAsync(s => s.SetProperty(b => b.CreatedUtc, now), ct) > 0) return;
+        db.UserBlobs.Add(new UserBlob { UserId = userId, Hash = hash, Size = size, CreatedUtc = now });
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException)
         {
             // Duplicate-key race: another request recorded the same blob first.
             db.ChangeTracker.Clear();
             if (!await db.UserBlobs.AnyAsync(b => b.UserId == userId && b.Hash == hash, ct)) throw;
+        }
+    }
+
+    /// <summary>The device-facing missing check: the hashes the user does not hold. Those it does hold get their
+    /// grace period restarted, since the device will now reference them without uploading them again.</summary>
+    public async Task<List<string>> CheckMissingAsync(Guid userId, IReadOnlyList<string> hashes, CancellationToken ct = default)
+    {
+        var wanted = hashes.Distinct().ToList();
+        using (await locks.Acquire(userId, ct))
+        {
+            var have = await db.UserBlobs.Where(b => b.UserId == userId && wanted.Contains(b.Hash)).Select(b => b.Hash).ToListAsync(ct);
+            if (have.Count > 0)
+            {
+                var now = time.GetUtcNow();
+                await db.UserBlobs.Where(b => b.UserId == userId && have.Contains(b.Hash))
+                    .ExecuteUpdateAsync(s => s.SetProperty(b => b.CreatedUtc, now), ct);
+            }
+            return wanted.Except(have).ToList();
         }
     }
 

@@ -11,6 +11,7 @@ using EmuSync.Server.Web;
 using EmuSync.Server.Http;
 using EmuSync.Server.Pairing;
 using EmuSync.Server.Saves;
+using EmuSync.Server.Retention;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -44,6 +45,8 @@ public static class ServerSetup
         builder.Services.AddScoped<VaultService>();
         builder.Services.AddScoped<WebQueryService>();
         builder.Services.AddHostedService<DeliveryHandlers>();
+        builder.Services.AddSingleton<Pruner>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Pruner>());
     }
 
     /// <summary>Builds the pipeline and maps endpoints. Each feature adds one line here.</summary>
@@ -72,6 +75,7 @@ public static class ServerSetup
         app.MapVaultEndpoints();
         app.MapEventEndpoints();
         app.MapWebEndpoints();
+        app.MapRetentionEndpoints();
         app.MapWebFallback();
     }
 }

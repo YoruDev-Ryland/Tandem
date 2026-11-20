@@ -34,6 +34,8 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
         ConfigUploadResponse response;
         using (await locks.Acquire(userId, ct))
         {
+            // Again under the lock: the pruner (which holds it) may have removed an old unreferenced blob since.
+            await blobs.RequireSizesAsync(userId, raw, ct);
             await using var tx = await BeginAsync(ct);
             var config = await db.DeviceConfigs.FirstOrDefaultAsync(c => c.DeviceId == deviceId && c.EmulatorId == emulatorId, ct);
             var bundle = config is null ? null

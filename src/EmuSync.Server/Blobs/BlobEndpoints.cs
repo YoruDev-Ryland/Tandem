@@ -18,7 +18,7 @@ public static class BlobEndpoints
             if (hashes.Count > MaxMissingHashes)
                 throw new ApiException(400, "too_many", $"At most {MaxMissingHashes} hashes per request.");
             foreach (var h in hashes) BlobHash.Require(h);
-            return new MissingBlobsResponse(await blobs.MissingAsync(http.User.UserId(), hashes, ct));
+            return new MissingBlobsResponse(await blobs.CheckMissingAsync(http.User.UserId(), hashes, ct));
         }).RequireAuthorization();
 
         app.MapPut("/v1/blobs/{hash}", async (string hash, HttpContext http, IBlobStore store, BlobService blobs,
@@ -41,7 +41,7 @@ public static class BlobEndpoints
             {
                 throw TooLarge();
             }
-            await blobs.RecordAsync(http.User.UserId(), hash, size, ct);
+            await blobs.ConfirmAsync(http.User.UserId(), hash, size, ct);
             return Results.NoContent();
         }).RequireAuthorization().DisableAntiforgery();
 

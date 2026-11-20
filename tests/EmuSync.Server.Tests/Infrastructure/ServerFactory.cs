@@ -16,6 +16,7 @@ public sealed class ServerFactory : WebApplicationFactory<Program>
     public Dictionary<string, string?> Settings { get; } = new()
     {
         ["EmuSync:AuthRequestsPerMinute"] = "10000",
+        ["EmuSync:EnablePruning"] = "false",
     };
 
     public FakeTimeProvider Time { get; } = new(DateTimeOffset.Parse("2026-11-19T12:00:00Z"));

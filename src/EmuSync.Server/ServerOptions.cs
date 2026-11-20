@@ -19,6 +19,9 @@ public sealed class ServerOptions
     public long MaxUploadBytes { get; set; } = 8L * 1024 * 1024 * 1024;
     public int AuthRequestsPerMinute { get; set; } = 10;
     public int EventHeartbeatSeconds { get; set; } = 25;
+    /// <summary>Runs the retention pruner in the background (on in production; the test factory turns it off).</summary>
+    public bool EnablePruning { get; set; } = true;
+    public int PruneIntervalMinutes { get; set; } = 60;
 
     public string ServerName
     {

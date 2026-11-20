@@ -41,6 +41,8 @@ public sealed class VaultService(EmuSyncDbContext db, BlobService blobs, UserLoc
         VaultUploadResponse response;
         using (await locks.Acquire(userId, ct))
         {
+            // Again under the lock: the pruner (which holds it) may have removed an old unreferenced blob since.
+            await blobs.RequireSizesAsync(userId, manifest, ct);
             // A lost insert race (unique violation) re-reads the item the winner created and continues.
             for (var attempt = 0; ; attempt++)
             {
