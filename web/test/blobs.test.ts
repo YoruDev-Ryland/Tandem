@@ -15,7 +15,31 @@ describe("hashFiles", () => {
   });
 });
 
+describe("hashFiles progress", () => {
+  it("reports (done, total) after each file", async () => {
+    const seen: [number, number][] = [];
+    await hashFiles([file("abc", "a"), file("abd", "b")], (n, t) => seen.push([n, t]));
+    expect(seen).toEqual([[1, 2], [2, 2]]);
+  });
+});
+
 describe("uploadMissingBlobs", () => {
+  it("retries after a failed PUT and sends only the one missing blob of two", async () => {
+    const files = [file("abc", "a.bin"), file("other", "b.bin")];
+    const entries = await hashFiles(files);
+    let fail = true;
+    const puts: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/v1/blobs/missing") return new Response(JSON.stringify({ missing: [entries[1].hash] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      puts.push(url);
+      return fail ? new Response("{}", { status: 500 }) : new Response(null, { status: 204 });
+    }));
+    await expect(uploadMissingBlobs(entries, files)).rejects.toThrow();
+    fail = false;
+    await uploadMissingBlobs(entries, files);
+    expect(puts).toEqual([`/v1/blobs/${entries[1].hash}`, `/v1/blobs/${entries[1].hash}`]);
+  });
+
   it("PUTs only the hashes the server reports missing", async () => {
     const files = [file("abc", "a.bin"), file("other", "b.bin")];
     const entries = await hashFiles(files);
