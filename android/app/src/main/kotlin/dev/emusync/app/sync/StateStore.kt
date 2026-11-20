@@ -40,18 +40,23 @@ class StateStore(private val file: File) {
         return try {
             json.decodeFromString(StateData.serializer(), file.readText())
         } catch (e: Exception) {
-            file.renameTo(File(file.parentFile, "${file.name}.corrupt-${System.currentTimeMillis()}"))
+            if (e !is kotlinx.serialization.SerializationException && e !is IllegalArgumentException) throw e
+            // Throws if the corrupt copy can't be preserved: never start empty and overwrite it.
+            Files.move(
+                file.toPath(),
+                File(file.absoluteFile.parentFile, "${file.name}.corrupt-${System.currentTimeMillis()}").toPath(),
+            )
             StateData()
         }
     }
 
     private fun mutate(f: (StateData) -> StateData): Unit = synchronized(lock) {
-        data = f(data)
+        val next = f(data)
         file.absoluteFile.parentFile?.mkdirs()
         val tmp = File(file.absoluteFile.parentFile, "${file.name}.tmp")
-        tmp.writeText(json.encodeToString(StateData.serializer(), data))
+        tmp.writeText(json.encodeToString(StateData.serializer(), next))
         Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-        Unit
+        data = next
     }
 
     fun get(itemKey: String): ItemState? = synchronized(lock) { data.items[itemKey] }

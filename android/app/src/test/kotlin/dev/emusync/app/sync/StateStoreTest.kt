@@ -39,4 +39,26 @@ class StateStoreTest {
         s.put("k", ItemState("a", null, null))
         assertNotNull(StateStore(f).get("k"))
     }
+
+    @Test fun corrupt_file_is_preserved_with_contents() {
+        val f = File(tmp.root, "state.json")
+        f.writeText("{not json")
+        StateStore(f)
+        val c = tmp.root.listFiles()!!.single { it.name.startsWith("state.json.corrupt-") }
+        assertEquals("{not json", c.readText())
+        assertFalse(f.exists())
+    }
+
+    @Test fun failed_write_does_not_change_memory() {
+        val dir = File(tmp.root, "ro").also { it.mkdirs() }
+        val f = File(dir, "state.json")
+        val s = StateStore(f)
+        s.put("k", ItemState("a", null, null))
+        // Make the temp path a non-empty directory so the write fails regardless of uid.
+        val t = File(dir, "state.json.tmp")
+        f.delete(); t.delete(); t.mkdirs(); File(t, "x").writeText("x")
+        assertThrows(Exception::class.java) { s.put("k2", ItemState("b", null, null)) }
+        assertNull(s.get("k2"))
+        assertNotNull(s.get("k"))
+    }
 }
