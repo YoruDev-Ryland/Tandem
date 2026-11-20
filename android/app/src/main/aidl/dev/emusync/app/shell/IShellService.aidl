@@ -7,10 +7,10 @@ interface IShellService {
     // Reserved id required by Shizuku for the UserService destroy hook.
     void destroy() = 16777114;
 
-    // JSON arrays of FileEntry. Empty array for a missing dir.
-    String listJson(String dir) = 1;
-    // Sorted recursive files only; page with offset/limit (limit <= 2000).
-    String walkJson(String dir, int offset, int limit) = 2;
+    // JSON array of FileEntry, sorted, paged by offset/limit. Empty array for a missing dir.
+    String listJson(String dir, int offset, int limit) = 1;
+    // Sorted recursive files only with path > afterPath ("" = start); limit <= 2000.
+    String walkJson(String dir, String afterPath, int limit) = 2;
     // JSON FileEntry, or empty string if missing.
     String statJson(String path) = 3;
     ParcelFileDescriptor openRead(String path) = 4;

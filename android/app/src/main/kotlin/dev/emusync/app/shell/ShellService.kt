@@ -6,6 +6,9 @@ import dev.emusync.app.fs.FileEntry
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.nio.file.NoSuchFileException
 import kotlin.system.exitProcess
 
 /** Runs in the Shizuku UserService process (uid 2000). */
@@ -15,37 +18,53 @@ class ShellService() : IShellService.Stub() {
     private val json = Json
     private var watcher: Watcher? = null
 
+    /** Checked exceptions must not escape onTransact; map them to ErrCodec-coded exceptions. */
+    private inline fun <T> guard(block: () -> T): T = try {
+        block()
+    } catch (e: UnsupportedOperationException) {
+        throw e
+    } catch (e: FileNotFoundException) {
+        throw ErrCodec.encode(ErrCodec.NOT_FOUND, e.message)
+    } catch (e: NoSuchFileException) {
+        throw ErrCodec.encode(ErrCodec.NOT_FOUND, e.message)
+    } catch (e: ProbeException) {
+        throw ErrCodec.encode(ErrCodec.PROBE, e.message)
+    } catch (e: IOException) {
+        throw ErrCodec.encode(ErrCodec.IO, e.message)
+    }
+
     override fun destroy() {
         watcher?.stop()
         exitProcess(0)
     }
 
-    override fun listJson(dir: String): String = json.encodeToString(ShellFsCore.list(dir))
+    override fun listJson(dir: String, offset: Int, limit: Int): String =
+        guard { json.encodeToString(ShellFsCore.listPage(dir, offset, limit)) }
 
-    override fun walkJson(dir: String, offset: Int, limit: Int): String {
-        val all = ShellFsCore.walk(dir)
-        val from = offset.coerceIn(0, all.size)
-        val to = (from.toLong() + limit.coerceAtLeast(0)).coerceAtMost(all.size.toLong()).toInt()
-        return json.encodeToString(all.subList(from, to))
-    }
+    override fun walkJson(dir: String, afterPath: String, limit: Int): String =
+        guard { json.encodeToString(ShellFsCore.walkPage(dir, afterPath, limit)) }
 
     override fun statJson(path: String): String =
-        ShellFsCore.stat(path)?.let { json.encodeToString<FileEntry>(it) } ?: ""
+        guard { ShellFsCore.stat(path)?.let { json.encodeToString<FileEntry>(it) } ?: "" }
 
     override fun openRead(path: String): ParcelFileDescriptor =
-        ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
+        guard { ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY) }
 
-    override fun writeAtomic(path: String, src: ParcelFileDescriptor) {
-        ParcelFileDescriptor.AutoCloseInputStream(src).use { ShellFsCore.writeAtomic(path, it) }
+    override fun writeAtomic(path: String, src: ParcelFileDescriptor) = guard {
+        ParcelFileDescriptor.AutoCloseInputStream(src).use { ins ->
+            // checkError() throws if the app side closed the pipe with an error (truncated source),
+            // which aborts before the rename so the target stays intact.
+            ShellFsCore.writeAtomic(path, ins) { src.checkError() }
+        }
     }
 
-    override fun delete(path: String): Boolean = ShellFsCore.delete(path)
+    override fun delete(path: String): Boolean = guard { ShellFsCore.delete(path) }
 
-    override fun copy(src: String, dst: String) = ShellFsCore.copy(src, dst)
+    override fun copy(src: String, dst: String) = guard { ShellFsCore.copy(src, dst) }
 
-    override fun isProcessAlive(pkg: String): Boolean = ProcessProbe.isProcessAlive(pkg)
+    override fun isProcessAlive(pkg: String): Boolean = guard { ProcessProbe.isProcessAlive(pkg) }
 
-    override fun installedPackagesCsv(): String = ProcessProbe.installedPackages().joinToString(",")
+    override fun installedPackagesCsv(): String = guard { ProcessProbe.installedPackages().joinToString(",") }
 
     @Synchronized
     override fun watch(dirs: Array<String>, l: IWatchListener) {
