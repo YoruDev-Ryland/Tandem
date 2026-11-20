@@ -21,7 +21,8 @@ interface IShellService {
     String installedPackagesCsv() = 9;
     void watch(in String[] dirs, IWatchListener l) = 10;
     void unwatchAll() = 11;
-    // True when a process named exactly one of pkgs, or "<pkg>:<sub>", is alive. Throws a PROBE error when the
-    // process list can't be trusted (fail closed).
-    boolean isAnyProcessAlive(in String[] pkgs) = 12;
+    // 1 (ProbeParse.REPLY_ALIVE) when a process named exactly one of pkgs, or "<pkg>:<sub>", is alive; 2 when none
+    // is. Any other value (0 is an old service's empty reply) is a probe failure. Throws a PROBE error when the process
+    // list can't be trusted (fail closed).
+    int isAnyProcessAlive(in String[] pkgs) = 12;
 }

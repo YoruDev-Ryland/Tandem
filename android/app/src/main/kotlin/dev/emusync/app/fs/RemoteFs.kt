@@ -4,6 +4,7 @@ import android.os.DeadObjectException
 import android.os.ParcelFileDescriptor
 import android.os.RemoteException
 import dev.emusync.app.shell.ErrCodec
+import dev.emusync.app.shell.ProbeParse
 import dev.emusync.app.shell.IShellService
 import dev.emusync.app.shell.IWatchListener
 import kotlinx.serialization.json.Json
@@ -109,7 +110,11 @@ class RemoteFs(private val service: () -> IShellService) : Fs {
 
     override fun delete(path: String) = call { it.delete(path) }
     override fun copy(src: String, dst: String) = call { it.copy(src, dst) }
-    override fun isAnyProcessAlive(pkgs: Collection<String>) = call { it.isAnyProcessAlive(pkgs.toTypedArray()) }
+    override fun isAnyProcessAlive(pkgs: Collection<String>): Boolean = call { s ->
+        val reply = s.isAnyProcessAlive(pkgs.toTypedArray())
+        // Fail closed: 0 is also what an old shell service without this call (UNKNOWN_TRANSACTION) reads as.
+        ProbeParse.decodeAlive(reply) ?: throw FsUnavailableException("probe failed: unexpected reply $reply")
+    }
 
     override fun installedPackages(): Set<String> = call {
         it.installedPackagesCsv().split(',').filter(String::isNotBlank).toSet()

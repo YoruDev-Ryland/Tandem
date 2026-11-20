@@ -141,6 +141,7 @@ class RetroArchModuleTest {
     @Test fun sorted_target_uses_this_devices_playlist_core() {
         withCfg()
         put(ra("saves/Gambatte/Other.srm")); put(ra("saves/Gambatte/Other2.srm"))   // more common, but not this game's core
+        put(ra("saves/mGBA/Third.srm"))
         put(ra("playlists/builtin/content_history.lpl"), """{"items":[
             {"path":"/x/Game.zip#Game (USA).gba","core_path":"/data/cores/mgba_libretro_android.so","core_name":"Nintendo - Game Boy Advance (mGBA)"}]}""")
         val d = detect()
@@ -155,6 +156,24 @@ class RetroArchModuleTest {
         put(ra("playlists/Nintendo - Game Boy Advance.lpl"), res("gba.lpl"))   // entries DETECT; default core mGBA
         assertEquals(ra("saves/MGBA"), m().targetDirFor(fs(), detect(), ItemKind.Save,
             "retroarch/Castlevania - Aria of Sorrow (USA)", "srm", "gpSP"))
+    }
+
+    @Test fun playlist_display_name_matches_existing_library_folder_only() {
+        withCfg()
+        put(ra("playlists/builtin/content_history.lpl"), """{"items":[{"path":"/x/Mario.sfc",
+            "core_path":"/data/cores/snes9x_libretro_android.so","core_name":"Nintendo - SNES / SFC (Snes9x - Current)"}]}""")
+        val d = detect()
+        assertEquals(ra("saves"), m().targetDirFor(fs(), d, ItemKind.Save, "retroarch/Mario", "srm", "Snes9x"))   // no core folders: root
+        assertFalse(File(ra("saves/Snes9x - Current")).exists())
+        put(ra("saves/Snes9x/Other.srm"))
+        assertEquals(ra("saves/Snes9x"), m().targetDirFor(fs(), d, ItemKind.Save, "retroarch/Mario", "srm", "bsnes"))
+    }
+
+    @Test fun playlist_core_without_existing_folder_falls_back_to_most_common() {
+        withCfg()
+        put(ra("saves/Gambatte/A.srm"))
+        put(ra("playlists/builtin/content_history.lpl"), """{"items":[{"path":"/x/Game.gba","core_name":"Nintendo - Game Boy Advance (mGBA)"}]}""")
+        assertEquals(ra("saves/Gambatte"), m().targetDirFor(fs(), detect(), ItemKind.Save, "retroarch/Game", "srm", "mGBA"))
     }
 
     @Test fun sorted_target_falls_back_to_most_common_local_core_folder() {

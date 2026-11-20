@@ -24,6 +24,12 @@ class ProcessProbeParseTest {
         assertFalse(ProbeParse.anyRunning(listOf("x"), emptyList()))
     }
 
+    @Test fun alive_reply_mapping_fails_closed_on_unknown_values() {
+        assertEquals(true, ProbeParse.decodeAlive(ProbeParse.encodeAlive(true)))
+        assertEquals(false, ProbeParse.decodeAlive(ProbeParse.encodeAlive(false)))
+        for (v in listOf(0, -1, 3, 42)) assertNull("reply $v", ProbeParse.decodeAlive(v))
+    }
+
     @Test fun process_name_is_first_cmdline_argument() {
         assertEquals("com.a:b", ProbeParse.processName("com.a:b\u0000\u0000".toByteArray()))
         assertEquals("/system/bin/init", ProbeParse.processName("/system/bin/init\u0000second_stage\u0000".toByteArray()))

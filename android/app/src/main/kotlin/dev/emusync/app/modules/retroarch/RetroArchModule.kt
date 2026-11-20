@@ -206,23 +206,32 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
     }
 
     /**
-     * Where a sorted save (never a state) for [base] goes on this device: (1) the core this device's playlists give the
-     * game (an entry's core, or its playlist's default), reusing an existing folder's spelling; (2) the core folder
-     * under [root] holding the most files; (3) [root] itself (unsorted).
+     * Where a sorted save (never a state) for [base] goes on this device: (1) the EXISTING core folder matching the
+     * core this device's playlists give the game (an entry's core or its playlist's default; by the core_name's
+     * "(…)" suffix, then the core_path stem); (2) the core folder under [root] holding the most files; (3) [root]
+     * itself (unsorted). Never creates a folder from a display name: RetroArch sorts by library_name, which the
+     * display name often differs from ("Snes9x - Current" vs "Snes9x").
      */
     private fun localCoreDir(fs: Fs, d: Detected, root: String, base: String, files: List<dev.emusync.app.fs.FileEntry>): String {
         val counts = files.mapNotNull { f -> f.path.removePrefix("$root/").takeIf { '/' in it }?.substringBefore('/') }
             .groupingBy { it }.eachCount()
-        fun existing(n: String) = counts.keys.firstOrNull { it.equals(n, true) }
+        fun existing(n: String) = norm(n).takeIf { it.isNotEmpty() }?.let { w -> counts.keys.firstOrNull { norm(it) == w } }
         for (e in playlists(fs, d)) {
             if (!contentBase(e.path).equals(base, true)) continue
             val libName = e.coreName?.let { coreFolder.find(it)?.groupValues?.get(1)?.trim() }?.takeIf { it.isNotEmpty() }
             val stem = e.core?.takeIf { it.isNotEmpty() && it != "DETECT" }
                 ?.let { name(it).removeSuffix(".so").removeSuffix("_libretro_android").removeSuffix("_libretro") }
-            val folder = libName?.let { existing(it) ?: it } ?: stem?.let { existing(it) } ?: continue
+            val folder = libName?.let { existing(it) } ?: stem?.let { existing(it) } ?: continue
             if (runCatching { Paths.requireSafeSegment(folder) }.isSuccess) return "$root/$folder"
         }
         val common = counts.entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key }).firstOrNull()
         return common?.let { "$root/${it.key}" } ?: root
+    }
+
+    /** Core folder / core name for matching: lowercase, without " - Current"/_libretro/_android suffixes or punctuation. */
+    private fun norm(n: String): String {
+        var s = n.trim().lowercase()
+        for (suffix in listOf(" - current", "_libretro_android", "_libretro", "_android")) s = s.removeSuffix(suffix)
+        return s.filter { it.isLetterOrDigit() }
     }
 }

@@ -8,6 +8,19 @@ object ProbeParse {
             .map { it.removePrefix("package:").trim() }
             .filter { it.isNotEmpty() }.toSet()
 
+    /** isAnyProcessAlive's binder reply: 0 is what an empty reply (an old service without the call) reads as. */
+    const val REPLY_ALIVE = 1
+    const val REPLY_NOT_ALIVE = 2
+
+    fun encodeAlive(alive: Boolean) = if (alive) REPLY_ALIVE else REPLY_NOT_ALIVE
+
+    /** True/false for a valid reply; null (a probe failure: fail closed) for anything else, including 0. */
+    fun decodeAlive(reply: Int): Boolean? = when (reply) {
+        REPLY_ALIVE -> true
+        REPLY_NOT_ALIVE -> false
+        else -> null
+    }
+
     /** The process name in a `/proc/<pid>/cmdline` (its first NUL-separated argument), or "" when empty. */
     fun processName(cmdline: ByteArray): String {
         val end = cmdline.indexOf(0).let { if (it < 0) cmdline.size else it }

@@ -54,9 +54,9 @@ class ShellService() : IShellService.Stub() {
 
     override fun copy(src: String, dst: String) = guard { ShellFsCore.copy(src, dst) }
 
-    override fun isAnyProcessAlive(pkgs: Array<String>): Boolean = guard {
+    override fun isAnyProcessAlive(pkgs: Array<String>): Int = guard {
         try {
-            ProcessProbe.isAnyProcessAlive(pkgs.toList())
+            ProbeParse.encodeAlive(ProcessProbe.isAnyProcessAlive(pkgs.toList()))
         } catch (e: RuntimeException) {
             throw ProbeException("process scan failed: ${e.javaClass.simpleName}: ${e.message}", e)   // fail closed
         }

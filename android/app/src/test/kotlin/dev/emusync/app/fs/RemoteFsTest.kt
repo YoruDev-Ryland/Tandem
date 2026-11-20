@@ -29,6 +29,17 @@ class RemoteFsTest {
         }
     }
 
+    private fun replying(v: Any): IShellService =
+        Proxy.newProxyInstance(IShellService::class.java.classLoader, arrayOf(IShellService::class.java)) { _, _, _ -> v } as IShellService
+
+    @Test fun alive_reply_decoded_and_unknown_reply_fails_closed() {
+        assertTrue(RemoteFs(replying(1)).isAnyProcessAlive(listOf("a")))
+        assertFalse(RemoteFs(replying(2)).isAnyProcessAlive(listOf("a")))
+        for (v in listOf(0, 7)) {
+            try { RemoteFs(replying(v)).isAnyProcessAlive(listOf("a")); fail("reply $v") } catch (e: FsUnavailableException) {}
+        }
+    }
+
     @Test fun coded_errors_keep_their_meaning() {
         assertTrue(statThrows(ErrCodec.encode(ErrCodec.NOT_FOUND, "gone")) is FileNotFoundException)
         assertTrue(statThrows(ErrCodec.encode(ErrCodec.PROBE, "p")) is FsUnavailableException)
