@@ -24,20 +24,24 @@ class LocalBackups(
         val present = files.filterValues { fs.exists(it) }
         if (present.isEmpty()) return null
         val itemDir = "$root/$emulatorId/$safeKey"
-        var t = clock()
-        while (fs.exists("$itemDir/$t")) t++   // two backups in the same millisecond
+        val newest = numbered(fs, itemDir).maxOfOrNull { it.first }
+        // Always sorts after every existing backup, even when the clock is behind their names.
+        var t = if (newest == null) clock() else maxOf(clock(), newest + 1)
+        while (fs.exists("$itemDir/$t")) t++
         val dir = "$itemDir/$t"
         for ((rel, abs) in present.toSortedMap()) fs.copy(abs, "$dir/$rel")
-        prune(fs, itemDir)
+        prune(fs, itemDir, keep = dir)
         return dir
     }
 
-    /** Deletes all but the newest [SyncConfig.backupsPerItem] millis-named dirs. Never touches other names. */
-    private fun prune(fs: Fs, itemDir: String) {
-        val dirs = fs.list(itemDir).filter { it.isDir }
+    private fun numbered(fs: Fs, itemDir: String): List<Pair<Long, String>> =
+        fs.list(itemDir).filter { it.isDir }
             .mapNotNull { e -> e.path.substringAfterLast('/').toLongOrNull()?.let { it to e.path } }
-            .sortedByDescending { it.first }
-        for ((_, path) in dirs.drop(SyncConfig.backupsPerItem)) fs.delete(path)
+
+    /** Keeps [keep] plus the newest [SyncConfig.backupsPerItem] - 1 other millis-named dirs. Never touches other names. */
+    private fun prune(fs: Fs, itemDir: String, keep: String) {
+        val others = numbered(fs, itemDir).filter { it.second != keep }.sortedByDescending { it.first }
+        for ((_, path) in others.drop(SyncConfig.backupsPerItem - 1)) fs.delete(path)
     }
 
     companion object {

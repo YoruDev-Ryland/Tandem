@@ -453,4 +453,21 @@ class SyncEngineTest {
         assertEquals("eden", api.installs.single().first)
         assertEquals("{EMU:eden}" to "$internal/Android/data/$pkg/files", api.statuses.single().roots.entries.first { it.key == "{EMU:eden}" }.toPair())
     }
+
+    @Test fun engine_skips_item_and_config_with_apply_marker() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        put("config/x.cfg", "c")
+        store.putApplyMarker(ApplyMarker(saveKey("GAME1"), "fake", "d1", null, "$root/saves/GAME1", emptyList()))
+        store.putApplyMarker(ApplyMarker(ItemKey.config("fake"), "fake", "d2", null, root, emptyList()))
+        val e = engine()
+        e.fullScan()
+        e.onEmulatorExited("fake")
+        assertTrue(api.saves.isEmpty())
+        assertTrue(api.configs.isEmpty())
+        store.clearApplyMarker(saveKey("GAME1"))
+        store.clearApplyMarker(ItemKey.config("fake"))
+        e.fullScan()
+        assertEquals(1, api.saves.size)
+        assertEquals(1, api.configs.size)
+    }
 }

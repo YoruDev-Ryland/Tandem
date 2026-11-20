@@ -20,6 +20,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -38,6 +39,7 @@ class DeliveryApplierTest {
         val blobs = HashMap<String, ByteArray>()
         val acks = mutableListOf<Pair<String, AckRequest>>()
         val ackErrors = HashMap<String, ApiException>()
+        var onGetBlob: (String) -> Unit = {}
         val saves = mutableListOf<SaveUploadRequest>()
         val configs = mutableListOf<ConfigUploadRequest>()
         private var n = 0
@@ -49,8 +51,10 @@ class DeliveryApplierTest {
         override suspend fun putInstalls(emulatorId: String, games: List<InstalledGame>) = InstallsResponse()
         override suspend fun missingBlobs(hashes: List<String>): List<String> = hashes
         override suspend fun putBlob(hash: String, size: Long, source: () -> InputStream) { source().use { it.readBytes() } }
-        override suspend fun getBlob(hash: String): InputStream =
-            ByteArrayInputStream(blobs[hash] ?: throw ApiException(404, "blob_not_found", "no blob"))
+        override suspend fun getBlob(hash: String): InputStream {
+            onGetBlob(hash)
+            return ByteArrayInputStream(blobs[hash] ?: throw ApiException(404, "blob_not_found", "no blob"))
+        }
         override suspend fun uploadSave(req: SaveUploadRequest): SaveUploadResponse {
             saves += req; n++
             return SaveUploadResponse(SaveUploadStatus.Accepted, "item", "up$n", "up$n")
@@ -75,11 +79,13 @@ class DeliveryApplierTest {
         override val emulatorId = "fake"
         override val packages = listOf("com.fake.emu")
         override val configRoots = setOf("data", "config")
+        val hidden = mutableSetOf<String>()   // game dirs saveItems doesn't report (untracked files)
+        var failTarget: RuntimeException? = null
         override fun detect(fs: Fs, settings: DeviceSettings): Detected? =
             if ("com.fake.emu" in fs.installedPackages()) Detected(emulatorId, "com.fake.emu", "", "$root/data",
                 mapOf("config" to "$root/cfg2", "secret" to "$root/secret")) else null
         override fun saveItems(fs: Fs, d: Detected): List<LocalItem> =
-            fs.list("$root/saves").filter { it.isDir }.map { e ->
+            fs.list("$root/saves").filter { it.isDir && it.path.substringAfterLast('/') !in hidden }.map { e ->
                 LocalItem(ItemKind.Save, e.path.substringAfterLast('/'), "", "core1", e.path,
                     fs.walk(e.path).map { it.path.removePrefix(e.path + "/") }, "Game ${e.path.substringAfterLast('/')}")
             }
@@ -93,6 +99,7 @@ class DeliveryApplierTest {
         }
         override fun targetDirFor(fs: Fs, d: Detected, kind: ItemKind, gameKey: String, slot: String, core: String): String {
             Paths.requireSafeSegment(gameKey)
+            failTarget?.let { throw it }
             return "$root/saves/$gameKey"
         }
     }
@@ -113,9 +120,11 @@ class DeliveryApplierTest {
 
     private fun fs() = LocalFs().apply { packages.add("com.fake.emu") }
 
+    private lateinit var engine: SyncEngine
+
     private fun applier(fs: LocalFs = fs(), modules: List<EmulatorModule> = listOf(module)): DeliveryApplier {
         val registry = ModuleRegistry(modules)
-        val engine = SyncEngine(fs, api, store, registry, none, clock = { now }, log = { logs += it },
+        engine = SyncEngine(fs, api, store, registry, none, clock = { now }, log = { logs += it },
             versionOf = { null }, appVersion = "0", shizukuOk = { true }, onConflict = {},
             storageRoot = tmp.newFolder().path)
         return DeliveryApplier(fs, api, store, registry, engine, notifier = { notes += it }, settings = none,
@@ -320,6 +329,7 @@ class DeliveryApplierTest {
         assertFalse(File(root, "saves/G1/c.sav").exists())
         assertEquals("old", store.get(saveKey("G1"))!!.knownVersionId)
         assertTrue(notes.none { it.startsWith("Restore failed") })
+        assertTrue(store.applyMarkers().isEmpty())
     }
 
     @Test fun restore_failure_notifies_with_backup_dir() = runBlocking {
@@ -520,6 +530,231 @@ class DeliveryApplierTest {
         assertEquals(setOf("data"), EdenModule().configRoots)
         assertEquals(setOf("data"), DolphinModule().configRoots)
         assertEquals(setOf("data"), Vita3kModule().configRoots)
+    }
+
+    // ---- fix round 1: write-time re-checks ----
+
+    @Test fun emulator_started_during_download_waits() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        val fs = fs()
+        api.onGetBlob = { fs.alive.add("com.fake.emu") }
+        val a = applier(fs)
+        val r = a.applyAll()
+        assertEquals(1, r.waitingForEmulator)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("old", read("saves/G1/a.sav"))
+        assertTrue(backupDirs("G1").isEmpty())
+        assertEquals(listOf("Close fake to receive the newer save for G1"), notes)
+        api.onGetBlob = {}
+        fs.alive.clear()
+        assertEquals(1, a.onEmulatorExited("fake").applied)
+        assertEquals("new", read("saves/G1/a.sav"))
+    }
+
+    @Test fun local_change_during_download_aborts_without_write() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        api.onGetBlob = { put("saves/G1/a.sav", "played") }
+        val a = applier()
+        val r = a.applyAll()
+        assertEquals(1, r.failed)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("played", read("saves/G1/a.sav"))
+        assertTrue(store.applyMarkers().isEmpty())
+        api.onGetBlob = {}
+        a.applyAll()   // the guard re-runs: the local change is uploaded and the delivery skipped
+        assertEquals(DeliveryResult.SkippedLocalChanged, ackOf("d1").result)
+        assertEquals("played", read("saves/G1/a.sav"))
+    }
+
+    @Test fun write_phase_holds_engine_lock() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        var lockedDuringWrite: Boolean? = null
+        var lockedDuringDownload: Boolean? = null
+        val fs = object : LocalFs() {
+            override fun writeAtomic(path: String, data: InputStream) {
+                if (path.startsWith(root)) lockedDuringWrite = runBlocking { withTimeoutOrNull(100) { engine.withLock { } } } == null
+                super.writeAtomic(path, data)
+            }
+        }.apply { packages.add("com.fake.emu") }
+        val a = applier(fs)
+        api.onGetBlob = { lockedDuringDownload = runBlocking { withTimeoutOrNull(100) { engine.withLock { } } } == null }
+        a.applyAll()
+        assertEquals(true, lockedDuringWrite)
+        assertEquals(false, lockedDuringDownload)
+        assertEquals("new", read("saves/G1/a.sav"))
+    }
+
+    @Test fun prune_keeps_new_backup_when_clock_behind() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        val dir = File(backupRoot, "fake/${ItemKey.safe(saveKey("G1"))}")
+        for (t in 1..5) File(dir, "${now + t * 100}/a.sav").apply { parentFile.mkdirs(); writeText("b$t") }
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        applier().applyAll()
+        val expected = listOf(now + 200, now + 300, now + 400, now + 500, now + 501).map { it.toString() }
+        assertEquals(expected, backupDirs("G1"))
+        assertEquals("old", File(dir, "${now + 501}/a.sav").readText())
+    }
+
+    @Test fun case_insensitive_match_writes_existing_spelling() = runBlocking {
+        put("saves/G1/Game.srm", "old"); put("saves/G1/Other.srm", "x"); markSynced("G1")
+        val d = saveDelivery("d1", "G1", "game.srm" to "new")
+        api.standing = listOf(d)
+        applier().applyAll()
+        assertEquals(DeliveryResult.Applied, ackOf("d1").result)
+        assertEquals("new", read("saves/G1/Game.srm"))
+        assertFalse(File(root, "saves/G1/game.srm").exists())
+        assertFalse(File(root, "saves/G1/Other.srm").exists())
+        // Known hash is over the spelling on disk, so the engine sees no local change.
+        val e = d.manifest[0]
+        assertEquals(Manifests.hash(listOf(ManifestEntry("Game.srm", e.hash, e.size))), store.get(saveKey("G1"))!!.knownManifestHash)
+    }
+
+    @Test fun case_insensitive_extras_not_deleted() = runBlocking {
+        put("saves/G1/SAVE.DAT", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "save.dat" to "new", "more.dat" to "m"))
+        applier().applyAll()
+        assertEquals("new", read("saves/G1/SAVE.DAT"))
+        assertEquals("m", read("saves/G1/more.dat"))
+    }
+
+    @Test fun case_variant_local_file_never_deleted_as_extra() = runBlocking {
+        // Two local spellings (possible only on case-sensitive storage): neither is deleted as an "extra".
+        put("saves/G1/Game.srm", "one"); put("saves/G1/GAME.srm", "two"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "game.srm" to "new"))
+        applier().applyAll()
+        assertEquals(DeliveryResult.Applied, ackOf("d1").result)
+        assertTrue(File(root, "saves/G1/Game.srm").exists())
+        assertTrue(File(root, "saves/G1/GAME.srm").exists())
+    }
+
+    @Test fun case_duplicate_paths_rejected() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "A.sav" to "one", "a.sav" to "two"))
+        applier().applyAll()
+        assertEquals(AckRequest(DeliveryResult.Failed, "bad manifest: duplicate path"), ackOf("d1"))
+        assertEquals("old", read("saves/G1/a.sav"))
+    }
+
+    @Test fun untracked_identical_file_acks_applied() = runBlocking {
+        put("saves/G1/a.sav", "same"); module.hidden += "G1"
+        val d = saveDelivery("d1", "G1", "a.sav" to "same", version = "v3")
+        api.standing = listOf(d)
+        val fs = object : LocalFs() {
+            override fun writeAtomic(path: String, data: InputStream) = throw AssertionError("wrote $path")
+        }.apply { packages.add("com.fake.emu") }
+        assertEquals(1, applier(fs).applyAll().applied)
+        assertEquals(DeliveryResult.Applied, ackOf("d1").result)
+        assertEquals("v3", store.get(saveKey("G1"))!!.knownVersionId)
+    }
+
+    @Test fun untracked_different_file_fails_and_notifies() = runBlocking {
+        put("saves/G1/a.sav", "unsynced"); module.hidden += "G1"
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "theirs"))
+        applier().applyAll()
+        assertEquals(AckRequest(DeliveryResult.Failed, "untracked local file at target"), ackOf("d1"))
+        assertEquals("unsynced", read("saves/G1/a.sav"))
+        assertTrue(notes.contains("A file for G1 exists here that EmuSync hasn't synced; not overwriting."))
+    }
+
+    @Test fun unexpected_exception_acks_failed_and_continues() = runBlocking {
+        module.failTarget = IllegalStateException("module bug")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "x"))
+        val a = applier()
+        assertEquals(1, a.applyAll().failed)
+        assertEquals(DeliveryResult.Failed, ackOf("d1").result)
+        assertTrue(ackOf("d1").detail!!.contains("module bug"))
+        module.failTarget = null
+        put("saves/G2/a.sav", "old"); markSynced("G2")
+        api.standing = listOf(saveDelivery("d2", "G2", "a.sav" to "new"))
+        assertEquals(1, a.applyAll().applied)
+    }
+
+    // ---- fix round 1: apply markers ----
+
+    private fun failingRestoreFs() = object : LocalFs() {
+        var failWrites = true
+        var failRestore = true
+        override fun writeAtomic(path: String, data: InputStream) {
+            if (failWrites && path.endsWith("/c.sav")) throw IOException("disk full")
+            super.writeAtomic(path, data)
+        }
+        override fun copy(src: String, dst: String) {
+            if (failRestore && src.startsWith(backupRoot)) throw IOException("restore broke")
+            super.copy(src, dst)
+        }
+    }.apply { packages.add("com.fake.emu") }
+
+    @Test fun marker_recovered_on_next_pass() = runBlocking {
+        put("saves/G1/a.sav", "half-new"); put("saves/G1/b.sav", "created")
+        val bdir = File(backupRoot, "crash/a.sav").apply { parentFile.mkdirs(); writeText("old") }.parentFile.path
+        val abs = "$root/saves/G1"
+        store.putApplyMarker(ApplyMarker(saveKey("G1"), "fake", "d0", bdir, abs, listOf("$abs/b.sav"),
+            mapOf("a.sav" to "$abs/a.sav"), "Game G1"))
+        applier().applyAll()
+        assertEquals("old", read("saves/G1/a.sav"))
+        assertFalse(File(root, "saves/G1/b.sav").exists())
+        assertTrue(store.applyMarkers().isEmpty())
+    }
+
+    @Test fun marker_recovery_waits_while_emulator_runs() = runBlocking {
+        put("saves/G1/a.sav", "half-new")
+        val bdir = File(backupRoot, "crash/a.sav").apply { parentFile.mkdirs(); writeText("old") }.parentFile.path
+        val abs = "$root/saves/G1"
+        store.putApplyMarker(ApplyMarker(saveKey("G1"), "fake", "d0", bdir, abs, emptyList(), mapOf("a.sav" to "$abs/a.sav")))
+        val fs = fs().apply { alive.add("com.fake.emu") }
+        val a = applier(fs)
+        a.applyAll()
+        assertEquals("half-new", read("saves/G1/a.sav"))
+        assertEquals(1, store.applyMarkers().size)
+        fs.alive.clear()
+        a.onEmulatorExited("fake")
+        assertEquals("old", read("saves/G1/a.sav"))
+        assertTrue(store.applyMarkers().isEmpty())
+    }
+
+    @Test fun failed_restore_keeps_marker() = runBlocking {
+        put("saves/G1/a.sav", "old-a"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new-a", "c.sav" to "new-c"))
+        val fs = failingRestoreFs()
+        val a = applier(fs)
+        a.applyAll()
+        assertEquals(DeliveryResult.Failed, ackOf("d1").result)
+        val mk = store.applyMarker(saveKey("G1"))!!
+        assertEquals("d1", mk.deliveryId)
+        assertNotNull(mk.backupDir)
+        a.applyAll()   // recovery still fails: marker kept
+        assertNotNull(store.applyMarker(saveKey("G1")))
+        fs.failRestore = false
+        a.applyAll()   // recovery succeeds
+        assertNull(store.applyMarker(saveKey("G1")))
+        assertEquals("old-a", read("saves/G1/a.sav"))
+    }
+
+    @Test fun delivery_waits_while_marker_live() = runBlocking {
+        put("saves/G1/a.sav", "old-a"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new-a", "c.sav" to "new-c"))
+        val fs = failingRestoreFs()
+        val a = applier(fs)
+        a.applyAll()
+        fs.failWrites = false
+        api.standing = listOf(saveDelivery("d2", "G1", "a.sav" to "newer"))
+        a.applyAll()
+        assertTrue(api.acks.none { it.first == "d2" })
+        assertNotEquals("newer", read("saves/G1/a.sav"))
+    }
+
+    @Test fun engine_does_not_upload_item_with_marker() = runBlocking {
+        put("saves/G1/a.sav", "local")
+        applier()
+        store.putApplyMarker(ApplyMarker(saveKey("G1"), "fake", "d0", null, "$root/saves/G1", emptyList()))
+        assertNull(engine.upload(module, module.detect(fs(), none)!!, module.saveItems(fs(), module.detect(fs(), none)!!)[0]))
+        assertTrue(api.saves.isEmpty())
+        store.clearApplyMarker(saveKey("G1"))
+        assertNotNull(engine.upload(module, module.detect(fs(), none)!!, module.saveItems(fs(), module.detect(fs(), none)!!)[0]))
+        assertEquals(1, api.saves.size)
     }
 
     // ---- integration ----

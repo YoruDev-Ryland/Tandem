@@ -184,12 +184,19 @@ class SyncEngine(
     suspend fun uploadConfig(module: EmulatorModule, detected: Detected): SaveUploadStatus? =
         mutex.withLock { uploadConfigBundle(module, detected) }
 
+    /** Runs [block] under the engine's lock (non-reentrant: [block] must not call the engine's public suspend functions). */
+    suspend fun <T> withLock(block: suspend () -> T): T = mutex.withLock { block() }
+
     // ---- uploads ----
 
     private suspend fun uploadItem(m: EmulatorModule, d: Detected, item: LocalItem): SaveUploadStatus? {
         val id = m.emulatorId
         val key = storeKey(id, item)
         val name = "$id/${item.kind}/${item.gameKey}" + (if (item.slot.isNotEmpty()) "#${item.slot}" else "")
+        if (store.applyMarker(key) != null) {
+            log("$name: delivery being applied or awaiting restore, skipped")
+            return null
+        }
         val seq0 = synchronized(ev) { marks[key] }
         fun defer(why: String): SaveUploadStatus? {
             synchronized(ev) { tracked[key] = Tracked(m, d, item); dirty[key] = clock() }
@@ -230,6 +237,10 @@ class SyncEngine(
     private suspend fun uploadConfigBundle(m: EmulatorModule, d: Detected): SaveUploadStatus? {
         val id = m.emulatorId
         val name = "$id/config"
+        if (store.applyMarker(ItemKey.config(id)) != null) {
+            log("$name: delivery being applied or awaiting restore, skipped")
+            return null
+        }
         val files = moduleCall(m, "configBundle") { m.configBundle(fs, d).files } ?: return null
         val built = buildOrNull(name, files.entries.map { it.key to it.value }, rejectFresh = false) as Built? ?: return null
         if (!stable(built)) {

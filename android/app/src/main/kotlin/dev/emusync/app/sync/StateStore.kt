@@ -17,6 +17,24 @@ data class ConfigState(
     val lastUploadedHash: String?,
 )
 
+/**
+ * A delivery write in progress for [storeKey]. Written before the first file write and cleared atomically with the
+ * state update; a live marker means the item may be half-written and must be restored from [backupDir].
+ * [restore] maps backup-relative paths to the absolute files they came from; [newFiles] are absolute paths the
+ * delivery created.
+ */
+@Serializable
+data class ApplyMarker(
+    val storeKey: String,
+    val emulatorId: String,
+    val deliveryId: String,
+    val backupDir: String?,
+    val targetDir: String,
+    val newFiles: List<String>,
+    val restore: Map<String, String> = emptyMap(),
+    val name: String = storeKey,
+)
+
 @Serializable
 data class DeviceSettingsData(val romDirs: List<String> = emptyList(), val overrides: Map<String, String> = emptyMap())
 
@@ -28,6 +46,7 @@ private data class StateData(
     val serverUrl: String? = null,
     val deviceId: String? = null,
     val settings: DeviceSettingsData = DeviceSettingsData(),
+    val applying: Map<String, ApplyMarker> = emptyMap(),
 )
 
 class StateStore(private val file: File) {
@@ -63,6 +82,21 @@ class StateStore(private val file: File) {
     fun put(itemKey: String, s: ItemState) = mutate { it.copy(items = it.items + (itemKey to s)) }
     fun configState(emulatorId: String): ConfigState? = synchronized(lock) { data.configs[emulatorId] }
     fun putConfigState(emulatorId: String, s: ConfigState) = mutate { it.copy(configs = it.configs + (emulatorId to s)) }
+
+    fun applyMarker(key: String): ApplyMarker? = synchronized(lock) { data.applying[key] }
+    fun applyMarkers(): Map<String, ApplyMarker> = synchronized(lock) { data.applying }
+    fun putApplyMarker(m: ApplyMarker) = mutate { it.copy(applying = it.applying + (m.storeKey to m)) }
+    fun clearApplyMarker(key: String) = mutate { it.copy(applying = it.applying - key) }
+
+    /** Stores the applied state and clears the marker in one atomic write. */
+    fun finishApply(markerKey: String, item: Pair<String, ItemState>? = null, config: Pair<String, ConfigState>? = null) =
+        mutate {
+            it.copy(
+                applying = it.applying - markerKey,
+                items = if (item != null) it.items + item else it.items,
+                configs = if (config != null) it.configs + config else it.configs,
+            )
+        }
 
     var deviceKey: String?
         get() = synchronized(lock) { data.deviceKey }

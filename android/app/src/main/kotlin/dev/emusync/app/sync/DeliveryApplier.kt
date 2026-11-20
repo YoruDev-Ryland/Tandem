@@ -12,6 +12,8 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.Locale
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -21,12 +23,18 @@ data class ApplyReport(val applied: Int, val skipped: Int, val failed: Int, val 
  * Applies server deliveries (saves, config bundles, vault files) to this device.
  *
  * Safety rules, in order: never write while the emulator runs; never overwrite a local item whose content differs
- * from what was last synced (upload it instead); validate every path; verify every blob before touching anything;
- * back up before overwriting; on a failed write restore the backup and remove files this delivery created.
+ * from what was last synced (upload it instead) or an untracked file that differs; validate every path; verify every
+ * blob before touching anything; back up before overwriting; on a failed write restore the backup and remove files
+ * this delivery created.
+ *
+ * Write phase: the running check, the local-content re-check, backup, writes, deletes and the state update run under
+ * [SyncEngine.withLock] (never across downloads or engine uploads), with a persisted [ApplyMarker] from before the
+ * first write until the state update. Markers left by a crash or a failed restore are recovered at the start of
+ * every pass; while one is live, the engine doesn't upload that item and deliveries for it wait.
  *
  * Errors: [FsUnavailableException] stops the pass with nothing acked for the delivery in flight and is rethrown.
- * Permanent problems ack `Failed(detail)`. Transient ones (network, local read errors) leave the delivery un-acked
- * so the server re-offers it next pass; they count as failed in the report.
+ * Permanent problems ack `Failed(detail)`. Transient ones (network, local read errors, content that changed during
+ * the download) leave the delivery un-acked so the server re-offers it; they count as failed in the report.
  */
 class DeliveryApplier(
     private val fs: Fs,
@@ -47,29 +55,43 @@ class DeliveryApplier(
     private class Reject(val detail: String) : Exception(detail)
     /** Leave un-acked; the server re-offers it. */
     private class NoAck(msg: String) : Exception(msg)
+    /** The emulator started before the write phase. */
+    private class StartedRunning : Exception()
 
-    /** One write job: delivered entries with their absolute targets, plus the local files they replace. */
+    /** One delivered file: [rel] is the spelling written (an existing local file's spelling when it matches). */
+    private class Planned(val entry: ManifestEntry, val rel: String, val abs: String, val matched: Boolean)
+
     private class Target(
         val name: String,
+        val markerKey: String,
         val backupId: String,
         val safeKey: String,
-        val files: List<Pair<ManifestEntry, String>>,   // delivered entry -> absolute path
-        val local: Map<String, String>,                 // current local files: rel -> absolute
-        val deletable: Set<String>,                     // local rels to delete when absent from the delivery
+        val pkg: String?,                     // re-probed before writing; null for vault files
+        val targetDir: String,
+        val files: List<Planned>,
+        val local: Map<String, String>,       // current local files: rel -> absolute
+        val deletable: Set<String>,           // local rels to delete when absent from the delivery
+        val guardHash: String?,               // local manifest hash at guard time; null when no local files
+        val untrackedOk: Set<String>,         // untracked absolute paths verified identical at guard time
+        val checkUntracked: Boolean,
+        val item: Pair<String, ItemState>? = null,
+        val config: Pair<String, ConfigState>? = null,
     )
 
     private val mutex = Mutex()
     private val pendingWhileRunning = HashMap<String, String>()   // delivery id -> emulatorId
     private val notifiedRunning = HashSet<String>()                // delivery ids already notified
+    private val notifiedRecovery = HashSet<String>()               // marker keys whose failed recovery was notified
 
     // ---- public API ----
 
-    /** Applies every pending delivery, refetching after each pass (up to [MAX_PASSES]) until none are new. */
+    /** Recovers interrupted writes, then applies pending deliveries, refetching up to [MAX_PASSES] times. */
     suspend fun applyAll(): ApplyReport = mutex.withLock { pass { true } }
 
-    /** Retries deliveries held back while [emulatorId] ran, against the server's current list. */
+    /** Retries deliveries (and interrupted writes) held back while [emulatorId] ran, against the server's list. */
     suspend fun onEmulatorExited(emulatorId: String): ApplyReport = mutex.withLock {
-        if (pendingWhileRunning.values.none { it == emulatorId }) return@withLock ApplyReport(0, 0, 0, 0)
+        val hasMarker = store.applyMarkers().values.any { it.emulatorId == emulatorId }
+        if (!hasMarker && pendingWhileRunning.values.none { it == emulatorId }) return@withLock ApplyReport(0, 0, 0, 0)
         pendingWhileRunning.values.removeAll { it == emulatorId }
         pass { it.emulatorId == emulatorId }
     }
@@ -77,6 +99,7 @@ class DeliveryApplier(
     // ---- loop ----
 
     private suspend fun pass(filter: (DeliveryDto) -> Boolean): ApplyReport {
+        recoverMarkers()
         val seen = HashSet<String>()
         var applied = 0; var skipped = 0; var failed = 0; var waiting = 0
         for (i in 1..MAX_PASSES) {
@@ -111,20 +134,38 @@ class DeliveryApplier(
     } catch (n: NoAck) {
         log("delivery ${d.id}: not applied, will retry (${n.message})")
         Outcome.Failed
+    } catch (e: FsUnavailableException) {
+        throw e
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: IOException) {
+        log("delivery ${d.id}: io error, will retry (${e.message})")
+        Outcome.Failed
+    } catch (e: Exception) {
+        val detail = "internal error: ${e.javaClass.simpleName}: ${e.message}"
+        log("delivery ${d.id}: $detail")
+        ack(d, DeliveryResult.Failed, detail)
+        Outcome.Failed
     }
 
     private suspend fun applyEmulator(d: DeliveryDto): Outcome {
         val m = registry.byId(d.emulatorId) ?: throw Reject("emulator not found")
         val det = moduleCall { m.detect(fs, settings) } ?: throw Reject("emulator not found")
-        if (fs.isProcessAlive(det.pkg)) {
-            pendingWhileRunning[d.id] = m.emulatorId
-            if (notifiedRunning.add(d.id)) notifier(
-                if (d.kind == DeliveryKind.Config) "Close ${m.emulatorId} to receive the newer settings"
-                else "Close ${m.emulatorId} to receive the newer save for ${d.gameKey}")
-            return Outcome.Waiting
-        }
+        if (fs.isProcessAlive(det.pkg)) return waiting(d, m)
         pendingWhileRunning.remove(d.id)
-        return if (d.kind == DeliveryKind.Config) applyConfig(d, m, det) else applySave(d, m, det)
+        return try {
+            if (d.kind == DeliveryKind.Config) applyConfig(d, m, det) else applySave(d, m, det)
+        } catch (e: StartedRunning) {
+            waiting(d, m)
+        }
+    }
+
+    private fun waiting(d: DeliveryDto, m: EmulatorModule): Outcome {
+        pendingWhileRunning[d.id] = m.emulatorId
+        if (notifiedRunning.add(d.id)) notifier(
+            if (d.kind == DeliveryKind.Config) "Close ${m.emulatorId} to receive the newer settings"
+            else "Close ${m.emulatorId} to receive the newer save for ${d.gameKey}")
+        return Outcome.Waiting
     }
 
     // ---- kinds ----
@@ -134,33 +175,46 @@ class DeliveryApplier(
         val gameKey = d.gameKey ?: throw Reject("bad delivery: no game key")
         validate(d.manifest)
         val key = ItemKey.of(m.emulatorId, kind.name, gameKey, d.slotOrEmpty, if (kind == ItemKind.Save) "" else d.coreOrEmpty)
+        if (store.applyMarker(key) != null) throw NoAck("an earlier write for $key awaits restore")
         val local = moduleCall { engine.currentItems(m, det) }
             .firstOrNull { storeKey(m.emulatorId, it) == key }?.takeIf { it.files.isNotEmpty() }
+        val name = local?.displayName ?: gameKey
+        val dir = local?.baseDir ?: moduleCall { m.targetDirFor(fs, det, kind, gameKey, d.slotOrEmpty, d.coreOrEmpty) }
+        val localFiles = local?.files?.associateWith { "$dir/$it" } ?: emptyMap()
+        val byLower = localFiles.keys.associateBy { lower(it) }
+        val planned = d.manifest.map { e ->
+            val match = byLower[lower(e.path)]
+            if (match != null) Planned(e, match, "$dir/$match", true) else Planned(e, e.path, "$dir/${e.path}", false)
+        }
+        val written = Manifests.hash(planned.map { ManifestEntry(it.rel, it.entry.hash, it.entry.size) })
         val known = store.get(key)
-        val delivered = Manifests.hash(d.manifest)
+        val state = key to ItemState(d.versionId, written, known?.lastUploadedHash)
+
+        var guardHash: String? = null
         if (local != null) {
-            val localHash = localHash(local.files.associateWith { "${local.baseDir}/$it" })
-            if (localHash == delivered) {
-                store.put(key, ItemState(d.versionId, delivered, known?.lastUploadedHash))
+            guardHash = localHash(localFiles)
+            if (guardHash == written) {
+                store.put(state.first, state.second)
                 ack(d, DeliveryResult.Applied)
                 return Outcome.Applied
             }
-            if (localHash != known?.knownManifestHash) {
+            if (guardHash != known?.knownManifestHash) {
                 engine.upload(m, det, local)
                 ack(d, DeliveryResult.SkippedLocalChanged)
                 return Outcome.Skipped
             }
         }
-        val dir = local?.baseDir ?: moduleCall { m.targetDirFor(fs, det, kind, gameKey, d.slotOrEmpty, d.coreOrEmpty) }
+        val untrackedOk = checkUntracked(planned, name)
+        if (local == null && untrackedOk.size == planned.size) {
+            store.put(state.first, state.second)   // every delivered file is already here, identical
+            ack(d, DeliveryResult.Applied)
+            return Outcome.Applied
+        }
         install(d, Target(
-            name = local?.displayName ?: gameKey,
-            backupId = m.emulatorId,
-            safeKey = ItemKey.safe(key),
-            files = d.manifest.map { it to "$dir/${it.path}" },
-            local = local?.files?.associateWith { "$dir/$it" } ?: emptyMap(),
-            deletable = local?.files?.toSet() ?: emptySet(),
+            name = name, markerKey = key, backupId = m.emulatorId, safeKey = ItemKey.safe(key), pkg = det.pkg,
+            targetDir = dir, files = planned, local = localFiles, deletable = localFiles.keys,
+            guardHash = guardHash, untrackedOk = untrackedOk, checkUntracked = true, item = state,
         ))
-        store.put(key, ItemState(d.versionId, delivered, known?.lastUploadedHash))
         ack(d, DeliveryResult.Applied)
         return Outcome.Applied
     }
@@ -168,44 +222,54 @@ class DeliveryApplier(
     private suspend fun applyConfig(d: DeliveryDto, m: EmulatorModule, det: Detected): Outcome {
         validate(d.manifest)
         val id = m.emulatorId
+        val key = ItemKey.config(id)
+        if (store.applyMarker(key) != null) throw NoAck("an earlier config write awaits restore")
         val bundle = moduleCall { m.configBundle(fs, det).files }
-        val files = d.manifest.map { e ->
+        val byLower = bundle.keys.associateBy { lower(it) }
+        val planned = d.manifest.map { e ->
             val seg = e.path.substringBefore('/', "")
             if (seg !in m.configRoots) throw Reject("path not allowed")
             val rest = e.path.substringAfter('/')
             safeRelative(rest)
             val base = if (seg == "data") det.dataRoot else det.extraRoots[seg] ?: throw Reject("no '$seg' folder on this device")
-            e to (bundle[e.path] ?: "$base/$rest")
+            val match = byLower[lower(e.path)]
+            if (match != null) Planned(e, match, bundle.getValue(match), true) else Planned(e, e.path, "$base/$rest", false)
         }
-        val roots = d.manifest.map { it.path.substringBefore('/') }.toSet()
+        val roots = d.manifest.map { lower(it.path.substringBefore('/')) }.toSet()
+        val written = Manifests.hash(planned.map { ManifestEntry(it.rel, it.entry.hash, it.entry.size) })
         val known = store.configState(id)
-        val delivered = Manifests.hash(d.manifest)
+        val state = id to ConfigState(d.targetId, d.versionId, written, known?.lastUploadedHash)
+        val name = "$id settings"
         fun done(): Outcome {
             if (!d.missingLocalKeys.isNullOrEmpty()) notifier("Set your ROM folders in $id on this device")
             return Outcome.Applied
         }
+        var guardHash: String? = null
         if (bundle.isNotEmpty()) {
-            val localHash = localHash(bundle)
-            if (localHash == delivered) {
-                store.putConfigState(id, ConfigState(d.targetId, d.versionId, delivered, known?.lastUploadedHash))
+            guardHash = localHash(bundle)
+            if (guardHash == written) {
+                store.putConfigState(state.first, state.second)
                 ack(d, DeliveryResult.Applied)
                 return done()
             }
-            if (localHash != known?.knownManifestHash) {
+            if (guardHash != known?.knownManifestHash) {
                 engine.uploadConfig(m, det)
                 ack(d, DeliveryResult.SkippedLocalChanged)
                 return Outcome.Skipped
             }
         }
+        val untrackedOk = checkUntracked(planned, name)
+        if (bundle.isEmpty() && untrackedOk.size == planned.size) {
+            store.putConfigState(state.first, state.second)
+            ack(d, DeliveryResult.Applied)
+            return done()
+        }
         install(d, Target(
-            name = "$id settings",
-            backupId = id,
-            safeKey = ItemKey.safe("$id|config"),
-            files = files,
-            local = bundle,
-            deletable = bundle.keys.filter { it.substringBefore('/') in roots }.toSet(),
+            name = name, markerKey = key, backupId = id, safeKey = ItemKey.safe(key), pkg = det.pkg,
+            targetDir = det.dataRoot, files = planned, local = bundle,
+            deletable = bundle.keys.filter { lower(it.substringBefore('/')) in roots }.toSet(),
+            guardHash = guardHash, untrackedOk = untrackedOk, checkUntracked = true, config = state,
         ))
-        store.putConfigState(id, ConfigState(d.targetId, d.versionId, delivered, known?.lastUploadedHash))
         ack(d, DeliveryResult.Applied)
         return done()
     }
@@ -213,59 +277,134 @@ class DeliveryApplier(
     private suspend fun applyVault(d: DeliveryDto): Outcome {
         validate(d.manifest)
         try { Paths.requireSafeSegment(d.targetId) } catch (e: ModuleException) { throw Reject("unsafe path") }
+        val key = "vault|${d.targetId}"
+        if (store.applyMarker(key) != null) throw NoAck("an earlier vault write awaits restore")
         val dir = "$vaultRoot/${d.targetId}"
         install(d, Target(
-            name = "vault ${d.targetId}",
-            backupId = "vault",
-            safeKey = ItemKey.safe("vault|${d.targetId}"),
-            files = d.manifest.map { it to "$dir/${it.path}" },
-            local = emptyMap(),
-            deletable = emptySet(),
+            name = "vault ${d.targetId}", markerKey = key, backupId = "vault", safeKey = ItemKey.safe(key), pkg = null,
+            targetDir = dir, files = d.manifest.map { Planned(it, it.path, "$dir/${it.path}", false) },
+            local = emptyMap(), deletable = emptySet(), guardHash = null, untrackedOk = emptySet(),
+            checkUntracked = false,
         ))
         notifier("Vault files ready in EmuSync/vault")
         ack(d, DeliveryResult.Applied)
         return Outcome.Applied
     }
 
-    // ---- download, backup, write, restore ----
+    /**
+     * Delivered files with no local match that already exist at the target. Returns their absolute paths when every
+     * one is identical to the delivered entry; otherwise notifies and rejects (never overwrite unsynced files).
+     */
+    private fun checkUntracked(planned: List<Planned>, name: String): Set<String> {
+        val untracked = planned.filter { !it.matched && fs.exists(it.abs) }
+        if (untracked.all { fileMatches(it.abs, it.entry) }) return untracked.map { it.abs }.toSet()
+        notifier("A file for $name exists here that EmuSync hasn't synced; not overwriting.")
+        throw Reject("untracked local file at target")
+    }
 
-    /** Downloads and verifies every blob, backs up, writes, then deletes extras. Throws [Reject] with nothing changed
-     *  (or everything restored) on failure. */
+    // ---- download, write phase, restore ----
+
+    /** Downloads and verifies every blob, then runs the write phase under the engine lock. */
     private suspend fun install(d: DeliveryDto, t: Target) {
         val dl = File(cacheDir, "dl")
-        val hashes = t.files.associate { it.first.hash to it.first.size }
+        val hashes = t.files.associate { it.entry.hash to it.entry.size }
         try {
             dl.mkdirs()
             for ((h, size) in hashes) download(h, size, dl)
-
-            val existed = t.files.filter { fs.exists(it.second) }.map { it.first.path }.toSet()
-            val toBackup = t.local + t.files.filter { it.first.path in existed }.associate { it.first.path to it.second }
-            val backupDir = try {
-                backups.backupFiles(fs, t.backupId, t.safeKey, toBackup)
-            } catch (e: FsUnavailableException) {
-                throw e
-            } catch (e: Exception) {
-                throw Reject("backup failed: ${e.message}")
-            }
-            val created = t.files.filter { it.first.path !in existed }.map { it.second }
-            try {
-                for ((e, abs) in t.files.sortedBy { it.first.path }) {
-                    File(dl, e.hash).inputStream().buffered().use { fs.writeAtomic(abs, it) }
-                }
-                val delivered = t.files.map { it.first.path }.toSet()
-                for (rel in t.deletable.sorted()) {
-                    if (rel in delivered) continue
-                    val abs = t.local[rel] ?: continue
-                    if (!fs.delete(abs) && fs.exists(abs)) throw IOException("could not delete $rel")
-                }
-            } catch (e: Exception) {
-                restore(t.name, backupDir, toBackup, created)
-                if (e is FsUnavailableException) throw e
-                throw Reject("write failed: ${e.message}")
-            }
+            engine.withLock { writePhase(d, t, dl) }
         } finally {
             for (h in hashes.keys) { File(dl, h).delete(); File(dl, "$h.part").delete() }
         }
+    }
+
+    private fun writePhase(d: DeliveryDto, t: Target, dl: File) {
+        if (t.pkg != null && fs.isProcessAlive(t.pkg)) throw StartedRunning()
+        val existed = t.files.filter { fs.exists(it.abs) }.map { it.abs }.toSet()
+        if (t.checkUntracked && t.files.any { !it.matched && it.abs in existed && it.abs !in t.untrackedOk })
+            throw NoAck("a file appeared at the target during the download")
+        val localAbs = t.local.values.toSet()
+        val toBackup = LinkedHashMap(t.local)
+        for (p in t.files) if (p.abs in existed && p.abs !in localAbs) toBackup[p.rel] = p.abs
+        val backupDir = try {
+            backups.backupFiles(fs, t.backupId, t.safeKey, toBackup)
+        } catch (e: FsUnavailableException) {
+            throw e
+        } catch (e: Exception) {
+            throw Reject("backup failed: ${e.message}")
+        }
+        if (t.guardHash != null) {
+            // Re-verify against the copies just taken: the local files must still be what the guard saw.
+            val now = try {
+                if (backupDir == null) null else localHash(t.local.keys.associateWith { "$backupDir/$it" })
+            } catch (e: NoAck) { null }
+            if (now != t.guardHash) {
+                backupDir?.let { fs.delete(it) }
+                throw NoAck("local files changed during the download")
+            }
+        }
+        val created = t.files.filter { it.abs !in existed }.map { it.abs }
+        store.putApplyMarker(ApplyMarker(t.markerKey, t.backupId, d.id, backupDir, t.targetDir, created, toBackup, t.name))
+        try {
+            for (p in t.files.sortedBy { it.rel }) {
+                File(dl, p.entry.hash).inputStream().buffered().use { fs.writeAtomic(p.abs, it) }
+            }
+            val delivered = t.files.map { lower(it.rel) }.toSet()
+            for (rel in t.deletable.sorted()) {
+                if (lower(rel) in delivered) continue
+                val abs = t.local[rel] ?: continue
+                if (!fs.delete(abs) && fs.exists(abs)) throw IOException("could not delete $rel")
+            }
+        } catch (e: Exception) {
+            if (restore(t.name, backupDir, toBackup, created, notify = true)) store.clearApplyMarker(t.markerKey)
+            if (e is FsUnavailableException) throw e
+            throw Reject("write failed: ${e.message}")
+        }
+        try {
+            store.finishApply(t.markerKey, t.item, t.config)   // state + marker clear in one atomic write
+        } catch (e: Exception) {
+            throw NoAck("state update failed, restore pending: ${e.message}")   // the marker restores it next pass
+        }
+    }
+
+    /** Restores every live marker (skipping emulators that are running); keeps and reports markers that fail. */
+    private suspend fun recoverMarkers() {
+        for (mk in store.applyMarkers().values) {
+            val pkg = registry.byId(mk.emulatorId)?.let { m ->
+                try { m.detect(fs, settings)?.pkg } catch (e: ModuleException) { null } catch (e: IOException) { null }
+            }
+            if (pkg != null && fs.isProcessAlive(pkg)) {
+                log("${mk.storeKey}: restore of interrupted write waits for ${mk.emulatorId} to close")
+                continue
+            }
+            val ok = engine.withLock {
+                val ok = restore(mk.name, mk.backupDir, mk.restore, mk.newFiles, notify = false)
+                if (ok) store.clearApplyMarker(mk.storeKey)
+                ok
+            }
+            if (ok) {
+                log("${mk.storeKey}: interrupted write of delivery ${mk.deliveryId} restored")
+                notifiedRecovery.remove(mk.storeKey)
+            } else if (notifiedRecovery.add(mk.storeKey)) {
+                notifier("Restore failed for ${mk.name} — backup at ${mk.backupDir ?: "none"}")
+            }
+        }
+    }
+
+    /** Copies backed-up files back and removes files the delivery created. Returns false (logged) on any error. */
+    private fun restore(name: String, backupDir: String?, backedUp: Map<String, String>, created: List<String>, notify: Boolean): Boolean {
+        val errors = mutableListOf<String>()
+        if (backupDir != null) for ((rel, abs) in backedUp) {
+            try { fs.copy("$backupDir/$rel", abs) } catch (e: Exception) { errors += "$rel: ${e.message}" }
+        }
+        for (abs in created) {
+            try {
+                if (!fs.delete(abs) && fs.exists(abs)) errors += "$abs: not deleted"
+            } catch (e: Exception) { errors += "$abs: ${e.message}" }
+        }
+        if (errors.isEmpty()) return true
+        log("!!! RESTORE FAILED for $name (backup at ${backupDir ?: "none"}): ${errors.joinToString("; ")}")
+        if (notify) notifier("Restore failed for $name — backup at ${backupDir ?: "none"}")
+        return false
     }
 
     /** Streams one blob into `dl/<hash>.part`, checking size and SHA-256 as it goes, then renames to `dl/<hash>`. */
@@ -295,37 +434,21 @@ class DeliveryApplier(
                     }
                 }
             }
+            val got = md.digest().joinToString("") { "%02x".format(it) }
+            if (n != size || got != hash) throw Reject("hash mismatch for $hash")
+            Files.move(part.toPath(), File(dl, hash).toPath(), StandardCopyOption.REPLACE_EXISTING)
         } catch (e: IOException) {
             throw NoAck("download $hash: ${e.message}")
         }
-        val got = md.digest().joinToString("") { "%02x".format(it) }
-        if (n != size || got != hash) throw Reject("hash mismatch for $hash")
-        Files.move(part.toPath(), File(dl, hash).toPath(), StandardCopyOption.REPLACE_EXISTING)
-    }
-
-    /** Copies every backed-up file back and removes files the failed delivery created. Never throws. */
-    private fun restore(name: String, backupDir: String?, backedUp: Map<String, String>, created: List<String>) {
-        val errors = mutableListOf<String>()
-        if (backupDir != null) for ((rel, abs) in backedUp) {
-            try { fs.copy("$backupDir/$rel", abs) } catch (e: Exception) { errors += "$rel: ${e.message}" }
-        }
-        for (abs in created) {
-            try {
-                if (!fs.delete(abs) && fs.exists(abs)) errors += "$abs: not deleted"
-            } catch (e: Exception) { errors += "$abs: ${e.message}" }
-        }
-        if (errors.isEmpty()) return
-        log("!!! RESTORE FAILED for $name (backup at ${backupDir ?: "none"}): ${errors.joinToString("; ")}")
-        notifier("Restore failed for $name — backup at ${backupDir ?: "none"}")
     }
 
     // ---- helpers ----
 
-    /** Rejects empty manifests, unsafe or duplicate paths, malformed hashes and bad sizes. */
+    /** Rejects empty manifests, unsafe or (case-insensitively) duplicate paths, malformed hashes and bad sizes. */
     private fun validate(manifest: List<ManifestEntry>) {
         if (manifest.isEmpty()) throw Reject("empty manifest")
         for (e in manifest) safeRelative(e.path)
-        if (manifest.map { it.path }.toSet().size != manifest.size) throw Reject("bad manifest: duplicate path")
+        if (manifest.map { lower(it.path) }.toSet().size != manifest.size) throw Reject("bad manifest: duplicate path")
         if (manifest.any { !sha256.matches(it.hash) || it.size < 0 || it.size > SyncConfig.maxBlobBytes })
             throw Reject("bad manifest")
         if (manifest.groupBy { it.hash }.values.any { g -> g.map { it.size }.toSet().size > 1 })
@@ -336,23 +459,33 @@ class DeliveryApplier(
         try { Paths.requireSafeRelative(p) } catch (e: ModuleException) { throw Reject("unsafe path") }
     }
 
-    /** Manifest hash of the local files (rel -> abs). Read errors leave the delivery for the next pass. */
-    private fun localHash(files: Map<String, String>): String = try {
-        Manifests.hash(files.map { (rel, abs) ->
-            val md = MessageDigest.getInstance("SHA-256")
-            val buf = ByteArray(64 * 1024)
-            var size = 0L
-            fs.openRead(abs).use { ins ->
-                while (true) {
-                    val n = ins.read(buf)
-                    if (n < 0) break
-                    md.update(buf, 0, n); size += n
-                }
+    private fun lower(s: String) = s.lowercase(Locale.ROOT)
+
+    private fun sha(abs: String): Pair<String, Long> {
+        val md = MessageDigest.getInstance("SHA-256")
+        val buf = ByteArray(64 * 1024)
+        var size = 0L
+        fs.openRead(abs).use { ins ->
+            while (true) {
+                val n = ins.read(buf)
+                if (n < 0) break
+                md.update(buf, 0, n); size += n
             }
-            ManifestEntry(rel, md.digest().joinToString("") { "%02x".format(it) }, size)
-        })
+        }
+        return md.digest().joinToString("") { "%02x".format(it) } to size
+    }
+
+    /** Manifest hash of the files (rel -> abs). Read errors leave the delivery for the next pass. */
+    private fun localHash(files: Map<String, String>): String = try {
+        Manifests.hash(files.map { (rel, abs) -> sha(abs).let { (h, s) -> ManifestEntry(rel, h, s) } })
     } catch (e: IOException) {
         throw NoAck("local read failed: ${e.message}")
+    }
+
+    private fun fileMatches(abs: String, e: ManifestEntry): Boolean = try {
+        sha(abs) == (e.hash to e.size)
+    } catch (ex: IOException) {
+        throw NoAck("local read failed: ${ex.message}")
     }
 
     private suspend fun ack(d: DeliveryDto, result: DeliveryResult, detail: String? = null) {
