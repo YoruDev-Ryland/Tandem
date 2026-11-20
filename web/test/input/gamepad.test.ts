@@ -76,6 +76,29 @@ describe("gamepad loop", () => {
     expect(got).toEqual(["a"]);
   });
 
+  it("keeps polling while another pad is still connected", () => {
+    const pads: ({ connected: boolean; buttons: { pressed: boolean }[] } | null)[] = [
+      { connected: true, buttons: none.map((pressed) => ({ pressed })) },
+      { connected: true, buttons: none.map((pressed) => ({ pressed })) },
+    ];
+    Object.defineProperty(navigator, "getGamepads", { configurable: true, value: () => pads });
+    const gone = (index: number) => Object.assign(new Event("gamepaddisconnected"), { gamepad: { index } });
+
+    window.dispatchEvent(new Event("gamepadconnected"));
+    vi.advanceTimersByTime(50);
+
+    pads[0] = null;
+    window.dispatchEvent(gone(0));
+    expect(gamepad.connected).toBe(true);
+    pads[1]!.buttons = down(0).map((pressed) => ({ pressed }));
+    vi.advanceTimersByTime(50);
+    expect(got).toEqual(["a"]);
+
+    pads[1] = null;
+    window.dispatchEvent(gone(1));
+    expect(gamepad.connected).toBe(false);
+  });
+
   it("repeats a held D-pad in real loop time", () => {
     window.dispatchEvent(new Event("gamepadconnected"));
     vi.advanceTimersByTime(50);

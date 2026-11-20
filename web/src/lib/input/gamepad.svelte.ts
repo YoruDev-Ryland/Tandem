@@ -67,7 +67,10 @@ export function installGamepad(): () => void {
       frame = requestAnimationFrame(poll);
     }
   };
-  const disconnect = () => {
+  const disconnect = (e: Event) => {
+    const gone = (e as GamepadEvent).gamepad?.index;
+    const remaining = Array.from(navigator.getGamepads?.() ?? []).some((p) => p?.connected && p.index !== gone);
+    if (remaining) return;
     gamepad.connected = false;
     stopLoop();
   };
