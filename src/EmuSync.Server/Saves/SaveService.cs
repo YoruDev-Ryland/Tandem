@@ -22,7 +22,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     public const int MaxDisplayName = 300;
     public const int MaxBulkItems = 10000;
 
-    public async Task<SaveUploadResponse> UploadAsync(Guid userId, Guid deviceId, SaveUploadRequest request, CancellationToken ct)
+    public async Task<SaveUploadResponse> UploadAsync(Guid userId, Guid? deviceId, SaveUploadRequest request, CancellationToken ct)
     {
         ValidateIdentity(request);
         var manifest = Manifests.Normalize(request.Manifest);
@@ -51,7 +51,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
 
             if (head is not null && head.ManifestHash == manifestHash)
             {
-                await SetKnownAsync(deviceId, item.Id, head.Id, ct);
+                if (deviceId is Guid d1) await SetKnownAsync(d1, item.Id, head.Id, ct);
                 response = new SaveUploadResponse(SaveUploadStatus.Unchanged, item.Id, head.Id, head.Id);
             }
             else if (head is not null && request.BaseVersionId != head.Id && await db.SaveVersions
@@ -77,7 +77,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 if (head is null || request.BaseVersionId == head.Id)
                 {
                     item.HeadVersionId = version.Id;
-                    await SetKnownAsync(deviceId, item.Id, version.Id, ct);
+                    if (deviceId is Guid d2) await SetKnownAsync(d2, item.Id, version.Id, ct);
                     response = new SaveUploadResponse(SaveUploadStatus.Accepted, item.Id, version.Id, version.Id);
                     evt = new SaveHeadChanged(userId, item.Id, version.Id);
                 }
@@ -98,7 +98,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         if (evt is not null) await events.Raise(evt, ct);
         if (response.Status != SaveUploadStatus.Unchanged)
         {
-            var device = await DeviceNameAsync(deviceId, ct);
+            var device = deviceId is Guid dn ? await DeviceNameAsync(dn, ct) : "The web app";
             var what = request.Kind == ItemKind.Save ? "save" : "state";
             if (response.Status == SaveUploadStatus.Accepted)
                 await activity.WriteAsync(userId, "save_uploaded", $"{device} uploaded {what} for {label}", deviceId, request.EmulatorId, request.GameKey);
@@ -107,6 +107,16 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                     new { itemId = response.ItemId, versionId = response.VersionId });
         }
         return response;
+    }
+
+    /// <summary>The identity-level lookup the web upload needs: the item's head and whether it has an open conflict.</summary>
+    public async Task<(Guid? HeadVersionId, bool OpenConflict)> FindHeadAsync(Guid userId, string emulatorId, ItemKind kind,
+        string gameKey, string slot, string core, CancellationToken ct)
+    {
+        var itemCore = kind == ItemKind.Save ? "" : core;
+        var item = await db.SaveItems.AsNoTracking().FirstOrDefaultAsync(i => i.UserId == userId && i.EmulatorId == emulatorId
+            && i.Kind == kind && i.GameKey == gameKey && i.Slot == slot && i.Core == itemCore, ct);
+        return item is null ? (null, false) : (item.HeadVersionId, item.OpenConflict);
     }
 
     private async Task<string> DeviceNameAsync(Guid deviceId, CancellationToken ct) =>

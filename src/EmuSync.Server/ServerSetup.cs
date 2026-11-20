@@ -7,6 +7,7 @@ using EmuSync.Server.Deliveries;
 using EmuSync.Server.Devices;
 using EmuSync.Server.Events;
 using EmuSync.Server.Vault;
+using EmuSync.Server.Web;
 using EmuSync.Server.Http;
 using EmuSync.Server.Pairing;
 using EmuSync.Server.Saves;
@@ -41,6 +42,7 @@ public static class ServerSetup
         builder.Services.AddScoped<ConfigDiffService>();
         builder.Services.AddScoped<DeliveryService>();
         builder.Services.AddScoped<VaultService>();
+        builder.Services.AddScoped<WebQueryService>();
         builder.Services.AddHostedService<DeliveryHandlers>();
     }
 
@@ -51,6 +53,7 @@ public static class ServerSetup
         app.UseApiErrors();
         app.UseMiddleware<ProtocolVersionMiddleware>(); // before routing so unknown /v1 routes still get 426
 
+        app.UseWebFiles();
         app.UseRouting();
         app.UseAuthentication();
         app.UseRateLimiter();
@@ -67,5 +70,7 @@ public static class ServerSetup
         app.MapDeliveryEndpoints();
         app.MapVaultEndpoints();
         app.MapEventEndpoints();
+        app.MapWebEndpoints();
+        app.MapWebFallback();
     }
 }
