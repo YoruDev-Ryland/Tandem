@@ -7,9 +7,12 @@ import type { ConfigOverview } from "../../src/lib/api/types";
 import { ODIN, RP, THOR } from "../fixtures/home";
 import { AYN_BUNDLE, AYN_GROUP, aynVersions, deviceDetail, diff, groups, overview, RP_BUNDLE, rpVersions } from "../fixtures/configs";
 
+let emit: (topic: string) => void = () => {};
 class FakeEventSource {
   readyState = 0;
-  addEventListener() {}
+  addEventListener(type: string, fn: (e: { data: string }) => void) {
+    if (type === "changed") emit = (topic) => fn({ data: JSON.stringify({ topic }) });
+  }
   close() {}
 }
 const json = (status: number, body: unknown) =>
@@ -40,8 +43,11 @@ function serve(write: (c: Call) => Response | undefined = () => undefined, tweak
     }
     return new Response(null, { status: 204 });
   }));
-  return calls;
+  (calls as Call[] & { data?: ConfigOverview }).data = data;
+  return calls as Call[] & { data: ConfigOverview };
 }
+
+const bytes = (s: string) => new Response(new TextEncoder().encode(s), { status: 200, headers: { "Content-Type": "text/plain" } });
 
 const urls = (calls: Call[], prefix: string) => calls.filter((c) => c.url.startsWith(prefix)).map((c) => c.url);
 
@@ -229,5 +235,104 @@ describe("Configs", () => {
     const nav = await screen.findByRole("navigation", { name: "Sections" });
     await fireEvent.click(within(nav).getByRole("link", { name: "Azahar" }));
     expect(await screen.findByText("No Azahar configs yet.")).toBeTruthy();
+  });
+
+  it("keeps a file's BOM and CRLF line endings when it is edited in the browser", async () => {
+    const calls = serve((c) => {
+      if (c.method === "GET" && c.url.startsWith("/v1/configs/versions/")) return bytes("\uFEFFa = 1\r\nb = 2\r\n");
+      if (c.method === "PUT") return json(200, { status: "Accepted", bundleId: AYN_BUNDLE, versionId: "cv8" });
+    });
+    render(Configs);
+    await screen.findByText('video_shader_enable = "true"');
+    dispatch("y");
+    const dialog = await screen.findByRole("dialog");
+    const area = (await within(dialog).findByLabelText("retroarch.cfg")) as HTMLTextAreaElement;
+    await waitFor(() => expect(area.value).toBe("a = 1\nb = 2\n"));
+    await fireEvent.input(area, { target: { value: "a = 1\nb = 3\n" } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ baseVersionId: "cv7", text: "\uFEFFa = 1\r\nb = 3\r\n" }));
+  });
+
+  it("after a partial save, retries only the unsaved file against the new version", async () => {
+    let puts = 0;
+    const calls = serve((c) => {
+      if (c.method !== "PUT") return undefined;
+      puts++;
+      if (puts === 1) return json(200, { status: "Accepted", bundleId: AYN_BUNDLE, versionId: "cv8" });
+      if (puts === 2) return json(500, { code: "error", message: "boom" });
+      return json(200, { status: "Accepted", bundleId: AYN_BUNDLE, versionId: "cv9" });
+    });
+    render(Configs);
+    await screen.findByText('video_shader_enable = "true"');
+    dispatch("y");
+    const dialog = await screen.findByRole("dialog");
+    const first = (await within(dialog).findByLabelText("retroarch.cfg")) as HTMLTextAreaElement;
+    await waitFor(() => expect(first.value).not.toBe(""));
+    await fireEvent.input(first, { target: { value: "one\n" } });
+    await fireEvent.change(within(dialog).getByLabelText("File"), { target: { value: "config/mGBA/mGBA.opt" } });
+    const second = (await within(dialog).findByLabelText("config/mGBA/mGBA.opt")) as HTMLTextAreaElement;
+    await waitFor(() => expect(second.value).not.toBe(""));
+    await fireEvent.input(second, { target: { value: "two\n" } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByText(/Saved retroarch\.cfg\. config\/mGBA\/mGBA\.opt wasn't saved/)).toBeTruthy();
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PUT")).toHaveLength(3));
+    const last = calls.filter((c) => c.method === "PUT")[2]!;
+    expect(last.url).toContain("/files/config/mGBA/mGBA.opt");
+    expect(last.body).toEqual({ baseVersionId: "cv8", text: "two\n" });
+  });
+
+  it("keeps the emulator it opened on when a reload adds configs for an earlier one", async () => {
+    const calls = serve((c) => c.url === "/v1/configs/apply" ? json(200, { bundleId: AYN_BUNDLE, headVersionId: "cv7", groupId: AYN_GROUP }) : undefined);
+    render(Configs);
+    await screen.findByRole("heading", { name: /v6 → v7/ });
+    dispatch("x");
+    const dialog = await screen.findByRole("dialog");
+    calls.data.emulators.push({ emulatorId: "eden", groups: [], solo: [{ device: { id: ODIN, name: "Odin 3" }, bundleId: "b-eden", headVersionId: "e1", openConflict: false }] });
+    emit("configs");
+    await waitFor(() => expect(calls.filter((c) => c.url === "/v1/web/configs")).toHaveLength(2));
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(calls.find((c) => c.url === "/v1/configs/apply")?.body).toMatchObject({ emulatorId: "retroarch" }));
+    const nav = screen.getByRole("navigation", { name: "Sections" });
+    expect(within(nav).getByRole("link", { name: "RetroArch" }).getAttribute("aria-current")).toBe("page");
+  });
+
+  it("makes a group for the dialog's emulator even after a reload", async () => {
+    const calls = serve();
+    render(Configs);
+    await screen.findByText("v4");
+    for (let i = 0; i < 5; i++) dispatch("down");
+    dispatch("a");
+    await screen.findByText("joined group");
+    dispatch("a");
+    const dialog = await screen.findByRole("dialog");
+    calls.data.emulators.push({ emulatorId: "eden", groups: [], solo: [{ device: { id: ODIN, name: "Odin 3" }, bundleId: "b-eden", headVersionId: "e1", openConflict: false }] });
+    emit("configs");
+    await waitFor(() => expect(calls.filter((c) => c.url === "/v1/web/configs")).toHaveLength(2));
+    await fireEvent.input(within(dialog).getByLabelText("Group name"), { target: { value: "Set" } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Make a group" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST" && c.url === "/v1/configs/groups")?.body).toMatchObject({ emulatorId: "retroarch", seedDeviceId: RP }));
+  });
+
+  it("downloads the shown file as bytes, with the compared device's paths and a path-based name", async () => {
+    const calls = serve((c) => c.method === "GET" && c.url.startsWith("/v1/configs/versions/") ? bytes("\uFEFFx\r\n") : undefined);
+    const blobs: Blob[] = [];
+    vi.stubGlobal("URL", Object.assign(Object.create(URL), { createObjectURL: (b: Blob) => { blobs.push(b); return "blob:x"; }, revokeObjectURL: () => {} }));
+    const names: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { names.push(this.download); });
+    render(Configs);
+    await screen.findByText('video_shader_enable = "true"');
+    const select = screen.getByLabelText("Compare with") as HTMLSelectElement;
+    await fireEvent.change(select, { target: { value: [...select.options].find((o) => o.text === "Thor's current files")!.value } });
+    await screen.findByRole("heading", { name: /Thor's current files → v7/ });
+    await screen.findByRole("button", { name: "Download retroarch.cfg" }); // the diff has arrived
+    dispatch("right");
+    dispatch("right"); // the second changed file
+    const button = await screen.findByRole("button", { name: "Download mGBA.opt" });
+    await fireEvent.click(button);
+    await waitFor(() => expect(names).toEqual(["config_mGBA_mGBA.opt"]));
+    expect(urls(calls, "/v1/configs/versions/")).toContain(`/v1/configs/versions/cv7/files/config/mGBA/mGBA.opt?device=${THOR}`);
+    expect([...new Uint8Array(await blobs[0]!.arrayBuffer())]).toEqual([0xef, 0xbb, 0xbf, 0x78, 0x0d, 0x0a]);
+    click.mockRestore();
   });
 });

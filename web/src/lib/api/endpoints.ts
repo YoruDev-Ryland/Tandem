@@ -1,4 +1,4 @@
-import { api, apiText } from "./http";
+import { api, apiBytes, apiText } from "./http";
 import { encodeKey } from "./paths";
 import type * as T from "./types";
 
@@ -44,6 +44,9 @@ export const getConfigVersions = (bundleId: string) =>
   api<T.ConfigVersionSummary[]>("GET", `/v1/configs/bundles/${enc(bundleId)}/versions`);
 export const getConfigFile = (versionId: string, path: string, device?: string) =>
   apiText("GET", `/v1/configs/versions/${enc(versionId)}/files/${encodeKey(path)}${query({ device })}`);
+/** The file's exact bytes, for editing and downloading. */
+export const getConfigFileBytes = (versionId: string, path: string, device?: string) =>
+  apiBytes("GET", `/v1/configs/versions/${enc(versionId)}/files/${encodeKey(path)}${query({ device })}`);
 export const getDiff = (a: string, b: string, device?: string) =>
   api<T.ConfigDiffResponse>("GET", `/v1/configs/diff${query({ a, b, device })}`);
 export const editConfigFile = (bundleId: string, path: string, req: T.EditConfigFileRequest, device?: string) =>

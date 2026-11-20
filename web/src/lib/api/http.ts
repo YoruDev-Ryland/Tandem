@@ -63,3 +63,8 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
 export async function apiText(method: string, path: string): Promise<string> {
   return (await send(method, path, undefined, "text/plain")).text();
 }
+
+/** For endpoints whose exact bytes matter (config files keep their BOM and line endings). */
+export async function apiBytes(method: string, path: string): Promise<ArrayBuffer> {
+  return (await send(method, path, undefined, "application/octet-stream, text/plain")).arrayBuffer();
+}

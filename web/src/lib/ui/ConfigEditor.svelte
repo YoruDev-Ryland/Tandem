@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { editConfigFile, getConfigFile } from "../api/endpoints";
+  import { editConfigFile, getConfigFileBytes } from "../api/endpoints";
   import { ApiError } from "../api/http";
+  import { decodeConfig, encodeConfig, type EditableText } from "../configText";
+  import { nameList } from "../deviceStates";
   import Button from "./Button.svelte";
   import Dialog from "./Dialog.svelte";
   import Field from "./Field.svelte";
@@ -29,21 +31,27 @@
   let { open = $bindable(false), bundleId, baseVersionId, label, device, files, path, appliesTo, emulatorName, onsaved, onreload }: Props = $props();
 
   let shown = $state("");
-  /** Text as loaded, and as edited, by path. */
-  let original = $state<Record<string, string>>({});
+  /** Each file as loaded (or as last saved), and as edited, by path. */
+  let original = $state<Record<string, EditableText>>({});
   let text = $state<Record<string, string>>({});
+  /** The version the next save builds on: it moves on with every file saved. */
+  let base = $state("");
+  /** After a save that stopped part-way: what was saved and what wasn't. */
+  let partial = $state("");
   let loadError = $state<unknown>(undefined);
   let saveError = $state<unknown>(undefined);
   let busy = $state(false);
 
   const stale = $derived(saveError instanceof ApiError && saveError.code === "stale_base");
-  const edited = $derived(files.filter((p) => p in text && text[p] !== original[p]));
+  const edited = $derived(files.filter((p) => p in text && p in original && text[p] !== original[p]!.text));
 
   $effect(() => {
     if (open) {
       shown = path;
       original = {};
       text = {};
+      base = baseVersionId;
+      partial = "";
       loadError = undefined;
       saveError = undefined;
     }
@@ -53,10 +61,11 @@
     const p = shown;
     if (!open || !p || p in original) return;
     loadError = undefined;
-    getConfigFile(baseVersionId, p, device.id).then(
-      (t) => {
-        original[p] = t;
-        text[p] = t;
+    getConfigFileBytes(baseVersionId, p, device.id).then(
+      (bytes) => {
+        const file = decodeConfig(bytes);
+        original[p] = file;
+        text[p] = file.text;
       },
       (e: unknown) => {
         if (shown === p) loadError = e;
@@ -68,17 +77,27 @@
     if (busy || edited.length === 0) return;
     busy = true;
     saveError = undefined;
-    // Each saved file makes a new version; the next file builds on it.
-    let base = baseVersionId;
+    partial = "";
+    const saved: string[] = [];
+    const pending = [...edited];
     try {
-      for (const p of edited) {
-        const r = await editConfigFile(bundleId, p, { baseVersionId: base, text: text[p]! }, device.id);
+      // Each saved file makes a new version; the next file builds on it.
+      for (const p of pending) {
+        const value = text[p]!;
+        const file = original[p]!;
+        const r = await editConfigFile(bundleId, p, { baseVersionId: base, text: encodeConfig(value, file) }, device.id);
         base = r.versionId;
+        original[p] = { ...file, text: value };
+        saved.push(p);
       }
       open = false;
       onsaved();
     } catch (e) {
       saveError = e;
+      if (saved.length > 0) {
+        const left = pending.filter((p) => !saved.includes(p));
+        partial = `Saved ${nameList(saved)}. ${nameList(left)} ${left.length === 1 ? "wasn't" : "weren't"} saved.`;
+      }
     } finally {
       busy = false;
     }
@@ -101,6 +120,7 @@
       <textarea aria-label={shown} spellcheck="false" autocomplete="off" wrap="off" bind:value={text[shown]}></textarea>
     {/if}
     <p class="note">Saving changes it on {appliesTo}. {emulatorName} must be closed there; until then it waits.</p>
+    {#if partial}<p class="note ink">{partial}</p>{/if}
     {#if saveError}
       <p class="fault" role="alert">{describeConfigError(saveError)}</p>
     {/if}
@@ -142,6 +162,9 @@
   textarea:focus-visible {
     outline: 2px solid var(--ink);
     outline-offset: 3px;
+  }
+  .note.ink {
+    color: var(--ink);
   }
   .fault {
     margin: 12px 0 0;

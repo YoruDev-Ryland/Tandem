@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { getConfigFile, getConfigs, getConfigVersions, getDevice, getDiff, getGroups } from "../lib/api/endpoints";
+  import { getConfigFileBytes, getConfigs, getConfigVersions, getDevice, getDiff, getGroups } from "../lib/api/endpoints";
   import { resource } from "../lib/api/resource.svelte";
   import { EMULATOR_IDS, type ApplyMode, type ConfigVersionSummary, type DeviceRef, type FileDiff } from "../lib/api/types";
   import { nameList } from "../lib/deviceStates";
@@ -45,6 +45,10 @@
     return !!r && r.groups.length + r.solo.length > 0;
   }));
   const emu = $derived(picked ?? firstWithConfigs ?? EMULATOR_IDS[0]!);
+  // Pick the emulator once, when the configs first arrive: a later reload must not move the page (or an open dialog).
+  $effect(() => {
+    if (picked === undefined && configs.data) picked = firstWithConfigs ?? EMULATOR_IDS[0]!;
+  });
   const emuRow = $derived(rowFor(emu));
   const emuName = $derived(emulatorName(emu));
   const tabs = EMULATOR_IDS.map((e) => ({ label: emulatorName(e), path: `/configs/${e}` }));
@@ -258,7 +262,7 @@
   // ---- Dialogs: their targets are frozen when they open ----
   let message = $state("");
 
-  let editTarget = $state<{ bundleId: string; baseVersionId: string; label: string; device: DeviceRef; files: string[]; path: string; appliesTo: string } | undefined>();
+  let editTarget = $state<{ bundleId: string; baseVersionId: string; label: string; device: DeviceRef; files: string[]; path: string; appliesTo: string; emulatorName: string } | undefined>();
   let editing = $state(false);
   const editable = $derived(isHead && !selected?.openConflict && !!selected?.bundleId && !!files && (selected?.members.length ?? 0) > 0);
   function openEdit() {
@@ -273,12 +277,13 @@
       files: paths,
       path: shownFile?.path ?? paths[0] ?? "",
       appliesTo: nameList(b.members.map((m) => m.name)),
+      emulatorName: emuName,
     };
     message = "";
     editing = true;
   }
 
-  let applyTarget = $state<{ versionId: string; label: string; groupName: string | null; ownerName: string | null; rollback: string[]; linkTargets: DeviceRef[]; copyTargets: DeviceRef[] } | undefined>();
+  let applyTarget = $state<{ emulatorId: string; emulatorName: string; versionId: string; label: string; groupName: string | null; ownerName: string | null; rollback: string[]; linkTargets: DeviceRef[]; copyTargets: DeviceRef[] } | undefined>();
   let applying = $state(false);
   function openApply() {
     const b = selected;
@@ -287,6 +292,8 @@
     const inThis = (d: DeviceRef) => b.members.some((m) => m.id === d.id);
     const everyone = [...r.groups.flatMap((g) => g.members), ...r.solo.map((s) => s.device)];
     applyTarget = {
+      emulatorId: emu,
+      emulatorName: emuName,
       versionId: to.id,
       label: label(to),
       groupName: b.kind === "group" ? b.name : null,
@@ -300,16 +307,21 @@
     applying = true;
   }
   function onApplied(name: string, mode: ApplyMode) {
-    const group = applyTarget?.groupName;
+    const t = applyTarget;
+    const waits = `${t?.emulatorName ?? emuName} must be closed there; until then it waits.`;
     message = mode === "Linked"
-      ? `${name} now follows ${group ?? "the new group"}. ${emuName} must be closed there; until then it waits.`
-      : `Copied ${applyTarget?.label ?? "it"} to ${name}. ${emuName} must be closed there; until then it waits.`;
+      ? `${name} now follows ${t?.groupName ?? "the new group"}. ${waits}`
+      : `Copied ${t?.label ?? "it"} to ${name}. ${waits}`;
     reloadAll();
   }
 
   let groupKey = $state<GroupTarget | undefined>();
+  /** The emulator the group dialog opened on. */
+  let groupEmu = $state("");
+  const groupRow = $derived(rowFor(groupEmu));
   let grouping = $state(false);
   function openGroup(b: Bundle) {
+    groupEmu = emu;
     groupKey = b.kind === "group" ? { kind: "group", id: b.groupId!, name: b.name, members: b.members } : { kind: "solo", device: b.members[0]! };
     message = "";
     grouping = true;
@@ -318,7 +330,7 @@
   const groupTarget = $derived.by<GroupTarget | undefined>(() => {
     const g = groupKey;
     if (g?.kind !== "group") return g;
-    const live = emuRow?.groups.find((x) => x.id === g.id);
+    const live = groupRow?.groups.find((x) => x.id === g.id);
     return live ? { kind: "group", id: g.id, name: live.name, members: live.members } : g;
   });
 
@@ -328,16 +340,18 @@
   }
 
   let downloadError = $state<unknown>(undefined);
+  /** Downloads the file whose diff is shown, as the compared device (or the config's first device) has it. */
   async function download() {
-    const path = shownFile?.path ?? files?.find((f) => f.status !== "Removed")?.path;
+    const path = shownFile?.path;
     if (!to || !path) return;
     downloadError = undefined;
     try {
-      const text = await getConfigFile(to.id, path, selected?.members[0]?.id);
-      const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      const bytes = await getConfigFileBytes(to.id, path, compareDevice?.id ?? selected?.members[0]?.id);
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = path.split("/").pop() ?? path;
+      // The whole relative path: two files of one config can share a name.
+      a.download = path.replaceAll("/", "_");
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -490,7 +504,7 @@
             <div class="buttons">
               {#if editable}<Button glyph="y" onclick={openEdit}>Edit {label(to)}</Button>{/if}
               <Button glyph="x" onclick={openApply}>Apply to a device…</Button>
-              <Button onclick={download} disabled={!files}>Download</Button>
+              <Button onclick={download} disabled={!shownFile}>{shownFile ? `Download ${shownFile.path.split("/").pop()}` : "Download"}</Button>
               {#if selected}
                 <Button onclick={() => openGroup(selected)}>{selected.kind === "group" ? "Change group…" : "Make a group…"}</Button>
               {/if}
@@ -508,9 +522,8 @@
     <ConfigEditor
       bind:open={editing}
       {...editTarget}
-      emulatorName={emuName}
       onsaved={() => {
-        message = `Saved. It goes to ${editTarget?.appliesTo ?? "the device"}; ${emuName} must be closed there, until then it waits.`;
+        message = `Saved. It goes to ${editTarget?.appliesTo ?? "the device"}; ${editTarget?.emulatorName ?? emuName} must be closed there, until then it waits.`;
         resetCompare();
         reloadAll();
       }}
@@ -522,17 +535,17 @@
   {/if}
 
   {#if applyTarget}
-    <ApplyDialog bind:open={applying} emulatorId={emu} emulatorName={emuName} {...applyTarget} onapplied={onApplied} />
+    <ApplyDialog bind:open={applying} {...applyTarget} onapplied={onApplied} />
   {/if}
 
   {#if groupTarget}
     <GroupDialog
       bind:open={grouping}
-      emulatorId={emu}
-      emulatorName={emuName}
+      emulatorId={groupEmu}
+      emulatorName={emulatorName(groupEmu)}
       target={groupTarget}
-      groups={(emuRow?.groups ?? []).map((g) => ({ id: g.id, name: g.name }))}
-      solo={(emuRow?.solo ?? []).map((s) => s.device)}
+      groups={(groupRow?.groups ?? []).map((g) => ({ id: g.id, name: g.name }))}
+      solo={(groupRow?.solo ?? []).map((s) => s.device)}
       onchanged={(m) => {
         message = m;
         reloadAll();
