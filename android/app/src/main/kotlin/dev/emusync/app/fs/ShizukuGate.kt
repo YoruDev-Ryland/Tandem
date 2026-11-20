@@ -68,7 +68,7 @@ class ShizukuGate(private val context: Context) {
 
     private val args by lazy {
         Shizuku.UserServiceArgs(ComponentName(context.packageName, ShellService::class.java.name))
-            .tag("emusync").processNameSuffix("shell").version(BuildConfig.VERSION_CODE).daemon(false)
+            .tag("emusync").processNameSuffix("shell").version(BuildConfig.SHELL_SERVICE_VERSION).daemon(false)
     }
 
     /** Binds the shell service (cached while alive). Rebinding after binder death happens on the next call. */

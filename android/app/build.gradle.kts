@@ -13,6 +13,11 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        // Shizuku keeps a UserService process alive across app updates unless its version changes, so the version
+        // changes on every build: an updated APK always replaces the old shell process. Seconds since the epoch fit an
+        // int until 2038. (Evaluated at configuration time; revisit if the configuration cache is turned on.)
+        val shellServiceVersion = (System.currentTimeMillis() / 1000L).toInt()
+        buildConfigField("int", "SHELL_SERVICE_VERSION", "$shellServiceVersion")
     }
     buildFeatures {
         aidl = true
