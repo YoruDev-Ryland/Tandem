@@ -50,7 +50,7 @@
   const otherOf = (r: ConflictRow, s: ConflictSide | undefined) => r.sides.find((x) => x.versionId !== s?.versionId);
   const defaultName = (r: ConflictRow, s: ConflictSide | undefined) => {
     const o = otherOf(r, s);
-    return `${o ? name(o) : "Other"} run`;
+    return o ? `From ${name(o)}` : "Other";
   };
   const nameFor = (r: ConflictRow) => typed[r.itemId] ?? defaultName(r, r.itemId === current?.itemId ? focusSide : r.sides[0]);
 

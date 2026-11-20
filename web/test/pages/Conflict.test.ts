@@ -83,15 +83,15 @@ describe("Conflict", () => {
     expect(calls[0]!.body.keepVersionId).toBe("v-odin");
   });
 
-  it("Keep both defaults the name to '{other device} run' and sends it, keeping the focused side", async () => {
+  it("Keep both defaults the name to 'From {other device}' and sends it, keeping the focused side", async () => {
     const calls = serve([firstSync]);
     render(Conflict);
     const name = (await screen.findByLabelText("Name the other")) as HTMLInputElement;
-    expect(name.value).toBe("Odin 3 run");
+    expect(name.value).toBe("From Odin 3");
     await fireEvent.click(screen.getByRole("button", { name: "Keep both" }));
     await fireEvent.click(await screen.findByRole("button", { name: "Keep both and continue" }));
     await waitFor(() => expect(calls.length).toBe(1));
-    expect(calls[0]!.body).toEqual({ choice: "KeepBoth", keepVersionId: "v-thor", variantName: "Odin 3 run" });
+    expect(calls[0]!.body).toEqual({ choice: "KeepBoth", keepVersionId: "v-thor", variantName: "From Odin 3" });
   });
 
   it("Keep both with the other side focused names the first side and sends an edited name", async () => {
@@ -99,7 +99,7 @@ describe("Conflict", () => {
     render(Conflict);
     const name = (await screen.findByLabelText("Name the other")) as HTMLInputElement;
     dispatch("right");
-    await waitFor(() => expect(name.value).toBe("Thor run"));
+    await waitFor(() => expect(name.value).toBe("From Thor"));
     await fireEvent.input(name, { target: { value: "Backup" } });
     dispatch("x");
     await fireEvent.click(await screen.findByRole("button", { name: "Keep both and continue" }));
@@ -189,7 +189,7 @@ describe("Conflict", () => {
     await fireEvent.click(await screen.findByRole("button", { name: "Keep both and continue" }));
     await waitFor(() => expect(calls.length).toBe(1));
     expect(calls[0]!.url).toContain("item-slot");
-    expect(calls[0]!.body).toEqual({ choice: "KeepBoth", keepVersionId: "slot-thor", variantName: "Odin 3 run" });
+    expect(calls[0]!.body).toEqual({ choice: "KeepBoth", keepVersionId: "slot-thor", variantName: "From Odin 3" });
   });
 
   it("with three sides, Keep both lets the server label each kept-aside save and the dialog names them all", async () => {

@@ -92,7 +92,7 @@
 
   let dialogOpen = $state(false);
   let deviceName = $state("Odin 3");
-  let otherName = $state("Odin 3 run");
+  let otherName = $state("From Odin 3");
   let compare = $state("v6");
 </script>
 
