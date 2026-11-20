@@ -23,8 +23,9 @@ public sealed record PruneResult(int Versions, int Blobs, long Bytes)
 /// <see cref="RetentionSettings"/>); it is a head; it is pinned or has a variant label; it has a ConflictReason
 /// (resolved or not: the record of a user decision, and what re-uploads are matched against); an un-acked,
 /// non-superseded delivery points at it; or it is any device's known, applied or vault-held version. Bases of kept
-/// versions are not kept for their own sake: BaseVersionId is never read back by the server (an upload only compares
-/// it with the head), and keeping it transitively would keep every version.</para>
+/// versions are not kept for their own sake: the server only ever compares a BaseVersionId as an id (an upload with
+/// the head; a resolve, in SaveService.SetKnownForUploaderAsync, with the winner's uploader's known version) and
+/// never loads the base version it names, and keeping it transitively would keep every version.</para>
 /// <para>Each user's prune holds the <see cref="MaintenanceLock"/> (so never overlaps a backup run) and then the user's lock.</para>
 /// <para>Then blob GC: a blob is deleted only when no remaining version manifest (save, config, vault), raw config
 /// upload, or expanded Config delivery manifest (un-acked, or created in the last 7 days) references it AND it was
