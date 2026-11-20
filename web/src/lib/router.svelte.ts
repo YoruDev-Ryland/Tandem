@@ -52,9 +52,12 @@ export function matchRoute(rawPath: string): Route {
 }
 
 let path = $state(location.pathname);
+// How many in-app navigations sit behind this entry; 0 on a page opened directly.
+let depth = $state<number>((history.state as { i?: number } | null)?.i ?? 0);
 
 function sync() {
   path = location.pathname;
+  depth = (history.state as { i?: number } | null)?.i ?? 0;
 }
 addEventListener("popstate", sync);
 
@@ -62,8 +65,9 @@ export const router = {
   get path() { return path; },
   get route() { return matchRoute(path); },
   get params() { return matchRoute(path).params; },
+  get canGoBack() { return depth > 0; },
   go(to: string): void {
-    history.pushState(null, "", to);
+    history.pushState({ i: depth + 1 }, "", to);
     sync();
   },
   back(): void {

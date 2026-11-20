@@ -4,15 +4,16 @@
   import { resource } from "../lib/api/resource.svelte";
   import { ApiError } from "../lib/api/http";
   import type { ItemKind, SaveItemDetail, VersionSummary } from "../lib/api/types";
-  import { deviceStateCopy } from "../lib/deviceStates";
+  import { deviceLine } from "../lib/deviceStates";
   import { emulatorName } from "../lib/emulators";
   import { formatSize, formatWhen } from "../lib/format";
   import { onAction } from "../lib/input/actions";
   import { gamepad } from "../lib/input/gamepad.svelte";
   import { router } from "../lib/router.svelte";
   import { systemLabel } from "../lib/systems";
-  import { uploadFiles } from "../lib/upload";
+  import { captureDrop, collectDrop, fromPicker, UnreadableUpload, uploadFiles, type Dropped, type UploadFile } from "../lib/upload";
   import Button from "../lib/ui/Button.svelte";
+  import Dialog from "../lib/ui/Dialog.svelte";
   import Empty from "../lib/ui/Empty.svelte";
   import ErrorLine from "../lib/ui/ErrorLine.svelte";
   import Facts from "../lib/ui/Facts.svelte";
@@ -76,10 +77,22 @@
 
   function activate(l: Line) {
     if (l.kind === "slot") open[l.item.itemId] = !open[l.item.itemId];
-    else restoring = true;
+    else openRestore();
   }
 
+  /** The version chosen when the dialog opened; a live reload must not change what Restore acts on. */
+  let target = $state<{ itemId: string; versionId: string; label: string } | undefined>();
   let restoring = $state(false);
+  function openRestore() {
+    const f = focused;
+    if (!f) return;
+    target = { itemId: f.item.itemId, versionId: f.v.id, label: label(f.v) };
+    restoring = true;
+  }
+  let problem = $state("");
+  /** Files waiting for the user to confirm they are not the same shape as the focused version. */
+  let pending = $state<{ files: UploadFile[]; item: SaveItemDetail | undefined; count: number } | undefined>();
+  let confirming = $state(false);
   let sent = $state("");
   let failure = $state<unknown>(undefined);
   let uploaded = $state("");
@@ -103,19 +116,29 @@
 
   let download: HTMLAnchorElement | undefined = $state();
   let picker = $state<HTMLInputElement>()!;
+  let folderPicker = $state<HTMLInputElement>()!;
 
-  async function send(files: File[]) {
+  function offer(files: UploadFile[]) {
     if (files.length === 0 || busy) return;
+    problem = "";
+    const item = focus?.item;
+    const count = focused?.v.fileCount;
+    if (count !== undefined && count !== files.length) {
+      pending = { files, item, count };
+      confirming = true;
+    } else void send(files, item);
+  }
+
+  async function send(files: UploadFile[], item: SaveItemDetail | undefined) {
     busy = true;
     failure = undefined;
     sent = "";
     uploaded = "";
     // The focused item decides where the file goes; a game with no save yet gets its first Save.
-    const item = focus?.item;
     const kind: ItemKind = item?.kind ?? "Save";
     try {
       const r = await uploadFiles(emu, key, kind, item?.slot ?? "", item?.core ?? "", files);
-      uploaded = r.status === "Unchanged" ? "That is already the newest save." : `Uploaded ${files.map((f) => f.name).join(", ")}.`;
+      uploaded = r.status === "Unchanged" ? "That is already the newest save." : `Uploaded ${files.map((f) => f.path).join(", ")}.`;
       game.reload();
     } catch (e) {
       failure = e;
@@ -124,16 +147,21 @@
     }
   }
 
-  function pick() {
-    const files = [...(picker.files ?? [])];
-    picker.value = "";
-    void send(files);
+  function picked(input: HTMLInputElement) {
+    const files = fromPicker(input.files ?? []);
+    input.value = "";
+    offer(files);
   }
 
-  function drop(e: DragEvent) {
+  async function drop(e: DragEvent) {
     if (!e.dataTransfer?.types.includes("Files")) return;
     e.preventDefault();
-    void send([...e.dataTransfer.files]);
+    const dropped: Dropped = captureDrop(e.dataTransfer);
+    try {
+      offer(await collectDrop(dropped));
+    } catch (err) {
+      problem = err instanceof UnreadableUpload ? err.message : "Couldn't read what you dropped. Try Upload from this PC.";
+    }
   }
   function over(e: DragEvent) {
     if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
@@ -142,7 +170,9 @@
   $effect(() =>
     onAction((a) => {
       if (a === "b") {
-        router.go("/games");
+        // Back to wherever the user came from (Home or Games); a page opened directly goes to Games.
+        if (router.canGoBack) router.back();
+        else router.go("/games");
         return true;
       }
       if (a === "x" && focused) {
@@ -175,8 +205,8 @@
       <p class="sub">
         <span>{systemLabel(emu, key)} · {emulatorName(emu)}</span>
         <span class="devices">
-          {#each row.devices as d, i (d.deviceId)}
-            {@const c = deviceStateCopy(d, emu)}{#if i > 0}<span class="ink2">;&nbsp;</span>{/if}<span class={c.tone || "ink2"}>{c.text}</span>
+          {#each deviceLine(row) as c, i (i)}
+            {#if i > 0}<span class="ink2">{" · "}</span>{/if}<span class={c.tone || "ink2"}>{c.text}</span>
           {/each}
         </span>
       </p>
@@ -227,7 +257,7 @@
               ]}
             />
             <div class="buttons">
-              <Button variant="primary" glyph="a" onclick={() => (restoring = true)}>Restore to…</Button>
+              <Button variant="primary" glyph="a" onclick={openRestore}>Restore to…</Button>
               <a class="btn" href={downloadUrl(focused.v.id)} download bind:this={download}>
                 {#if gamepad.connected}<Glyph action="y" />{/if}Download
               </a>
@@ -245,21 +275,37 @@
               {/if}
             </div>
           {/if}
+          {#if problem}<p class="fault line" role="alert">{problem}</p>{/if}
           <div class="upload">
-            <Button onclick={() => picker.click()} disabled={busy}>Upload from this PC</Button>
-            <input bind:this={picker} type="file" multiple hidden aria-label="Save file" onchange={pick} />
+            <p class="note">Upload a save file or its folder, or drop it anywhere on this page.</p>
+            <div class="buttons row">
+              <Button onclick={() => picker.click()} disabled={busy}>Upload from this PC</Button>
+              <Button onclick={() => folderPicker.click()} disabled={busy}>Upload a folder</Button>
+            </div>
+            <input bind:this={picker} type="file" multiple hidden aria-label="Save file" onchange={() => picked(picker)} />
+            <input bind:this={folderPicker} type="file" hidden aria-label="Save folder" onchange={() => picked(folderPicker)} {...{ webkitdirectory: true }} />
           </div>
         </aside>
       </div>
     {/if}
   </section>
 
-  {#if focused}
+  <Dialog bind:open={confirming} title="Upload these files?">
+    {#if pending}
+      <p class="note">This save has {pending.count} {pending.count === 1 ? "file" : "files"}; you're uploading {pending.files.length}. Upload anyway?</p>
+      <div class="buttons row">
+        <Button variant="primary" onclick={() => { const p = pending!; confirming = false; void send(p.files, p.item); }}>Upload anyway</Button>
+        <Button onclick={() => (confirming = false)}>Cancel</Button>
+      </div>
+    {/if}
+  </Dialog>
+
+  {#if target}
     <RestoreDialog
       bind:open={restoring}
-      itemId={focused.item.itemId}
-      versionId={focused.v.id}
-      label={label(focused.v)}
+      itemId={target.itemId}
+      versionId={target.versionId}
+      label={target.label}
       emulatorName={emulatorName(emu)}
       devices={installed}
       onrestored={(name) => {
@@ -375,6 +421,16 @@
     margin-top: 28px;
     padding-top: 20px;
     border-top: 1px solid var(--rule);
+  }
+  .upload .note {
+    margin: 0 0 12px;
+  }
+  .buttons.row {
+    flex-direction: row;
+    margin-top: 0;
+  }
+  .fault {
+    color: var(--fault);
   }
   .loading {
     margin: 0;

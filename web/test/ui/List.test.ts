@@ -79,4 +79,26 @@ describe("Row", () => {
     rerender({ focused: false, columns: "1fr", children });
     expect(screen.getByRole("button").hasAttribute("aria-current")).toBe(false);
   });
+
+  it("keeps the cursor on the same row (by key) when rows are inserted above it", async () => {
+    const key = (r: { name: string }) => r.name;
+    const { rerender } = render(ListHarness, { rows, onOpen: vi.fn(), key });
+    dispatch("down");
+    flushSync();
+    expect(current()?.textContent).toBe("Pokémon Platinum");
+    await rerender({ rows: [{ name: "Brand New" }, ...rows], onOpen: vi.fn(), key });
+    await tick();
+    expect(current()?.textContent).toBe("Pokémon Platinum");
+  });
+
+  it("clamps when the focused row disappears", async () => {
+    const key = (r: { name: string }) => r.name;
+    const { rerender } = render(ListHarness, { rows, onOpen: vi.fn(), key });
+    dispatch("down");
+    dispatch("down");
+    flushSync();
+    await rerender({ rows: rows.slice(0, 2), onOpen: vi.fn(), key });
+    await tick();
+    expect(current()?.textContent).toBe("Pokémon Platinum");
+  });
 });

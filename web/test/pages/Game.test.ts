@@ -8,7 +8,14 @@ import type { GameDetail } from "../../src/lib/api/types";
 import { dev, ODIN, THOR } from "../fixtures/home";
 import { devices, platinum } from "../fixtures/game";
 
-class FakeEventSource { readyState = 0; addEventListener() {} close() {} }
+let emit: (topic: string) => void = () => {};
+class FakeEventSource {
+  readyState = 0;
+  addEventListener(type: string, fn: (e: { data: string }) => void) {
+    if (type === "changed") emit = (topic) => fn({ data: JSON.stringify({ topic }) });
+  }
+  close() {}
+}
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -157,11 +164,129 @@ describe("Game", () => {
     expect(link.getAttribute("href")).toBe(gamePath("melonds", "nds/platinum") + "/conflict");
   });
 
-  it("goes back to Games on b", async () => {
+  it("sends relative paths for a picked folder, asking first when the file count differs", async () => {
+    const calls = serve((c) => (c.url.endsWith("/upload") ? json(200, { status: "Accepted", itemId: "i", versionId: "v", headVersionId: "v" }) : undefined));
+    render(Game);
+    await screen.findByText("v4");
+    const a = new File(["a"], "data.dat");
+    const b = new File(["b"], "x.bin");
+    Object.defineProperty(a, "webkitRelativePath", { value: "Save/data.dat" });
+    Object.defineProperty(b, "webkitRelativePath", { value: "Save/sub/x.bin" });
+    await fireEvent.change(screen.getByLabelText("Save folder"), { target: { files: [a, b] } });
+    expect(await screen.findByText("This save has 1 file; you're uploading 2. Upload anyway?")).toBeTruthy();
+    expect(calls).toHaveLength(0);
+    await fireEvent.click(screen.getByRole("button", { name: "Upload anyway" }));
+    await screen.findByText(/^Uploaded /);
+    const form = calls[0]!.body as FormData;
+    expect((form.getAll("files") as File[]).map((f) => f.name)).toEqual(["data.dat", "sub/x.bin"]);
+  });
+
+  it("does not send anything when the mismatch is cancelled", async () => {
+    const calls = serve();
+    render(Game);
+    await screen.findByText("v4");
+    await fireEvent.change(upload(), { target: { files: [file(), new File(["y"], "b.sav")] } });
+    await screen.findByText(/you're uploading 2/);
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(calls).toHaveLength(0);
+  });
+
+  const fileEntry = (name: string) => ({ isFile: true, isDirectory: false, name, file: (ok: (f: File) => void) => ok(new File(["x"], name)) });
+  const dirEntry = (name: string, children: unknown[], fail = false) => ({
+    isFile: false, isDirectory: true, name,
+    createReader() {
+      let done = false;
+      return { readEntries(ok: (e: unknown[]) => void, no: () => void) { if (fail) return no(); ok(done ? [] : ((done = true), children)); } };
+    },
+  });
+  const dropOf = (entries: unknown[]) =>
+    fireEvent(window, Object.assign(new Event("drop", { bubbles: true, cancelable: true }), {
+      dataTransfer: { types: ["Files"], files: [], items: entries.map((e) => ({ kind: "file", webkitGetAsEntry: () => e })) },
+    }));
+
+  it("walks a dropped folder and sends paths relative to it", async () => {
+    const calls = serve((c) => (c.url.endsWith("/upload") ? json(200, { status: "Accepted", itemId: "i", versionId: "v", headVersionId: "v" }) : undefined));
+    render(Game);
+    await screen.findByText("v4");
+    await dropOf([dirEntry("Save", [dirEntry("sub", [fileEntry("x.bin")])])]);
+    await screen.findByText("Uploaded sub/x.bin.");
+    expect((calls[0]!.body as FormData).getAll("files").map((f) => (f as File).name)).toEqual(["sub/x.bin"]);
+  });
+
+  it("says so when a dropped folder cannot be read, and sends nothing", async () => {
+    const calls = serve();
+    render(Game);
+    await screen.findByText("v4");
+    await dropOf([dirEntry("Save", [], true)]);
+    expect((await screen.findByRole("alert")).textContent).toContain("Couldn't read that folder");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("restores the version chosen when the dialog opened, even if a newer one arrives meanwhile", async () => {
+    const calls = serve(undefined, undefined);
+    render(Game);
+    await screen.findByRole("heading", { name: "v4 from Odin 3" });
+    await fireEvent.click(screen.getByRole("button", { name: /Restore to/ }));
+    await screen.findByLabelText("Restore to");
+    // A newer version lands on the server and the page reloads behind the open dialog.
+    const next = structuredClone(platinum);
+    next.items[0]!.versions.unshift({ ...next.items[0]!.versions[0]!, id: "v5", seq: 5 });
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET") return json(200, url.endsWith("/v1/devices") ? devices : next);
+      calls.push({ method: init!.method!, url, body: init?.body ? JSON.parse(init.body as string) : undefined });
+      return new Response(null, { status: 204 });
+    });
+    emit("saves");
+    await screen.findByText("v5");
+    await fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await screen.findByText(/^Sent to /);
+    expect(calls.at(-1)!.url).toBe("/v1/saves/item-save/versions/v4/restore");
+  });
+
+  it("keeps the cursor on the same version when a reload inserts one above it", async () => {
+    serve();
+    render(Game);
+    await screen.findByRole("heading", { name: "v4 from Odin 3" });
+    dispatch("down");
+    await screen.findByRole("heading", { name: "v3 from Thor" });
+    const next = structuredClone(platinum);
+    next.items[0]!.versions.unshift({ ...next.items[0]!.versions[0]!, id: "v5", seq: 5 });
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => json(200, url.endsWith("/v1/devices") ? devices : next));
+    emit("saves");
+    await screen.findByText("v5");
+    expect(screen.getByRole("heading", { name: "v3 from Thor" })).toBeTruthy();
+  });
+
+  it("goes back in history when the user came from another page, else to Games", async () => {
     serve();
     render(Game);
     await screen.findByText("v4");
-    expect(dispatch("b")).toBe(true);
+    const back = vi.spyOn(router, "back").mockImplementation(() => {});
+    expect(router.canGoBack).toBe(true);
+    dispatch("b");
+    expect(back).toHaveBeenCalled();
+    back.mockRestore();
+    // A page opened directly has no in-app history behind it.
+    history.replaceState(null, "", gamePath("melonds", "nds/platinum"));
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(router.canGoBack).toBe(false);
+    dispatch("b");
     await waitFor(() => expect(router.path).toBe("/games"));
+  });
+
+  it("frames the device line: all synced", async () => {
+    serve();
+    render(Game);
+    await screen.findByText("v4");
+    expect(document.querySelector(".devices")!.textContent).toBe("installed on Odin 3 and Thor · both have the newest save");
+  });
+
+  it("frames the device line: mixed states keep the shared copy and colours", async () => {
+    serve(undefined, (d) => { d.row.devices = [dev(ODIN, "Newest"), dev(THOR, "Behind"), dev("d-ayn", "NotInstalled")]; });
+    render(Game);
+    await screen.findByText("v4");
+    const line = document.querySelector(".devices") as HTMLElement;
+    expect(line.textContent).toBe("newest on Odin 3 · Thor, older save · not on Ayn");
+    expect(within(line).getByText("not on Ayn").classList.contains("ink3")).toBe(true);
   });
 });

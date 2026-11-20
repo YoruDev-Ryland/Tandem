@@ -1,5 +1,5 @@
 <script lang="ts" generics="T">
-  import { tick, type Snippet } from "svelte";
+  import { tick, untrack, type Snippet } from "svelte";
   import { onAction } from "../input/actions";
   import { cursor } from "../input/cursor.svelte";
   import Row from "./Row.svelte";
@@ -43,6 +43,30 @@
 
   let list: HTMLDivElement;
 
+  // The cursor follows its row by key: rows that arrive or leave above it (a live reload) must not retarget it.
+  let focusKey: unknown;
+  let hasKey = false;
+  function remember() {
+    const r = rows[c.index];
+    if (r === undefined) return;
+    focusKey = key(r, c.index);
+    hasKey = true;
+  }
+  function put(i: number) {
+    c.set(i);
+    remember();
+  }
+  $effect(() => {
+    const rs = rows;
+    untrack(() => {
+      if (hasKey) {
+        const i = rs.findIndex((r, j) => key(r, j) === focusKey);
+        if (i >= 0) c.set(i);
+      }
+      remember();
+    });
+  });
+
   async function focusRow() {
     await tick();
     list.querySelector<HTMLElement>('[aria-current="true"]')?.focus({ preventScroll: true });
@@ -58,6 +82,7 @@
       if (!active || rows.length === 0) return false;
       if (a === "up" || a === "down") {
         c.move(a === "down" ? 1 : -1);
+        remember();
         void focusRow();
         return true;
       }
@@ -78,7 +103,7 @@
     lastX = e.clientX;
     lastY = e.clientY;
     if (i === c.index) return;
-    c.set(i);
+    put(i);
     // Keep DOM focus on the cursor row, so Enter (a native click) acts on the row that is shown.
     if (list.contains(document.activeElement)) void focusRow();
   }
@@ -86,7 +111,7 @@
   function click(e: MouseEvent, i: number) {
     // detail 0 is a keyboard activation (Enter on the focused row): it opens the cursor row.
     if (e.detail === 0 || i === c.index) open(c.index);
-    else c.set(i);
+    else put(i);
   }
 </script>
 
@@ -102,7 +127,7 @@
       {columns}
       {size}
       onpointermove={(e) => pointerMove(e, i)}
-      onfocus={() => c.set(i)}
+      onfocus={() => put(i)}
       onclick={(e) => click(e, i)}
     >
       {@render row(r, active && i === c.index)}
