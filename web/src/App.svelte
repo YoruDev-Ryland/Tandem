@@ -3,6 +3,7 @@
   import { router } from "./lib/router.svelte";
   import { session } from "./lib/session.svelte";
   import { PRODUCT_NAME } from "./lib/brand";
+  import { installInput } from "./lib/input";
   import SignIn from "./pages/SignIn.svelte";
 
   const titles: Record<string, string> = {
@@ -24,6 +25,7 @@
 
   onMount(() => {
     void session.check();
+    return installInput();
   });
 
   const route = $derived(router.route);
