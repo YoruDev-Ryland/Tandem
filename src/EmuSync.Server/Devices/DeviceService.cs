@@ -21,11 +21,20 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
     private sealed record RunningStatus(DateTimeOffset At, string[] Ids);
 
     /// <summary>The device's running emulators; empty when its last status report is older than <see cref="OnlineWindow"/>
-    /// or Shizuku is off (the app cannot see the foreground app then).</summary>
+    /// or Shizuku is off (the app cannot see the foreground app then). A value it cannot read (an older format, or
+    /// damaged) reads as empty too, so one bad row cannot fail every page that lists devices.</summary>
     public static string[] RunningEmulators(string? json, bool? shizukuOk, DateTimeOffset now)
     {
         if (json is null || shizukuOk == false) return [];
-        var status = JsonSerializer.Deserialize<RunningStatus>(json, Json);
+        RunningStatus? status;
+        try
+        {
+            status = JsonSerializer.Deserialize<RunningStatus>(json, Json);
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
         return status is null || now - status.At > OnlineWindow ? [] : status.Ids ?? [];
     }
 
@@ -62,9 +71,10 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         }
         device.ShizukuOk = request.ShizukuOk;
         device.LastSeenUtc = now;
-        device.RunningEmulatorsJson = request.RunningEmulators is { Length: > 0 } running
-            ? JsonSerializer.Serialize(new RunningStatus(now, running.Distinct(StringComparer.Ordinal).ToArray()), Json)
-            : null;
+        // Ids this server does not know (a newer app) are dropped, not a reason to reject the whole report.
+        var running = (request.RunningEmulators ?? []).Where(id => id is not null && EmulatorIds.IsKnown(id))
+            .Distinct(StringComparer.Ordinal).ToArray();
+        device.RunningEmulatorsJson = running.Length > 0 ? JsonSerializer.Serialize(new RunningStatus(now, running), Json) : null;
 
         var emulators = request.Emulators ?? [];
         var roots = request.Roots ?? new Dictionary<string, string>();
@@ -118,9 +128,6 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         }
         if (request.RunningEmulators is { Length: > MaxRunningEmulators })
             throw new ApiException(400, "too_many", $"At most {MaxRunningEmulators} running emulators are allowed.");
-        foreach (var id in request.RunningEmulators ?? [])
-            if (id is null || !EmulatorIds.IsKnown(id))
-                throw new ApiException(400, "unknown_emulator", $"Unknown emulator '{id}'.");
         foreach (var (token, path) in request.Roots ?? new Dictionary<string, string>())
         {
             if (!RootToken().IsMatch(token))

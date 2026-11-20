@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using EmuSync.Protocol;
+using EmuSync.Server.Data;
 using EmuSync.Server.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace EmuSync.Server.Tests.Devices;
 
@@ -55,15 +58,52 @@ public class RunningEmulatorsTests
     }
 
     [Fact]
-    public async Task RunningEmulators_UnknownEmulator_Rejected()
+    public async Task RunningEmulators_UnknownIdsDropped_ReportAccepted()
+    {
+        using var factory = NewFactory();
+        var (odin, odinKey) = await factory.Register(Email, deviceName: "Odin");
+
+        (await odin.ReportStatus(["not-an-emulator", "eden"])).EnsureSuccessStatusCode();
+        Assert.Equal(["eden"], await Running(odin, odinKey.DeviceId));
+
+        (await odin.ReportStatus(["not-an-emulator"])).EnsureSuccessStatusCode();
+        Assert.Empty(await Running(odin, odinKey.DeviceId));
+    }
+
+    [Fact]
+    public async Task RunningEmulators_UnknownInstalledEmulator_StillRejected()
     {
         using var factory = NewFactory();
         var (odin, _) = await factory.Register(Email, deviceName: "Odin");
 
-        var response = await odin.ReportStatus(["not-an-emulator"]);
+        var response = await odin.PutAsJsonAsync("/v1/devices/me/status", new DeviceStatusRequest("android", "1.0", true,
+            [new EmulatorStatus("not-an-emulator", "pkg", "1", null)], new Dictionary<string, string>(), null));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("unknown_emulator", (await response.ReadAsync<ErrorResponse>()).Code);
+    }
+
+    [Theory]
+    [InlineData("[\"eden\"]")] // a bare array, as an early build stored it
+    [InlineData("not json")]
+    public async Task RunningEmulators_UnreadableStoredValue_ReadsAsNone(string stored)
+    {
+        using var factory = NewFactory();
+        var (odin, odinKey) = await factory.Register(Email, deviceName: "Odin");
+        await odin.Install("G1");
+        await odin.UploadSave("G1", "v1", null);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<EmuSyncDbContext>();
+            var device = await db.Devices.SingleAsync(d => d.Id == odinKey.DeviceId);
+            device.RunningEmulatorsJson = stored;
+            await db.SaveChangesAsync();
+        }
+        var web = await factory.WebLogin(Email);
+
+        Assert.Empty(await Running(web, odinKey.DeviceId));
+        Assert.Empty((await web.GetOk<HomeResponse>("/v1/web/home")).Devices.Single(d => d.Id == odinKey.DeviceId).RunningEmulators);
+        Assert.Single(await web.GetOk<GameRow[]>("/v1/web/games"));
     }
 
     [Fact]
