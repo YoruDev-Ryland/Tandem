@@ -546,13 +546,15 @@ public class NotifyTests
     }
 
     // Retries and Superseded results open no conflict, so they must not notify. Real uploads, not hand-raised events.
-    private static async Task<(HttpClient Web, Guid Head, SaveUploadResponse Conflict)> SaveConflictThenResolve(ServerFactory f, HttpClient a)
+    /// <summary>A uploads the head; a second device, B, then uploads its own copy on no base: a first-sync conflict.</summary>
+    private static async Task<(HttpClient Web, Guid Head, SaveUploadResponse Conflict, HttpClient B)> SaveConflictThenResolve(ServerFactory f, HttpClient a)
     {
         var web = await f.WebLogin("a@example.com");
+        var (b, _) = await f.PairSecondDevice(a, "B");
         var head = await Upload(a, "head", null);
-        var conflict = await Upload(a, "other", null);
+        var conflict = await Upload(b, "other", null);
         Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
-        return (web, head.VersionId, conflict);
+        return (web, head.VersionId, conflict, b);
     }
 
     [Fact]
@@ -562,12 +564,12 @@ public class NotifyTests
         using var _ = f;
         var (a, _) = await f.Register("a@example.com");
         await Configure(a, null, new NotifyTarget(NotifyKind.Webhook, HookUrl));
-        var (_, _, conflict) = await SaveConflictThenResolve(f, a);
+        var (_, _, conflict, b) = await SaveConflictThenResolve(f, a);
         await Flush(f);
         Assert.Single(handler.Requests);
 
         f.Time.Advance(TimeSpan.FromMinutes(30)); // outside the dedupe window: only "no new conflict" can explain silence
-        var retry = await Upload(a, "other", null);
+        var retry = await Upload(b, "other", null);
         await Flush(f);
 
         Assert.Equal(SaveUploadStatus.Conflict, retry.Status);
@@ -581,13 +583,13 @@ public class NotifyTests
         using var _ = f;
         var (a, _) = await f.Register("a@example.com");
         await Configure(a, null, new NotifyTarget(NotifyKind.Webhook, HookUrl));
-        var (web, head, conflict) = await SaveConflictThenResolve(f, a);
+        var (web, head, conflict, b) = await SaveConflictThenResolve(f, a);
         (await web.PostJsonAsync($"/v1/conflicts/{conflict.ItemId}/resolve", new ResolveConflictRequest(ResolveChoice.KeepVersion, head))).EnsureSuccessStatusCode();
         await Flush(f);
         Assert.Single(handler.Requests);
 
         f.Time.Advance(TimeSpan.FromMinutes(30));
-        var again = await Upload(a, "other", null);
+        var again = await Upload(b, "other", null);
         await Flush(f);
 
         Assert.Equal(SaveUploadStatus.Superseded, again.Status);
@@ -602,19 +604,26 @@ public class NotifyTests
         return await r.ReadAsync<ConfigUploadResponse>();
     }
 
-    private static async Task<(HttpClient A, ConfigUploadResponse Head, ConfigUploadResponse Conflict)> ConfigConflict(ServerFactory f,
+    /// <summary>A uploads its config (v1); the file is then edited in the browser (the new head) while A, still on v1,
+    /// changes it locally and uploads on base v1: a concurrent conflict. Head is the browser edit; Base is v1.</summary>
+    private static async Task<(HttpClient A, ConfigUploadResponse Head, ConfigUploadResponse Conflict, Guid Base)> ConfigConflict(ServerFactory f,
         CaptureHandler handler)
     {
         var (a, _) = await f.Register("a@example.com");
         await a.PutAsJsonAsync("/v1/devices/me/status", new DeviceStatusRequest("android", "1.0", true,
             [new EmulatorStatus("eden", "dev.eden", "0.1", null)], new Dictionary<string, string> { ["{INTERNAL}"] = "/storage/emulated/0" }));
         await Configure(a, null, new NotifyTarget(NotifyKind.Webhook, HookUrl));
-        var head = await ConfigUpload(a, "[Renderer]\nresolution_setup=1\n", null);
-        var conflict = await ConfigUpload(a, "[Renderer]\nresolution_setup=2\n", null);
+        var v1 = await ConfigUpload(a, "[Renderer]\nresolution_setup=1\n", null);
+        var web = await f.WebLogin("a@example.com");
+        var edit = await web.PutAsJsonAsync($"/v1/configs/bundles/{v1.BundleId}/files/Eden/config/qt-config.ini",
+            new EditConfigFileRequest(v1.VersionId, "[Renderer]\nresolution_setup=9\n"), TestApi.Json);
+        Assert.True(edit.IsSuccessStatusCode, $"{edit.StatusCode}: {await edit.Content.ReadAsStringAsync()}");
+        var head = await edit.ReadAsync<ConfigUploadResponse>();
+        var conflict = await ConfigUpload(a, "[Renderer]\nresolution_setup=2\n", v1.VersionId);
         Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
         await Flush(f);
         Assert.Single(handler.Requests); // the one real new conflict notified
-        return (a, head, conflict);
+        return (a, head, conflict, v1.VersionId);
     }
 
     [Fact]
@@ -622,10 +631,10 @@ public class NotifyTests
     {
         var (f, handler) = NewFactory();
         using var _ = f;
-        var (a, _, _) = await ConfigConflict(f, handler);
+        var (a, _, _, baseId) = await ConfigConflict(f, handler);
 
         f.Time.Advance(TimeSpan.FromMinutes(30));
-        var retry = await ConfigUpload(a, "[Renderer]\nresolution_setup=2\n", null);
+        var retry = await ConfigUpload(a, "[Renderer]\nresolution_setup=2\n", baseId);
         await Flush(f);
 
         Assert.Equal(SaveUploadStatus.Conflict, retry.Status);
@@ -637,13 +646,13 @@ public class NotifyTests
     {
         var (f, handler) = NewFactory();
         using var _ = f;
-        var (a, head, conflict) = await ConfigConflict(f, handler);
+        var (a, head, conflict, baseId) = await ConfigConflict(f, handler);
         var web = await f.WebLogin("a@example.com");
         (await web.PostJsonAsync($"/v1/configs/bundles/{conflict.BundleId}/conflicts/resolve",
             new ResolveConflictRequest(ResolveChoice.KeepVersion, head.VersionId))).EnsureSuccessStatusCode();
 
         f.Time.Advance(TimeSpan.FromMinutes(30));
-        var again = await ConfigUpload(a, "[Renderer]\nresolution_setup=2\n", null);
+        var again = await ConfigUpload(a, "[Renderer]\nresolution_setup=2\n", baseId);
         await Flush(f);
 
         Assert.Equal(SaveUploadStatus.Superseded, again.Status);

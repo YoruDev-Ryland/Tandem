@@ -549,7 +549,8 @@ public class DeliveryTests
         Assert.Equal(versions, await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v1.ItemId)));
 
         // Another device arriving with the same content on an old base opens its own conflict, as before.
-        var other = await Upload(a, Req(await Files(a, "b"), v1.VersionId));
+        var (c, _) = await factory.PairSecondDevice(a, "C");
+        var other = await Upload(c, Req(await Files(c, "b"), v1.VersionId));
         Assert.Equal(SaveUploadStatus.Conflict, other.Status);
         Assert.NotEqual(conflict.VersionId, other.VersionId);
         Assert.Equal(v2.VersionId, other.HeadVersionId);

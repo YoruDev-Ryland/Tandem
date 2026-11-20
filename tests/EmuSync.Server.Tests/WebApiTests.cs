@@ -87,11 +87,9 @@ public class WebApiTests
         await Save(odin, "v2", first.VersionId, "G1");
         var concurrent = await Save(thor, "v3", first.VersionId, "G1");   // based on an old head
         Assert.Equal(SaveUploadStatus.Conflict, concurrent.Status);
-        var firstSync = await Save(thor, "other", null, "G2");            // thor's first sync of G2 ...
-        await Save(odin, "x", null, "G2");                                 // ... odin got there first
-        var fs = await Save(thor, "y", null, "G2");
+        await Save(odin, "x", null, "G2");                                 // odin got there first ...
+        var fs = await Save(thor, "y", null, "G2");                        // ... then thor's first sync of G2
         Assert.Equal(SaveUploadStatus.Conflict, fs.Status);
-        _ = firstSync;
 
         var home = await Get<HomeResponse>(web, "/v1/web/home");
 

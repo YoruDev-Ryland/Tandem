@@ -640,13 +640,97 @@ public class ConfigSyncTests
     {
         using var f = NewFactory();
         var s = await TwoDevices(f);
-        var (group, _, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink));
+        await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink))), null);
+        await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink))), null);
+        var group = await CreateGroup(s.Web, s.OdinId);
+        await Join(s.Web, group.Id, s.ThorId);
+        // Thor has not applied the group head yet (the server does not record it as holding the head) and has no
+        // base: a first-sync conflict. (A device the server records as holding the head is treated as based on it.)
+        Assert.NotEqual(group.HeadVersionId, (await Config(f, s.ThorId)).AppliedVersionId);
 
         var r = await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, resolution: "4"))), null);
 
         Assert.Equal(SaveUploadStatus.Conflict, r.Status);
         Assert.Equal(ConflictReason.FirstSync, (await Version(f, r.VersionId)).ConflictReason);
         Assert.Equal(group.HeadVersionId, (await Bundle(f, group.BundleId)).HeadVersionId);
+    }
+
+    // Device-realistic follow-ups (I-2): the device uploads with the version id it actually holds.
+
+    [Fact]
+    public async Task Seed_device_change_after_group_creation_is_Accepted()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (group, odinSolo, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink));
+
+        // Odin's local base is still its solo version id: nobody told it about the group's first version.
+        var change = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), odinSolo.VersionId);
+
+        Assert.Equal(SaveUploadStatus.Accepted, change.Status);
+        Assert.Equal(group.BundleId, change.BundleId);
+        var bundle = await Bundle(f, group.BundleId);
+        Assert.False(bundle.OpenConflict);
+        Assert.Equal(change.VersionId, bundle.HeadVersionId);
+        Assert.Null((await Version(f, change.VersionId)).ConflictReason);
+        Assert.Equal(group.HeadVersionId, (await Version(f, change.VersionId)).BaseVersionId);
+        Assert.Equal(change.VersionId, Assert.Single(await Deliveries(s.Thor)).VersionId);
+    }
+
+    [Fact]
+    public async Task Leaver_change_on_new_solo_bundle_is_Accepted()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (group, _, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink)); // Thor applied the group head
+        (await s.Web.DeleteAsync($"/v1/configs/groups/{group.Id}/members/{s.ThorId}")).EnsureSuccessStatusCode();
+        var solo = (await Config(f, s.ThorId)).BundleId;
+
+        var change = await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, resolution: "4"))), group.HeadVersionId);
+
+        Assert.Equal(SaveUploadStatus.Accepted, change.Status);
+        Assert.Equal(solo, change.BundleId);
+        var bundle = await Bundle(f, solo);
+        Assert.False(bundle.OpenConflict);
+        Assert.Equal(change.VersionId, bundle.HeadVersionId);
+    }
+
+    [Fact]
+    public async Task Config_resolve_winner_next_change_on_its_real_base_is_Accepted()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (group, odinSolo, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink));
+        var thorChange = await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, resolution: "2"))), group.HeadVersionId);
+        // Odin changed locally before applying Thor's change; its base is its solo version id.
+        var odinChange = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), odinSolo.VersionId);
+        Assert.Equal(SaveUploadStatus.Conflict, odinChange.Status);
+        Assert.Equal(thorChange.VersionId, (await Bundle(f, group.BundleId)).HeadVersionId);
+        (await s.Web.PostJsonAsync($"/v1/configs/bundles/{group.BundleId}/conflicts/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, odinChange.VersionId))).EnsureSuccessStatusCode();
+
+        var next = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "5"))), odinSolo.VersionId);
+
+        Assert.Equal(SaveUploadStatus.Accepted, next.Status);
+        var bundle = await Bundle(f, group.BundleId);
+        Assert.False(bundle.OpenConflict);
+        Assert.Equal(next.VersionId, bundle.HeadVersionId);
+    }
+
+    [Fact]
+    public async Task Config_device_whose_applied_is_not_head_uploading_old_base_still_conflicts()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (group, odinSolo, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink));
+        await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, resolution: "2"))), group.HeadVersionId);
+        Assert.Equal(group.HeadVersionId, (await Config(f, s.OdinId)).AppliedVersionId); // Odin has not applied Thor's change
+
+        var odinChange = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), odinSolo.VersionId);
+
+        Assert.Equal(SaveUploadStatus.Conflict, odinChange.Status);
+        Assert.Equal(ConflictReason.Concurrent, (await Version(f, odinChange.VersionId)).ConflictReason);
+        Assert.True((await Bundle(f, group.BundleId)).OpenConflict);
     }
 
     [Fact]

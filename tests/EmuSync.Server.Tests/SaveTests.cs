@@ -498,6 +498,77 @@ public class SaveTests
             seen.ToHashSet());
     }
 
+    // Device-realistic follow-ups (I-2): a device that got Conflict keeps the base it had (the client only adopts a
+    // version id on Accepted/Unchanged/Superseded), so its next upload names that old base, not the head id.
+
+    [Fact]
+    public async Task Resolve_winner_next_save_on_its_real_base_is_Accepted()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var bHas = (await Upload(b, Req(await Files(b, "v1"), null))).HeadVersionId; // Unchanged: B adopts v1
+        Assert.Equal(v1.VersionId, bHas);
+        await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        var c = await Upload(b, Req(await Files(b, "b"), bHas));
+        Assert.Equal(SaveUploadStatus.Conflict, c.Status);
+        (await Resolve(a, v1.ItemId, ResolveChoice.KeepVersion, c.VersionId)).EnsureSuccessStatusCode();
+
+        // B still holds base v1 locally.
+        var next = await Upload(b, Req(await Files(b, "b2"), bHas));
+
+        Assert.Equal(SaveUploadStatus.Accepted, next.Status);
+        var item = await Item(factory, v1.ItemId);
+        Assert.Equal(next.VersionId, item.HeadVersionId);
+        Assert.False(item.OpenConflict);
+        var version = (await Versions(factory, v1.ItemId)).Single(v => v.Id == next.VersionId);
+        Assert.Null(version.ConflictReason);
+        Assert.Equal(c.VersionId, version.BaseVersionId); // recorded as based on the head the device holds
+    }
+
+    [Fact]
+    public async Task Bulk_first_sync_UseDevice_winner_next_save_with_null_base_is_Accepted()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        var s1 = await Upload(a, Req(await Files(a, "s1"), null));
+        var d1 = await Upload(b, Req(await Files(b, "d1"), null));
+        Assert.Equal(SaveUploadStatus.Conflict, d1.Status);
+        (await b.PostJsonAsync("/v1/conflicts/first-sync/resolve",
+            new BulkFirstSyncRequest(bKey.DeviceId, FirstSyncChoice.UseDevice, null))).EnsureSuccessStatusCode();
+
+        // B never adopted a version id: its base is still null.
+        var next = await Upload(b, Req(await Files(b, "d1b"), null));
+
+        Assert.Equal(SaveUploadStatus.Accepted, next.Status);
+        var item = await Item(factory, s1.ItemId);
+        Assert.Equal(next.VersionId, item.HeadVersionId);
+        Assert.False(item.OpenConflict);
+    }
+
+    [Fact]
+    public async Task Device_whose_known_is_not_head_uploading_old_base_still_conflicts()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var bHas = (await Upload(b, Req(await Files(b, "v1"), null))).HeadVersionId; // server records B known = v1
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+
+        var stale = await Upload(b, Req(await Files(b, "b"), bHas));
+        var fresh = await Upload(b, Req(await Files(b, "b-null"), null));
+
+        Assert.Equal(SaveUploadStatus.Conflict, stale.Status);
+        Assert.Equal(SaveUploadStatus.Conflict, fresh.Status);
+        var versions = await Versions(factory, v1.ItemId);
+        Assert.Equal(ConflictReason.Concurrent, versions.Single(v => v.Id == stale.VersionId).ConflictReason);
+        Assert.Equal(ConflictReason.FirstSync, versions.Single(v => v.Id == fresh.VersionId).ConflictReason);
+        Assert.Equal(v2.VersionId, (await Item(factory, v1.ItemId)).HeadVersionId);
+    }
+
     [Fact]
     public async Task Bulk_first_sync_writes_one_summary_activity_row()
     {

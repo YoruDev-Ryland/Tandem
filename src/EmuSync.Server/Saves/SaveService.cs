@@ -80,16 +80,24 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             }
             else
             {
+                // The server may have recorded this device as holding the head without telling it (a resolve or a
+                // first-sync choice made its upload the head), so the device still names its older base. The
+                // server's own record, never the request, decides this: only then is the upload based on the head.
+                var baseId = request.BaseVersionId;
+                if (head is not null && baseId != head.Id && deviceId is Guid holder
+                    && await db.DeviceItemStates.AnyAsync(s => s.DeviceId == holder && s.ItemId == item.Id && s.KnownVersionId == head.Id, ct))
+                    baseId = head.Id;
+
                 var seq = (await db.SaveVersions.Where(v => v.ItemId == item.Id).MaxAsync(v => (int?)v.Seq, ct) ?? 0) + 1;
                 var version = new SaveVersion
                 {
-                    Id = Guid.NewGuid(), ItemId = item.Id, Seq = seq, BaseVersionId = request.BaseVersionId,
+                    Id = Guid.NewGuid(), ItemId = item.Id, Seq = seq, BaseVersionId = baseId,
                     DeviceId = deviceId, ReceivedUtc = time.GetUtcNow(), ManifestJson = Manifests.ToJson(manifest),
                     ManifestHash = manifestHash, TotalSize = manifest.Sum(e => e.Size), Core = core,
                 };
                 db.SaveVersions.Add(version);
 
-                if (head is null || request.BaseVersionId == head.Id)
+                if (head is null || baseId == head.Id)
                 {
                     item.HeadVersionId = version.Id;
                     if (deviceId is Guid d2) await SetKnownAsync(d2, item.Id, version.Id, ct);
@@ -98,7 +106,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 }
                 else
                 {
-                    var reason = request.BaseVersionId is null ? ConflictReason.FirstSync : ConflictReason.Concurrent;
+                    var reason = baseId is null ? ConflictReason.FirstSync : ConflictReason.Concurrent;
                     version.ConflictReason = reason;
                     item.OpenConflict = true;
                     response = new SaveUploadResponse(SaveUploadStatus.Conflict, item.Id, version.Id, head.Id);

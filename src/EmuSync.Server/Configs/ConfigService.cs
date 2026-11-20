@@ -81,9 +81,15 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
             }
             else
             {
-                var version = await NewVersionAsync(bundle.Id, request.BaseVersionId, deviceId, ConfigSource.Device,
+                // The server may have recorded this device as holding the head without telling it (group creation,
+                // leaving a group, or a resolve made its files the head), so the device still names its older base.
+                // The server's own record, never the request, decides this: only then is the upload based on the head.
+                var baseId = request.BaseVersionId;
+                if (head is not null && baseId != head.Id && config.AppliedVersionId == head.Id) baseId = head.Id;
+
+                var version = await NewVersionAsync(bundle.Id, baseId, deviceId, ConfigSource.Device,
                     Manifests.ToJson(canonical), hash, canonical.Sum(e => e.Size), ct);
-                if (head is null || request.BaseVersionId == head.Id)
+                if (head is null || baseId == head.Id)
                 {
                     bundle.HeadVersionId = version.Id;
                     config.AppliedVersionId = version.Id;
@@ -91,7 +97,7 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
                 }
                 else
                 {
-                    version.ConflictReason = request.BaseVersionId is null ? ConflictReason.FirstSync : ConflictReason.Concurrent;
+                    version.ConflictReason = baseId is null ? ConflictReason.FirstSync : ConflictReason.Concurrent;
                     bundle.OpenConflict = true;
                     response = new ConfigUploadResponse(SaveUploadStatus.Conflict, bundle.Id, version.Id);
                     opened = new ConfigConflictOpened(userId, bundle.Id, version.Id, emulatorId, deviceId);
