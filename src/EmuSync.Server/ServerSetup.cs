@@ -1,5 +1,6 @@
 using EmuSync.Server.Accounts;
 using EmuSync.Server.Auth;
+using EmuSync.Server.Blobs;
 using EmuSync.Server.Data;
 using EmuSync.Server.Devices;
 using EmuSync.Server.Http;
@@ -19,6 +20,8 @@ public static class ServerSetup
         builder.Services.AddEmuSyncAuth(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
         builder.Services.AddScoped<AccountService>();
         builder.Services.AddScoped<PairingService>();
+        builder.Services.AddSingleton<IBlobStore, BlobStore>();
+        builder.Services.AddScoped<BlobService>();
     }
 
     /// <summary>Builds the pipeline and maps endpoints. Each feature adds one line here.</summary>
@@ -38,5 +41,6 @@ public static class ServerSetup
         app.MapAdminEndpoints();
         app.MapDeviceEndpoints();
         app.MapPairingEndpoints();
+        app.MapBlobEndpoints();
     }
 }

@@ -17,3 +17,5 @@ public sealed record CreateUserRequest(string Email, bool IsAdmin);
 public sealed record CreatedUserResponse(string Email, string Password);
 public sealed record AdminSettings(bool AllowRegistration);
 public sealed record DeviceSummary(Guid Id, string Name, string Platform, DateTimeOffset? LastSeenUtc, bool? ShizukuOk, bool IsCurrent);
+public sealed record MissingBlobsRequest(List<string> Hashes);
+public sealed record MissingBlobsResponse(List<string> Missing);

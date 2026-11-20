@@ -14,6 +14,7 @@ public sealed class ServerOptions
     public string? DatabaseConnection { get; set; }
     public bool TrustForwardedHeaders { get; set; }
     public string? WebRoot { get; set; }
+    public long MaxBlobBytes { get; set; } = 8L * 1024 * 1024 * 1024;
     public int AuthRequestsPerMinute { get; set; } = 10;
 
     public string ServerName
