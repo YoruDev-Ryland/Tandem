@@ -11,6 +11,7 @@ import dev.emusync.app.model.ResolveChoice
 import dev.emusync.app.model.ResolveConflictRequest
 import dev.emusync.app.ui.state.Loaded
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -74,8 +75,28 @@ data class ConflictsUi(
 private val WHEN = DateTimeFormatter.ofPattern("EEE, MMM d, HH:mm", Locale.US)
 
 /** "Thu, Nov 19, 21:48", like the web's Facts rows; empty if the server sent something unreadable. */
-internal fun formatWhen(iso: String, zone: ZoneId): String =
-    runCatching { WHEN.format(Instant.parse(iso).atZone(zone)) }.getOrDefault("")
+internal fun formatWhen(iso: String, zone: ZoneId): String = parseUtc(iso)?.let { WHEN.format(it.atZone(zone)) }.orEmpty()
+
+/**
+ * A server timestamp. The server writes DateTimeOffset ("…+00:00", up to seven fraction digits), which older
+ * java.time (Instant.parse on Android before API 34) rejects; OffsetDateTime reads it everywhere.
+ */
+private fun parseUtc(iso: String): Instant? = runCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
+
+/**
+ * One side per device: the server lists every open conflict version, and a device that kept uploading while the
+ * conflict was open has several. Each device is represented by its newest (by received time; the server lists them
+ * oldest first, so the last wins a tie). Sides with no device stand alone. In first-appearance order.
+ */
+internal fun deviceSides(sides: List<ConflictSide>): List<ConflictSide> {
+    val newest = linkedMapOf<String, ConflictSide>()
+    for (s in sides) {
+        val k = s.deviceId ?: "version:${s.versionId}"
+        val prev = newest[k]
+        if (prev == null || !(parseUtc(s.receivedUtc) ?: Instant.MIN).isBefore(parseUtc(prev.receivedUtc) ?: Instant.MIN)) newest[k] = s
+    }
+    return newest.values.toList()
+}
 
 /** "512 KB", "1.0 MB": binary units, one decimal from MB up (the web's formatSize). */
 internal fun formatSize(bytes: Long): String = when {
@@ -107,11 +128,13 @@ fun conflictsUi(
     zone: ZoneId = ZoneId.systemDefault(),
 ): ConflictsUi {
     val mine = if (deviceId == null) emptyList() else rows.value.orEmpty().filter { r ->
-        r.sides.size >= 2 && r.sides.any { it.deviceId == deviceId }
+        val devices = deviceSides(r.sides)
+        devices.size >= 2 && devices.any { it.deviceId == deviceId }
     }
     val entries = mine.map { r ->
-        val me = r.sides.first { it.deviceId == deviceId }
-        val others = r.sides.filter { it !== me }
+        val devices = deviceSides(r.sides)
+        val me = devices.first { it.deviceId == deviceId }
+        val others = devices.filter { it !== me }
         val meName = "This ${me.deviceName ?: "device"}"
         val other = others.first()
         val column = { title: String, s: ConflictSide ->
@@ -149,7 +172,7 @@ fun conflictsUi(
     if (deviceId != null && firstSync.size >= 2) {
         val myName = "this ${firstSync.first().sides.first { it.deviceId == deviceId }.deviceName ?: "device"}"
         bulkMine = bulk("Use this device's for all", myName, firstSync.size, bulkPlan(firstSync, deviceId))
-        for (r in firstSync) for (s in r.sides) {
+        for (r in firstSync) for (s in deviceSides(r.sides)) {
             val id = s.deviceId ?: continue
             if (id == deviceId || id in bulkOther) continue
             val theirs = firstSync.filter { row -> row.sides.any { it.deviceId == id } }
@@ -177,10 +200,14 @@ private fun bulk(label: String, who: String, n: Int, calls: List<BulkFirstSyncRe
  */
 fun bulkPlan(rows: List<ConflictRow>, deviceId: String): List<BulkFirstSyncRequest> {
     val calls = linkedMapOf<Pair<String, FirstSyncChoice>, MutableList<String>>()
-    fun add(device: String, choice: FirstSyncChoice, item: String) { calls.getOrPut(device to choice) { mutableListOf() } += item }
+    fun add(device: String, choice: FirstSyncChoice, item: String) {
+        val items = calls.getOrPut(device to choice) { mutableListOf() }
+        if (item !in items) items += item
+    }
     for (r in rows) {
         if (r.reason != ConflictReason.FirstSync) continue
-        val mine = r.sides.firstOrNull { it.deviceId == deviceId } ?: continue
+        // The device's newest version is the one kept; a device with any upload that is not current is set aside.
+        val mine = deviceSides(r.sides).firstOrNull { it.deviceId == deviceId } ?: continue
         if (!mine.isHead) add(deviceId, FirstSyncChoice.UseDevice, r.itemId)
         for (o in r.sides) {
             val id = o.deviceId ?: continue

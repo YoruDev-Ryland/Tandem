@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         // The only in-app start: sync runs whenever this device is signed in. Starting a running service is a no-op.
-        if (AppGraph.store(this).deviceKey != null) SyncService.start(this)
+        if (AppGraph.store(this).deviceKey != null) SyncService.tryStart(this)
         vm.server.setVisible(true)
         vm.server.refresh()   // the key or server may have changed while we were away (setup, debug screen)
     }

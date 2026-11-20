@@ -65,6 +65,22 @@ class SyncService : Service() {
         private const val RESTART_DELAY_MS = 5_000L
         private const val BIND_TIMEOUT_MS = 30_000L
 
+        /**
+         * Runs [start], logging instead of throwing when Android refuses it: from Android 12 a foreground-service start
+         * while the app is in the background throws ForegroundServiceStartNotAllowedException (an
+         * IllegalStateException). Returns whether it started.
+         */
+        fun guardedStart(start: () -> Unit): Boolean = try {
+            start()
+            true
+        } catch (e: IllegalStateException) {
+            LogBuffer.add("sync service start refused: ${e.message}")
+            false
+        }
+
+        /** [start] for callers that may run in the background (a request finishing after the app left the screen). */
+        fun tryStart(context: Context, action: String? = null): Boolean = guardedStart { start(context, action) }
+
         fun start(context: Context, action: String? = null) {
             context.startForegroundService(Intent(context, SyncService::class.java).setAction(action))
         }

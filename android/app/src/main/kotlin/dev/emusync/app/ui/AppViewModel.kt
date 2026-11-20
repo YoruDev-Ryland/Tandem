@@ -50,7 +50,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         api = ::api,
         scope = viewModelScope,
         // A choice can change what this device should hold: apply it (the service holds it while the emulator runs).
-        afterResolve = { SyncService.start(app, SyncService.ACTION_APPLY); server.refresh() },
+        afterResolve = { SyncService.tryStart(app, SyncService.ACTION_APPLY); server.refresh() },
         emulatorName = { emulatorNames[it] ?: it },
     )
 

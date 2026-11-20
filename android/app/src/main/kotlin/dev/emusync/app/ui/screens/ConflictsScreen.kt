@@ -1,5 +1,6 @@
 package dev.emusync.app.ui.screens
 
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -59,15 +61,36 @@ class ConflictsActions(
  * or more first-sync conflicts, L2 and R2 offer the same choice for all of them, after a confirm sheet.
  */
 @Composable
-fun ConflictsScreen(ui: ConflictsUi, top: @Composable RowScope.() -> Unit, actions: ConflictsActions) {
-    var at by remember { mutableIntStateOf(0) }
+fun ConflictsScreen(
+    ui: ConflictsUi,
+    top: @Composable RowScope.() -> Unit,
+    actions: ConflictsActions,
+    now: () -> Long = { SystemClock.uptimeMillis() },
+) {
+    // The cursor is the focused game, by item id; its index is only where it was, for when that game goes away.
+    var focusId by remember { mutableStateOf<String?>(null) }
+    var lastAt by remember { mutableIntStateOf(0) }
     // The sheet holds the choice as it was when it opened: a refresh underneath does not change what it sends.
     var sheet by remember { mutableStateOf<BulkChoice?>(null) }
+    val seen = remember { Seen() }
 
-    val focused = ui.entries.getOrNull(at.coerceAtMost(ui.entries.lastIndex))
+    val at = ui.entries.indexOfFirst { it.itemId == focusId }.takeIf { it >= 0 } ?: lastAt.coerceIn(0, maxOf(0, ui.entries.lastIndex))
+    val focused = ui.entries.getOrNull(at)
     val bulkOther = ui.bulkMine?.let { ui.bulkOther[focused?.otherId] ?: ui.bulkOther.values.firstOrNull() }
 
-    fun keepMine() { focused?.let { actions.resolve(it.itemId, it.keepMine) } }
+    // When the cursor lands on a game by itself (the decided one left the list), that game must be on screen for a
+    // moment before A, X or Y decide it, so a quick second press never decides a game nobody has looked at.
+    SideEffect { seen.show(focused?.itemId, now) }
+    fun decide(req: (ConflictEntry) -> ResolveConflictRequest) {
+        val e = focused ?: return
+        if (!seen.settled(e.itemId, now)) return
+        actions.resolve(e.itemId, req(e))
+    }
+    fun select(i: Int) {
+        ui.entries.getOrNull(i)?.let { focusId = it.itemId; seen.chosen(it.itemId) }
+        lastAt = i
+    }
+    fun keepMine() = decide { it.keepMine }
     fun confirm() { sheet?.let { actions.bulk(it.calls) }; sheet = null }
 
     val open = sheet
@@ -75,8 +98,8 @@ fun ConflictsScreen(ui: ConflictsUi, top: @Composable RowScope.() -> Unit, actio
         open != null -> listOf(Hint(Action.A, open.confirm, ::confirm), Hint(Action.B, "Cancel") { sheet = null })
         focused != null -> listOf(
             Hint(Action.A, "Keep ${focused.me.replaceFirstChar { it.lowercase() }}'s", ::keepMine),
-            Hint(Action.X, "Keep ${focused.other}'s") { actions.resolve(focused.itemId, focused.keepOther) },
-            Hint(Action.Y, "Keep both") { actions.resolve(focused.itemId, focused.keepBoth) },
+            Hint(Action.X, "Keep ${focused.other}'s") { decide { it.keepOther } },
+            Hint(Action.Y, "Keep both") { decide { it.keepBoth } },
             Hint(Action.B, "Back", actions.back),
         )
         else -> listOf(Hint(Action.B, "Back", actions.back))
@@ -104,7 +127,7 @@ fun ConflictsScreen(ui: ConflictsUi, top: @Composable RowScope.() -> Unit, actio
             val portrait = maxWidth < 600.dp
             val list: @Composable (Modifier) -> Unit = { m ->
                 Column(m) {
-                    ListPane(ui, at, { at = it }, ui.bulkMine, bulkOther) { sheet = it }
+                    ListPane(ui, at, ::select, ui.bulkMine, bulkOther) { sheet = it }
                 }
             }
             val detail: @Composable (Modifier) -> Unit = { m ->
@@ -127,6 +150,32 @@ fun ConflictsScreen(ui: ConflictsUi, top: @Composable RowScope.() -> Unit, actio
         // never decides. In a layer of its own so it comes before the list however late the list (re)enters the
         // screen; the sheet's layer attaches later still, so the sheet comes before this.
         ActionLayer { OnAction { a -> if (a == Action.A && focused != null) { keepMine(); true } else false } }
+    }
+}
+
+/** How long a game the cursor moved to by itself is shown before a button decides it. */
+private const val SETTLE_MS = 500L
+
+/** When the focused game came on screen, and whether the user put the cursor there. */
+private class Seen {
+    private var id: String? = null
+    private var since = Long.MIN_VALUE
+    private var picked: String? = null
+
+    /** The user moved the cursor to [itemId]: they are looking at it. */
+    fun chosen(itemId: String) { picked = itemId }
+
+    fun show(itemId: String?, now: () -> Long) {
+        if (itemId == id) return
+        // The first game shown, and a game the user picked, can be decided at once; one that slid under the cursor waits.
+        since = if (id == null || itemId == picked) Long.MIN_VALUE else now()
+        id = itemId
+        picked = null
+    }
+
+    fun settled(itemId: String, now: () -> Long): Boolean = when {
+        itemId != id -> itemId == picked   // not drawn yet: only a game the user just picked
+        else -> since == Long.MIN_VALUE || now() - since >= SETTLE_MS
     }
 }
 

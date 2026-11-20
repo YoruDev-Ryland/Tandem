@@ -90,6 +90,8 @@ class ConflictsScreenTest {
     private var applied = 0
     private val rows = MutableStateFlow(Loaded<List<ConflictRow>>())
     private val running = MutableStateFlow<Set<String>>(emptySet())
+    /** The screen's clock, in ms; tests move it by hand. */
+    private var clock = 10_000L
 
     /** The tab as the app wires it: the model over a fake server, the screen over the model. */
     private fun showLive(list: List<ConflictRow>) {
@@ -102,13 +104,13 @@ class ConflictsScreenTest {
         compose.setContent {
             val state by vm.ui.collectAsState()
             EmuTheme(ThemeMode.Dark) {
-                ConflictsScreen(state, top = {}, actions = ConflictsActions(resolve = vm::resolve, bulk = vm::bulk))
+                ConflictsScreen(state, top = {}, actions = ConflictsActions(resolve = vm::resolve, bulk = vm::bulk), now = { clock })
             }
         }
     }
 
     private fun show(ui: ConflictsUi, actions: ConflictsActions) {
-        compose.setContent { EmuTheme(ThemeMode.Dark) { ConflictsScreen(ui, top = {}, actions = actions) } }
+        compose.setContent { EmuTheme(ThemeMode.Dark) { ConflictsScreen(ui, top = {}, actions = actions, now = { clock }) } }
     }
 
     @Test fun aKeepsThisDevicesSideThenAppliesAndRefreshes() {
@@ -176,8 +178,96 @@ class ConflictsScreenTest {
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         // The refresh has not landed yet; the next A must not resolve the same conflict again.
         compose.onNodeWithText("Pokémon Brilliant Diamond").assertDoesNotExist()
+        clock += 500   // the next game has been on screen long enough to have been seen
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertEquals(listOf("i1", "i2"), calls.resolved.map { it.first })
+    }
+
+    @Test fun aSecondQuickAAfterADecisionDoesNotDecideTheNextGameUnseen() {
+        showLive(listOf(conflict("i1", "Pokémon Brilliant Diamond"), conflict("i2", "Pokémon Pearl")))
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // resolves at once; Pearl takes the cursor
+        clock += 499
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        compose.key(KeyEvent.KEYCODE_BUTTON_X)
+        compose.key(KeyEvent.KEYCODE_BUTTON_Y)
+        assertEquals(listOf("i1"), calls.resolved.map { it.first })
+        clock += 1
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(listOf("i1", "i2"), calls.resolved.map { it.first })
+    }
+
+    @Test fun movingTheCursorYourselfNeedsNoWait() {
+        showLive(listOf(conflict("i1", "A"), conflict("i2", "B"), conflict("i3", "C")))
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        clock += 600
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)   // a cursor the user moves is a game they are looking at
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(listOf("i1", "i3"), calls.resolved.map { it.first })
+    }
+
+    @Test fun theCursorStaysOnItsGameWhenTheListReorders() {
+        val sent = mutableListOf<String>()
+        var current by mutableStateOf(ui(listOf(conflict("i1", "A"), conflict("i2", "B"))))
+        compose.setContent {
+            EmuTheme(ThemeMode.Dark) {
+                ConflictsScreen(current, top = {}, actions = ConflictsActions(resolve = { id, _ -> sent += id }), now = { clock })
+            }
+        }
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        current = ui(listOf(conflict("i0", "Z"), conflict("i2", "B"), conflict("i1", "A")))
+        compose.waitForIdle()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(listOf("i2"), sent)
+    }
+
+    @Test fun aDeviceWithSeveralOpenVersionsIsOneSideWithItsNewest() {
+        val r = conflict("i1", "Pokémon Brilliant Diamond", sides = listOf(
+            side(THOR, "Thor", false, version = "thor-old", received = "2026-11-18T08:00:00+00:00"),
+            side(ODIN, "Odin 3", true, version = "odin-old", received = "2026-11-17T10:12:00+00:00"),
+            side(THOR, "Thor", false, version = "thor-new", received = "2026-11-19T21:48:00+00:00"),
+            side(ODIN, "Odin 3", false, version = "odin-new", received = "2026-11-19T22:00:00+00:00"),
+        ))
+        val e = ui(listOf(r)).entries.single()
+        assertEquals("thor-new", e.keepMine.keepVersionId)
+        assertEquals("odin-new", e.keepOther.keepVersionId)
+        assertEquals(ResolveConflictRequest(ResolveChoice.KeepBoth, "thor-new", "From Odin 3"), e.keepBoth)
+        assertEquals("This Thor and the Odin 3 each had a save before they first synced. Both are safe on the server.", e.subtitle)
+        assertEquals(listOf("This Thor", "Odin 3"), e.columns.map { it.title })
+        assertEquals("Thu, Nov 19, 21:48", e.columns[0].received)
+    }
+
+    @Test fun twoVersionsFromThisDeviceAloneAreNotAConflictWithAnotherDevice() {
+        val r = conflict("i1", "A", sides = listOf(side(THOR, "Thor", true, version = "a"), side(THOR, "Thor", false, version = "b")))
+        assertTrue(ui(listOf(r)).entries.isEmpty())
+    }
+
+    @Test fun serverTimesWithAnOffsetAndSevenFractionDigitsRead() {
+        assertEquals("Thu, Nov 19, 21:48", formatWhen("2026-11-19T21:48:00+00:00", ZoneOffset.UTC))
+        assertEquals("Thu, Nov 19, 21:48", formatWhen("2026-11-19T21:48:00.1234567+00:00", ZoneOffset.UTC))
+        assertEquals("Thu, Nov 19, 21:48", formatWhen("2026-11-19T22:48:00+01:00", ZoneOffset.UTC))
+    }
+
+    @Test fun bulkPlanNamesEachDeviceAndItemOnceWhenADeviceHasSeveralVersions() {
+        val r = conflict("i1", "A", sides = listOf(
+            side(THOR, "Thor", false, version = "thor-old", received = "2026-11-18T08:00:00+00:00"),
+            side(ODIN, "Odin 3", true, version = "odin-head", received = "2026-11-17T10:12:00+00:00"),
+            side(THOR, "Thor", false, version = "thor-new", received = "2026-11-19T21:48:00+00:00"),
+            side(ODIN, "Odin 3", false, version = "odin-new", received = "2026-11-19T22:00:00+00:00"),
+        ))
+        assertEquals(
+            listOf(
+                BulkFirstSyncRequest(THOR, FirstSyncChoice.UseDevice, listOf("i1")),
+                BulkFirstSyncRequest(ODIN, FirstSyncChoice.UseServer, listOf("i1")),
+            ),
+            bulkPlan(listOf(r), THOR),
+        )
+        assertEquals(
+            listOf(
+                BulkFirstSyncRequest(ODIN, FirstSyncChoice.UseDevice, listOf("i1")),
+                BulkFirstSyncRequest(THOR, FirstSyncChoice.UseServer, listOf("i1")),
+            ),
+            bulkPlan(listOf(r), ODIN),
+        )
     }
 
     @Test fun showsTheMockupCopyForAFirstSyncConflict() {

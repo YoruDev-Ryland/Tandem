@@ -6,6 +6,8 @@ import dev.emusync.app.service.AppGraph
 import dev.emusync.app.service.SyncService
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,6 +30,13 @@ class MainActivityServiceTest {
         Robolectric.buildActivity(MainActivity::class.java).setup().use {
             assertEquals(SyncService::class.java.name, shadowOf(app).nextStartedService?.component?.className)
         }
+    }
+
+    @Test fun aRefusedStartIsLoggedNotThrown() {
+        // Android 12+ refuses a foreground-service start from the background (ForegroundServiceStartNotAllowedException,
+        // an IllegalStateException); a choice that lands after the app left the screen must not crash it.
+        assertFalse(SyncService.guardedStart { throw IllegalStateException("not allowed") })
+        assertTrue(SyncService.guardedStart { })
     }
 
     @Test fun signedOutStartsNothing() {
