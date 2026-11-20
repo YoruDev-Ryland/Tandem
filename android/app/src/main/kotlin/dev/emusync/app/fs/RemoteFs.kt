@@ -16,7 +16,7 @@ class RemoteFs(private val service: () -> IShellService) : Fs {
     constructor(service: IShellService) : this({ service })
 
     private val json = Json
-    private val pageSize = 2000
+    private val pageSize = 500
 
     private inline fun <T> call(block: (IShellService) -> T): T {
         val s = try {
