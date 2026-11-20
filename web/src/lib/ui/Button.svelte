@@ -57,9 +57,4 @@
     border-color: var(--rule2);
     background: transparent;
   }
-  @media (prefers-reduced-motion: reduce) {
-    button {
-      transition: none;
-    }
-  }
 </style>

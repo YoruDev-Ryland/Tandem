@@ -96,10 +96,4 @@
     font: 600 24px/1.1 "Barlow Semi Condensed", sans-serif;
     letter-spacing: -0.01em;
   }
-  @media (prefers-reduced-motion: reduce) {
-    dialog[open],
-    dialog[open]::backdrop {
-      animation: none;
-    }
-  }
 </style>

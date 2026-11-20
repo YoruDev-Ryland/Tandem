@@ -69,8 +69,23 @@
     }),
   );
 
-  function click(i: number) {
-    if (i === c.index) open(i);
+  // Only real pointer movement moves the cursor: browsers also fire pointer events when content scrolls under a
+  // resting pointer (as scrollIntoView does on every up/down), which must not pull the cursor away from the keys.
+  let lastX = NaN;
+  let lastY = NaN;
+  function pointerMove(e: PointerEvent, i: number) {
+    if (e.clientX === lastX && e.clientY === lastY) return;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    if (i === c.index) return;
+    c.set(i);
+    // Keep DOM focus on the cursor row, so Enter (a native click) acts on the row that is shown.
+    if (list.contains(document.activeElement)) void focusRow();
+  }
+
+  function click(e: MouseEvent, i: number) {
+    // detail 0 is a keyboard activation (Enter on the focused row): it opens the cursor row.
+    if (e.detail === 0 || i === c.index) open(c.index);
     else c.set(i);
   }
 </script>
@@ -86,9 +101,9 @@
       focused={active && i === c.index}
       {columns}
       {size}
-      onmouseenter={() => c.set(i)}
+      onpointermove={(e) => pointerMove(e, i)}
       onfocus={() => c.set(i)}
-      onclick={() => click(i)}
+      onclick={(e) => click(e, i)}
     >
       {@render row(r, active && i === c.index)}
     </Row>

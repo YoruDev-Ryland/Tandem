@@ -7,12 +7,12 @@
     columns: string;
     /** "list" rows are 46 px (page lists); "detail" rows are 44 px. */
     size?: "list" | "detail";
-    onclick?: () => void;
-    onmouseenter?: () => void;
+    onclick?: (e: MouseEvent) => void;
+    onpointermove?: (e: PointerEvent) => void;
     onfocus?: () => void;
     children: Snippet;
   }
-  let { focused, columns, size = "list", onclick, onmouseenter, onfocus, children }: Props = $props();
+  let { focused, columns, size = "list", onclick, onpointermove, onfocus, children }: Props = $props();
 
   let el: HTMLButtonElement;
   $effect(() => {
@@ -33,7 +33,7 @@
   aria-current={focused ? "true" : undefined}
   tabindex={focused ? 0 : -1}
   {onclick}
-  {onmouseenter}
+  {onpointermove}
   {onfocus}
 >
   {@render children()}

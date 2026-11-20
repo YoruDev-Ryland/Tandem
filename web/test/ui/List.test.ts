@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
-import { createRawSnippet, flushSync } from "svelte";
+import { createRawSnippet, flushSync, tick } from "svelte";
 import ListHarness from "./ListHarness.svelte";
 import Row from "../../src/lib/ui/Row.svelte";
 import { dispatch } from "../../src/lib/input/actions";
@@ -22,14 +22,42 @@ describe("List", () => {
     expect(onOpen).toHaveBeenCalledWith(rows[1]);
   });
 
-  it("follows the pointer and opens on a click of the focused row", async () => {
+  it("follows real pointer movement and opens on a mouse click of the focused row", async () => {
     const onOpen = vi.fn();
     render(ListHarness, { rows, onOpen });
     const third = screen.getByText("Xenoblade Chronicles X").closest("button")!;
-    await fireEvent.mouseEnter(third);
+    await fireEvent.pointerMove(third, { clientX: 10, clientY: 90 });
     expect(current()).toBe(third);
-    await fireEvent.click(third);
+    await fireEvent.click(third, { detail: 1 });
+    expect(onOpen).toHaveBeenCalledTimes(1);
     expect(onOpen).toHaveBeenCalledWith(rows[2]);
+  });
+
+  it("ignores pointer events without movement, so Enter opens the highlighted row", async () => {
+    const onOpen = vi.fn();
+    render(ListHarness, { rows, onOpen });
+    const [first, , third] = screen.getAllByRole("button");
+    first!.focus();
+    // Content scrolling under a resting pointer: enter and move events at the same coordinates.
+    await fireEvent.pointerMove(third!, { clientX: 10, clientY: 90 });
+    dispatch("up"); // keyboard takes the cursor back to row 0
+    flushSync();
+    await fireEvent.mouseEnter(third!);
+    await fireEvent.pointerMove(third!, { clientX: 10, clientY: 90 });
+    expect(current()?.textContent).toBe("Pokémon Platinum");
+    // Enter on the focused row is a keyboard click (detail 0): it opens the highlighted row.
+    await fireEvent.click(document.activeElement!, { detail: 0 });
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith(rows[1]);
+  });
+
+  it("moves DOM focus with the pointer while focus is inside the list", async () => {
+    render(ListHarness, { rows, onOpen: vi.fn() });
+    const [first, , third] = screen.getAllByRole("button");
+    first!.focus();
+    await fireEvent.pointerMove(third!, { clientX: 10, clientY: 90 });
+    await tick();
+    expect(document.activeElement).toBe(third);
   });
 
   it("stops handling actions once unmounted", () => {
