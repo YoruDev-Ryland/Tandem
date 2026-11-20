@@ -95,4 +95,74 @@ describe("Vault", () => {
       manifest: [{ path: "scph1001.bin", hash: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", size: 3 }],
     });
   });
+
+  describe("upload with blobs to send", () => {
+    const ABC = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    type Call = { method: string; url: string };
+
+    function serveBlobs(putStatus: () => number, gate?: { missing?: Promise<void>; register?: Promise<void> }) {
+      const calls: Call[] = [];
+      vi.stubGlobal("EventSource", FakeEventSource);
+      vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        calls.push({ method, url });
+        if (method === "GET" && url.endsWith("/v1/vault")) return json([bios]);
+        if (method === "GET" && url.endsWith("/v1/devices")) return json(devices);
+        if (url.endsWith("/v1/blobs/missing")) { await gate?.missing; return json({ missing: [ABC] }); }
+        if (method === "PUT") {
+          const st = putStatus();
+          return st === 204 ? new Response(null, { status: 204 }) : new Response(JSON.stringify({ code: "error", message: "x" }), { status: st, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.endsWith("/v1/vault/upload")) { await gate?.register; return json({ itemId: "i", versionId: "v", unchanged: false }); }
+        return new Response(null, { status: 204 });
+      }));
+      return calls;
+    }
+
+    async function pickAndOpen() {
+      render(Vault);
+      await screen.findByText("PlayStation BIOS");
+      await fireEvent.click(screen.getByRole("button", { name: /Upload from this PC/ }));
+      const dialog = await screen.findByRole("dialog");
+      await fireEvent.change(within(dialog).getByLabelText("Files"), { target: { files: [new File(["abc"], "scph.bin")] } });
+      return dialog;
+    }
+    const puts = (c: Call[]) => c.filter((x) => x.method === "PUT").map((x) => x.url);
+    const registers = (c: Call[]) => c.filter((x) => x.url.endsWith("/v1/vault/upload"));
+
+    it("does not register when a blob PUT fails, shows the error, and a retry sends only that blob", async () => {
+      let status = 500;
+      const calls = serveBlobs(() => status);
+      const dialog = await pickAndOpen();
+      await fireEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
+      await waitFor(() => expect(within(dialog).getByRole("alert")).toBeTruthy());
+      expect(puts(calls)).toEqual([`/v1/blobs/${ABC}`]);
+      expect(registers(calls)).toHaveLength(0);
+      status = 204;
+      await fireEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
+      await waitFor(() => expect(registers(calls)).toHaveLength(1));
+      expect(puts(calls)).toEqual([`/v1/blobs/${ABC}`, `/v1/blobs/${ABC}`]);
+    });
+
+    it("shows the too-large copy for a 413", async () => {
+      const calls = serveBlobs(() => 413);
+      const dialog = await pickAndOpen();
+      await fireEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
+      expect((await within(dialog).findByRole("alert")).textContent).toBe("That file is too large for the server's upload limit.");
+      expect(registers(calls)).toHaveLength(0);
+    });
+
+    it("shows hashing and uploading progress", async () => {
+      let openMissing!: () => void;
+      let openRegister!: () => void;
+      const gate = { missing: new Promise<void>((r) => (openMissing = r)), register: new Promise<void>((r) => (openRegister = r)) };
+      serveBlobs(() => 204, gate);
+      const dialog = await pickAndOpen();
+      await fireEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
+      await within(dialog).findByText("Uploading…");
+      openMissing();
+      await within(dialog).findByText("Uploading 1 of 1…");
+      openRegister();
+    });
+  });
 });

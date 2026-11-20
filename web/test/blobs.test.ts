@@ -42,4 +42,16 @@ describe("uploadMissingBlobs", () => {
     await uploadMissingBlobs(entries, files);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("batches more than 1000 hashes into several /missing requests", async () => {
+    const entries = Array.from({ length: 2001 }, (_, i) => ({ path: `f${i}`, hash: i.toString(16).padStart(64, "0"), size: 1 }));
+    const files = entries.map((e) => file("x", e.path));
+    const sizes: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, init?: RequestInit) => {
+      sizes.push(JSON.parse(init!.body as string).hashes.length);
+      return new Response(JSON.stringify({ missing: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    await uploadMissingBlobs(entries, files);
+    expect(sizes).toEqual([1000, 1000, 1]);
+  });
 });
