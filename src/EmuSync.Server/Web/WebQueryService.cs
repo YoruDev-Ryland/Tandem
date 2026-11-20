@@ -2,13 +2,15 @@ using System.Text.Json;
 using EmuSync.Protocol;
 using EmuSync.Server.Data;
 using EmuSync.Server.Deliveries;
+using EmuSync.Server.Devices;
+using EmuSync.Server.Saves;
 using EmuSync.Server.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace EmuSync.Server.Web;
 
 /// <summary>Read models for the web app. Everything is scoped to the user and ignores revoked devices.</summary>
-public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
+public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time, GameStateQueries gameStates)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public const int ContinueCount = 10;
@@ -51,9 +53,12 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
         return new HomeResponse(cont, devices, new Attention(concurrent, firstSync, shizuku, failed, configConflicts), recent);
     }
 
-    public async Task<List<DeviceSummary>> DevicesAsync(Guid userId, Guid? current, CancellationToken ct) =>
-        await ActiveDevices(userId).OrderBy(d => d.CreatedUtc)
-            .Select(d => new DeviceSummary(d.Id, d.Name, d.Platform, d.LastSeenUtc, d.ShizukuOk, d.Id == current)).ToListAsync(ct);
+    public async Task<List<DeviceSummary>> DevicesAsync(Guid userId, Guid? current, CancellationToken ct)
+    {
+        var now = time.GetUtcNow();
+        return (await ActiveDevices(userId).OrderBy(d => d.CreatedUtc).ToListAsync(ct))
+            .Select(d => DeviceService.Summary(d, current, now)).ToList();
+    }
 
     private Task<Dictionary<Guid, string>> DeviceNamesAsync(Guid userId, CancellationToken ct) =>
         db.Devices.AsNoTracking().Where(d => d.UserId == userId).ToDictionaryAsync(d => d.Id, d => d.Name, ct);
@@ -62,7 +67,8 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
 
     public async Task<List<GameRow>> GamesAsync(Guid userId, string? emulator, string? q, CancellationToken ct)
     {
-        var items = await db.SaveItems.AsNoTracking().Where(i => i.UserId == userId && (emulator == null || i.EmulatorId == emulator)).ToListAsync(ct);
+        var itemQuery = db.SaveItems.AsNoTracking().Where(i => i.UserId == userId && (emulator == null || i.EmulatorId == emulator));
+        var items = await itemQuery.ToListAsync(ct);
         var installs = await (from r in db.InstallRecords.AsNoTracking()
                 join d in ActiveDevices(userId) on r.DeviceId equals d.Id
                 where emulator == null || r.EmulatorId == emulator
@@ -70,11 +76,12 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
         var headIds = items.Where(i => i.HeadVersionId != null).Select(i => i.HeadVersionId!.Value).ToList();
         var heads = await db.SaveVersions.AsNoTracking().Where(v => headIds.Contains(v.Id))
             .Select(v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc)).ToDictionaryAsync(v => v.Id, ct);
+        var states = await gameStates.LoadAsync(userId, itemQuery, ct);
 
         var keys = items.Select(i => (i.EmulatorId, i.GameKey)).Concat(installs.Select(r => (r.EmulatorId, r.GameKey))).Distinct().ToList();
         var itemsBy = items.ToLookup(i => (i.EmulatorId, i.GameKey));
         var installsBy = installs.ToLookup(r => (r.EmulatorId, r.GameKey));
-        var rows = keys.Select(k => BuildRow(k.EmulatorId, k.GameKey, itemsBy[k].ToList(), installsBy[k].ToList(), heads)).ToList();
+        var rows = keys.Select(k => BuildRow(k.EmulatorId, k.GameKey, itemsBy[k].ToList(), installsBy[k].ToList(), heads, states)).ToList();
 
         if (!string.IsNullOrWhiteSpace(q))
             rows = rows.Where(r => r.GameKey.Contains(q, StringComparison.OrdinalIgnoreCase)
@@ -82,23 +89,26 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
         return rows.OrderBy(r => r.EmulatorId, StringComparer.Ordinal).ThenBy(r => r.DisplayName ?? r.GameKey, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private sealed record HeadInfo(Guid Id, Guid? DeviceId, DateTimeOffset ReceivedUtc);
-
     private static GameRow BuildRow(string emulatorId, string gameKey, List<SaveItem> items, List<InstallRecord> installs,
-        Dictionary<Guid, HeadInfo> heads)
+        Dictionary<Guid, HeadInfo> heads, GameStates states)
     {
         var saveItem = items.Where(i => i.Kind == ItemKind.Save).OrderBy(i => i.Slot != "").ThenBy(i => i.Slot, StringComparer.Ordinal).FirstOrDefault();
-        var newest = items.Where(i => i.HeadVersionId is Guid h && heads.ContainsKey(h))
-            .Select(i => heads[i.HeadVersionId!.Value]).OrderByDescending(h => h.ReceivedUtc).FirstOrDefault();
+        var newestItem = items.Where(i => i.HeadVersionId is Guid h && heads.ContainsKey(h))
+            .OrderByDescending(i => heads[i.HeadVersionId!.Value].ReceivedUtc).FirstOrDefault();
+        var newest = newestItem is null ? null : heads[newestItem.HeadVersionId!.Value];
         var display = items.Select(i => i.DisplayName).Concat(installs.OrderByDescending(r => r.SeenUtc).Select(r => r.DisplayName))
             .FirstOrDefault(n => !string.IsNullOrEmpty(n));
+        var reference = saveItem?.HeadVersionId is not null ? saveItem : newestItem;
+        var devices = states.For(emulatorId, items, installs, heads, reference, newest?.DeviceId);
         return new GameRow(emulatorId, gameKey, display, installs.Select(r => r.DeviceId).Distinct().ToList(),
-            saveItem?.Id, newest?.DeviceId, newest?.ReceivedUtc, items.Count(i => i.Kind == ItemKind.State), items.Any(i => i.OpenConflict));
+            saveItem?.Id, newest?.DeviceId, newest?.ReceivedUtc, items.Count(i => i.Kind == ItemKind.State), items.Any(i => i.OpenConflict),
+            devices, states.DeviceName(newest?.DeviceId));
     }
 
     public async Task<GameDetail> GameAsync(Guid userId, string emulatorId, string gameKey, CancellationToken ct)
     {
-        var items = await db.SaveItems.AsNoTracking().Where(i => i.UserId == userId && i.EmulatorId == emulatorId && i.GameKey == gameKey)
+        var itemQuery = db.SaveItems.AsNoTracking().Where(i => i.UserId == userId && i.EmulatorId == emulatorId && i.GameKey == gameKey);
+        var items = await itemQuery
             .OrderBy(i => i.Kind).ThenBy(i => i.Slot).ThenBy(i => i.Core).ToListAsync(ct);
         var installs = await (from r in db.InstallRecords.AsNoTracking()
                 join d in ActiveDevices(userId) on r.DeviceId equals d.Id
@@ -109,14 +119,15 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
 
         var ids = items.Select(i => i.Id).ToList();
         var versions = await db.SaveVersions.AsNoTracking().Where(v => ids.Contains(v.ItemId)).OrderByDescending(v => v.Seq).ToListAsync(ct);
-        var names = await DeviceNamesAsync(userId, ct);
+        var states = await gameStates.LoadAsync(userId, itemQuery, ct);
         var heads = versions.Where(v => items.Any(i => i.HeadVersionId == v.Id)).ToDictionary(v => v.Id, v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc));
 
         var details = items.Select(i => new SaveItemDetail(i.Id, i.Kind, i.Slot, i.Core, i.HeadVersionId, i.OpenConflict,
             versions.Where(v => v.ItemId == i.Id).Select(v => new VersionSummary(v.Id, v.Seq,
-                v.DeviceId is Guid d && names.TryGetValue(d, out var n) ? n : null, v.ReceivedUtc, v.TotalSize, v.Core, v.Variant,
-                v.Pinned, v.ConflictReason, v.Id == i.HeadVersionId, v.Resolved)).ToList())).ToList();
-        return new GameDetail(BuildRow(emulatorId, gameKey, items, installs, heads), details);
+                states.DeviceName(v.DeviceId), v.ReceivedUtc, v.TotalSize, v.Core, v.Variant,
+                v.Pinned, v.ConflictReason, v.Id == i.HeadVersionId, v.Resolved, v.ManifestHash,
+                Manifests.FromJson(v.ManifestJson).Count)).ToList())).ToList();
+        return new GameDetail(BuildRow(emulatorId, gameKey, items, installs, heads, states), details);
     }
 
     // ---- Devices ----
@@ -125,7 +136,7 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
     {
         var device = await ActiveDevices(userId).FirstOrDefaultAsync(d => d.Id == deviceId, ct)
             ?? throw new ApiException(404, "device_not_found", "Device not found.");
-        var summary = new DeviceSummary(device.Id, device.Name, device.Platform, device.LastSeenUtc, device.ShizukuOk, device.Id == current);
+        var summary = DeviceService.Summary(device, current, time.GetUtcNow());
 
         var emulators = (await db.DeviceEmulators.AsNoTracking().Where(e => e.DeviceId == deviceId).OrderBy(e => e.EmulatorId).ToListAsync(ct))
             .Select(e => new EmulatorRow(e.EmulatorId, e.Package, e.Version, Cores(e.CoresJson))).ToList();

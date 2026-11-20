@@ -12,24 +12,24 @@ public static class DeviceEndpoints
     {
         var devices = app.MapGroup("/v1/devices").RequireAuthorization();
 
-        devices.MapGet("", async (HttpContext http, EmuSyncDbContext db, CancellationToken ct) =>
+        devices.MapGet("", async (HttpContext http, EmuSyncDbContext db, TimeProvider time, CancellationToken ct) =>
         {
             var userId = http.User.UserId();
             var current = http.User.DeviceId();
-            return await db.Devices.AsNoTracking()
-                .Where(d => d.UserId == userId && d.RevokedUtc == null)
-                .OrderBy(d => d.CreatedUtc)
-                .Select(d => new DeviceSummary(d.Id, d.Name, d.Platform, d.LastSeenUtc, d.ShizukuOk, d.Id == current))
-                .ToArrayAsync(ct);
+            var now = time.GetUtcNow();
+            return (await db.Devices.AsNoTracking()
+                    .Where(d => d.UserId == userId && d.RevokedUtc == null)
+                    .OrderBy(d => d.CreatedUtc)
+                    .ToListAsync(ct))
+                .Select(d => DeviceService.Summary(d, current, now)).ToArray();
         });
 
-        devices.MapGet("/me", async (HttpContext http, EmuSyncDbContext db, CancellationToken ct) =>
+        devices.MapGet("/me", async (HttpContext http, EmuSyncDbContext db, TimeProvider time, CancellationToken ct) =>
         {
             var id = http.User.DeviceId() ?? throw new ApiException(404, "no_device", "This session is not tied to a device.");
-            return await db.Devices.AsNoTracking().Where(d => d.Id == id)
-                .Select(d => new DeviceSummary(d.Id, d.Name, d.Platform, d.LastSeenUtc, d.ShizukuOk, true))
-                .FirstOrDefaultAsync(ct)
+            var device = await db.Devices.AsNoTracking().FirstOrDefaultAsync(d => d.Id == id, ct)
                 ?? throw new ApiException(404, "no_device", "This session is not tied to a device.");
+            return DeviceService.Summary(device, id, time.GetUtcNow());
         });
 
         devices.MapPut("/me/status", async (HttpContext http, DeviceStatusRequest request, DeviceService svc, CancellationToken ct) =>

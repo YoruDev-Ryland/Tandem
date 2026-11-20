@@ -12,6 +12,19 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
 {
     public const int MaxGames = 20000;
     public const int MaxCores = 500;
+    public const int MaxRunningEmulators = 50;
+    /// <summary>A device not heard from for this long is offline: its running emulators read as empty.</summary>
+    public static readonly TimeSpan OnlineWindow = TimeSpan.FromMinutes(2);
+
+    /// <summary>The device's running emulators, or empty when it has been offline longer than <see cref="OnlineWindow"/>.</summary>
+    public static string[] RunningEmulators(string? json, DateTimeOffset? lastSeenUtc, DateTimeOffset now) =>
+        json is null || lastSeenUtc is not DateTimeOffset seen || now - seen > OnlineWindow
+            ? []
+            : JsonSerializer.Deserialize<string[]>(json) ?? [];
+
+    public static DeviceSummary Summary(Device d, Guid? currentDeviceId, DateTimeOffset now) =>
+        new(d.Id, d.Name, d.Platform, d.LastSeenUtc, d.ShizukuOk, d.Id == currentDeviceId,
+            RunningEmulators(d.RunningEmulatorsJson, d.LastSeenUtc, now));
 
     [GeneratedRegex(@"\A\{(INTERNAL|SD|EMU:[a-z0-9]+)\}\z")] // \z: "$" would also match before a trailing newline
     private static partial Regex RootToken();
@@ -40,6 +53,9 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         }
         device.ShizukuOk = request.ShizukuOk;
         device.LastSeenUtc = now;
+        device.RunningEmulatorsJson = request.RunningEmulators is { Length: > 0 } running
+            ? JsonSerializer.Serialize(running.Distinct(StringComparer.Ordinal).ToArray())
+            : null;
 
         var emulators = request.Emulators ?? [];
         var roots = request.Roots ?? new Dictionary<string, string>();
@@ -91,6 +107,11 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
             if (e.Package is null || e.Version is null)
                 throw new ApiException(400, "bad_request", "Package and Version are required.");
         }
+        if (request.RunningEmulators is { Length: > MaxRunningEmulators })
+            throw new ApiException(400, "too_many", $"At most {MaxRunningEmulators} running emulators are allowed.");
+        foreach (var id in request.RunningEmulators ?? [])
+            if (id is null || !EmulatorIds.IsKnown(id))
+                throw new ApiException(400, "unknown_emulator", $"Unknown emulator '{id}'.");
         foreach (var (token, path) in request.Roots ?? new Dictionary<string, string>())
         {
             if (!RootToken().IsMatch(token))
@@ -155,7 +176,7 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         var device = await Owned(userId, id, ct);
         device.Name = trimmed;
         await db.SaveChangesAsync(ct);
-        return new DeviceSummary(device.Id, device.Name, device.Platform, device.LastSeenUtc, device.ShizukuOk, device.Id == currentDeviceId);
+        return Summary(device, currentDeviceId, time.GetUtcNow());
     }
 
     public async Task Revoke(Guid userId, Guid id, CancellationToken ct)

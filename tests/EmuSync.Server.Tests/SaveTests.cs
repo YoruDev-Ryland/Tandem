@@ -429,11 +429,11 @@ public class SaveTests
         Assert.Null(head.Variant);
         Assert.False(head.Pinned);
         var vb = versions.Single(v => v.Id == cb.VersionId);
-        Assert.Equal("Retroid 2026-11-20 08:05", vb.Variant);
+        Assert.Equal("From Retroid", vb.Variant);
         Assert.True(vb.Pinned);
         Assert.True(vb.Resolved);
         var vc = versions.Single(v => v.Id == cc.VersionId);
-        Assert.Equal("Ayn 2026-11-21 23:59", vc.Variant);
+        Assert.Equal("From Ayn", vc.Variant);
         Assert.True(vc.Pinned);
 
         // Keeping a conflict version as head labels the displaced head too, so neither is lost.
@@ -445,7 +445,7 @@ public class SaveTests
         Assert.Equal(cb2.VersionId, (await Item(factory, v1.ItemId)).HeadVersionId);
         Assert.Null(versions.Single(v => v.Id == cb2.VersionId).Variant);
         var displaced = versions.Single(v => v.Id == v2.VersionId);
-        Assert.Equal("Odin 2026-11-22 10:00", displaced.Variant);
+        Assert.Equal("From Odin", displaced.Variant);
         Assert.True(displaced.Pinned);
     }
 

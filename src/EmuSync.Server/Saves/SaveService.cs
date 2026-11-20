@@ -21,6 +21,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     public const int MaxCore = 100;
     public const int MaxDisplayName = 300;
     public const int MaxBulkItems = 10000;
+    public const int MaxVariantName = 80;
 
     public async Task<SaveUploadResponse> UploadAsync(Guid userId, Guid? deviceId, SaveUploadRequest request, CancellationToken ct)
     {
@@ -149,6 +150,9 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     {
         if (!Enum.IsDefined(request.Choice))
             throw new ApiException(400, "bad_request", "Unknown choice.");
+        var variantName = string.IsNullOrWhiteSpace(request.VariantName) ? null : request.VariantName.Trim();
+        if (variantName is { Length: > MaxVariantName })
+            throw new ApiException(400, "bad_variant_name", $"Variant name must be at most {MaxVariantName} characters.");
 
         SaveHeadChanged evt;
         string emulatorId, gameKey, label;
@@ -173,7 +177,8 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 var losers = open.Where(v => v.Id != keep.Id).ToList();
                 if (item.HeadVersionId is Guid oldHead && oldHead != keep.Id && losers.All(v => v.Id != oldHead))
                     losers.Add(await db.SaveVersions.SingleAsync(v => v.Id == oldHead, ct));
-                await LabelVariantsAsync(losers, ct);
+                await LabelVariantsAsync(losers, ct, name => $"From {name}");
+                if (variantName is not null) foreach (var v in losers) v.Variant = variantName; // the user's own label wins
             }
 
             foreach (var v in open) v.Resolved = true;
@@ -326,14 +331,16 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     private IQueryable<SaveVersion> OpenConflicts(Guid itemId) =>
         db.SaveVersions.Where(v => v.ItemId == itemId && v.ConflictReason != null && !v.Resolved);
 
-    private async Task LabelVariantsAsync(List<SaveVersion> versions, CancellationToken ct)
+    /// <param name="label">Builds the label from the uploading device's name; by default "{name} {received}". An
+    /// existing label is kept.</param>
+    private async Task LabelVariantsAsync(List<SaveVersion> versions, CancellationToken ct, Func<string, string>? label = null)
     {
         var deviceIds = versions.Where(v => v.DeviceId is not null).Select(v => v.DeviceId!.Value).Distinct().ToList();
         var names = await db.Devices.Where(d => deviceIds.Contains(d.Id)).ToDictionaryAsync(d => d.Id, d => d.Name, ct);
         foreach (var v in versions)
         {
             var name = v.DeviceId is Guid id && names.TryGetValue(id, out var n) ? n : "Unknown device";
-            v.Variant ??= $"{name} {v.ReceivedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)}";
+            v.Variant ??= label?.Invoke(name) ?? $"{name} {v.ReceivedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)}";
             v.Pinned = true;
         }
     }

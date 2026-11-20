@@ -48,6 +48,8 @@ public static class ServerSetup
         builder.Services.AddScoped<DeliveryService>();
         builder.Services.AddScoped<VaultService>();
         builder.Services.AddScoped<WebQueryService>();
+        builder.Services.AddScoped<GameStateQueries>();
+        builder.Services.AddScoped<ConflictQueries>();
         builder.Services.AddHostedService<DeliveryHandlers>();
         builder.Services.AddSingleton<MaintenanceLock>();
         builder.Services.AddSingleton<Pruner>();

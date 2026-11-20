@@ -24,7 +24,8 @@ public sealed record SaveUploadResponse(SaveUploadStatus Status, Guid ItemId, Gu
 
 public enum ResolveChoice { KeepVersion, KeepBoth }
 
-public sealed record ResolveConflictRequest(ResolveChoice Choice, Guid? KeepVersionId);
+/// <param name="VariantName">KeepBoth only: the label for the kept-aside version(s); null means "From {DeviceName}".</param>
+public sealed record ResolveConflictRequest(ResolveChoice Choice, Guid? KeepVersionId, string? VariantName = null);
 
 public enum FirstSyncChoice { UseDevice, UseServer }
 

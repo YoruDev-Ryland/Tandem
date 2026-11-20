@@ -254,6 +254,9 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                     b.Property<long?>("RevokedUtc")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("RunningEmulatorsJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<long?>("ShizukuOffNotifiedUtc")
                         .HasColumnType("INTEGER");
 

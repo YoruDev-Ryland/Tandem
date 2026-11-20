@@ -44,6 +44,9 @@ public static class WebEndpoints
             return Results.NoContent();
         });
 
+        web.MapGet("/conflicts", (HttpContext http, ConflictQueries q, CancellationToken ct) =>
+            q.ListAsync(http.User.UserId(), ct));
+
         web.MapGet("/configs", (HttpContext http, WebQueryService q, CancellationToken ct) =>
             q.ConfigsAsync(http.User.UserId(), ct));
 
