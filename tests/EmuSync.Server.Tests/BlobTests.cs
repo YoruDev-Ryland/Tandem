@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using EmuSync.Protocol;
+using Microsoft.Extensions.DependencyInjection;
 using EmuSync.Server.Tests.Infrastructure;
 
 namespace EmuSync.Server.Tests;
@@ -176,6 +177,40 @@ public class BlobTests
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, r.StatusCode);
         Assert.Equal("too_large", (await r.ReadAsync<ErrorResponse>()).Code);
         Assert.Empty(Files(factory));
+    }
+
+    [Fact]
+    public async Task Too_large_chunked_upload_on_kestrel_is_413_and_leaves_no_file()
+    {
+        using var factory = new ServerFactory();
+        factory.Settings["EmuSync:MaxBlobBytes"] = (1024 * 1024).ToString();
+        factory.UseKestrel(0);
+        factory.StartServer();
+        var (inMemory, key) = await factory.Register("a@example.com");
+        var device = Socket(factory, inMemory);
+        const long size = 5L * 1024 * 1024;
+        var probe = new GeneratedStream(size);
+        var buf = new byte[1 << 20];
+        while (probe.Read(buf, 0, buf.Length) > 0) { }
+
+        var content = Raw(new GeneratedStream(size)); // non-seekable: no Content-Length, chunked
+        Assert.Null(content.Headers.ContentLength);
+        var outcome = "reset";
+        try
+        {
+            var r = await device.PutAsync($"/v1/blobs/{probe.Hash}", content);
+            Assert.Equal(HttpStatusCode.RequestEntityTooLarge, r.StatusCode);
+            Assert.Equal("too_large", (await r.ReadAsync<ErrorResponse>()).Code);
+            outcome = "413";
+        }
+        catch (HttpRequestException) { }
+        Console.WriteLine($"chunked over-limit outcome: {outcome}");
+
+        await Task.Delay(300);
+        Assert.Empty(Files(factory));
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<EmuSync.Server.Data.EmuSyncDbContext>();
+        Assert.False(db.UserBlobs.Any(b => b.UserId == key.UserId));
     }
 
     [Fact]
