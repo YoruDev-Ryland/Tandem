@@ -6,7 +6,6 @@
   import { emulatorName } from "../lib/emulators";
   import { onAction } from "../lib/input/actions";
   import { router } from "../lib/router.svelte";
-  import { updateWaiting } from "../lib/state/waiting.svelte";
   import { systemLabel } from "../lib/systems";
   import { relativeTime } from "../lib/time";
   import Empty from "../lib/ui/Empty.svelte";
@@ -24,10 +23,6 @@
       return (b.newestUtc ? Date.parse(b.newestUtc) : -Infinity) - (a.newestUtc ? Date.parse(a.newestUtc) : -Infinity);
     }),
   );
-
-  $effect(() => {
-    if (games.data) updateWaiting(games.data);
-  });
 
   const COLUMNS = "72px minmax(0,1fr) 128px 130px 210px 96px";
   const HEADER = ["System", "Game", "Emulator", "Newest on", "Other devices", "Saved"];
@@ -94,7 +89,7 @@
   {:else if games.data && rows.length === 0}
     <Empty text="No saves yet. Start the app on a handheld and they'll appear here." />
   {:else if !games.data}
-    <p class="loading ink3" aria-busy="true">— — —</p>
+    <p class="loading" aria-busy="true">— — —</p>
   {:else}
     <List {rows} columns={COLUMNS} header={HEADER} headerEnd={[5]} bind:index onOpen={open} key={(g) => g.emulatorId + "/" + g.gameKey}>
       {#snippet row(g: GameRow)}
@@ -114,7 +109,7 @@
           {/if}
           <span class="others">
             {#each others(g) as d, i (d.deviceId)}
-              {@const c = copy(d, g)}{#if i > 0}; {/if}<span class={c.tone}>{c.text}</span>
+              {@const c = copy(d, g)}{#if i > 0}; {/if}<span class={c.tone || "ink2"}>{c.text}</span>
             {/each}
           </span>
           <span class="end ink3">{g.newestUtc ? relativeTime(g.newestUtc) : "—"}</span>
@@ -154,15 +149,22 @@
     font: 600 13px "Barlow Semi Condensed", sans-serif;
   }
   .review {
+    color: var(--fault);
     display: block;
     padding: 0 16px 14px;
     font-weight: 600;
     text-decoration: none;
   }
+  .review:focus-visible {
+    outline: 1.5px solid var(--fault);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
   .review:hover {
     text-decoration: underline;
   }
   .loading {
+    color: var(--ink3);
     margin: 0;
     padding: 12px 16px;
   }
@@ -170,8 +172,5 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .others {
-    color: var(--ink2);
   }
 </style>

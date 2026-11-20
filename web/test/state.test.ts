@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { updateWaiting, waitingDeviceIds } from "../src/lib/state/waiting.svelte";
+import { waitingDevices } from "../src/lib/state/waiting";
 import { systemLabel } from "../src/lib/systems";
 import { relativeTime } from "../src/lib/time";
 import { game, dev, THOR, ODIN, waiting } from "./fixtures/home";
 
-describe("waiting store", () => {
-  it("collects devices with a Waiting game, once each, and clears", () => {
-    updateWaiting([waiting, game({ emulatorId: "eden", gameKey: "x", devices: [dev(THOR, "Waiting"), dev(ODIN, "HasIt")] })]);
-    expect(waitingDeviceIds()).toEqual([THOR]);
-    updateWaiting([]);
-    expect(waitingDeviceIds()).toEqual([]);
+describe("waitingDevices", () => {
+  it("collects devices with a Waiting game, once each", () => {
+    const other = game({ emulatorId: "eden", gameKey: "x", devices: [dev(THOR, "Waiting"), dev(ODIN, "HasIt")] });
+    expect(waitingDevices([waiting, other])).toEqual([THOR]);
+    expect(waitingDevices([])).toEqual([]);
   });
 });
 

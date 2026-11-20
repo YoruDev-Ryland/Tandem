@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/svelte";
 import Home from "../../src/pages/Home.svelte";
 import { router } from "../../src/lib/router.svelte";
 import { dispatch } from "../../src/lib/input/actions";
 import { gamePath } from "../../src/lib/api/paths";
-import { waitingDeviceIds } from "../../src/lib/state/waiting.svelte";
 import { conflict, fourDevices, games, home, longName, noHead, THOR, waiting } from "../fixtures/home";
 import type { GameRow } from "../../src/lib/api/types";
 
@@ -63,7 +62,7 @@ describe("Home", () => {
     expect(screen.getByText("Ayn, older save").classList.contains("ink2")).toBe(true);
   });
 
-  it("shows no newest device for a game with no head, and keeps the others plain", async () => {
+  it("shows no newest device for a game with no head, and leaves the others at plain ink2", async () => {
     serve([noHead]);
     render(Home);
     await screen.findByText("No Head Yet");
@@ -72,7 +71,7 @@ describe("Home", () => {
     expect(dashes).toHaveLength(2);
     expect(dashes.every((d) => d.classList.contains("ink3"))).toBe(true);
     const odin = r.getByText("Odin 3");
-    for (const tone of ["ink2", "ink3", "wait", "fault", "strong"]) expect(odin.classList.contains(tone)).toBe(false);
+    for (const tone of ["ink3", "wait", "fault", "strong"]) expect(odin.classList.contains(tone)).toBe(false);
   });
 
   it("gives a 90-character name the ellipsis class and the full name as title", async () => {
@@ -130,17 +129,26 @@ describe("Home", () => {
     expect(router.path).toBe(gamePath(conflict.emulatorId, conflict.gameKey));
   });
 
-  it("feeds the waiting devices to the top bar store", async () => {
-    serve([waiting]);
-    render(Home);
-    await screen.findByText("Pokémon Sword");
-    expect(waitingDeviceIds()).toEqual([THOR]);
-  });
-
   it("shows a load failure in place", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
     render(Home);
     expect((await screen.findByRole("alert")).textContent).toMatch(/Try again/);
+  });
+
+  it("keeps plain other-device text on the ink2 class so the focused row can remap it (AA)", async () => {
+    serve([fourDevices]);
+    render(Home);
+    await screen.findByText("Four Devices");
+    expect(screen.getByText("Retroid").classList.contains("ink2")).toBe(true);
+    expect(screen.getByText("Thor, on its way").classList.contains("ink2")).toBe(true);
+  });
+
+  it("gives the review link and loading dashes their own colour rules and a focus style", async () => {
+    const src = (await import("node:fs")).readFileSync("src/pages/Home.svelte", "utf8");
+    expect(src).toMatch(/\.review\s*\{[^}]*color:\s*var\(--fault\)/);
+    expect(src).toMatch(/\.loading\s*\{[^}]*color:\s*var\(--ink3\)/);
+    expect(src).toMatch(/\.review:focus-visible/);
+    expect(src).not.toMatch(/\.others\s*\{/);
   });
 });
