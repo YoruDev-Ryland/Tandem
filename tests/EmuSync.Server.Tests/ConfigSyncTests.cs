@@ -724,6 +724,34 @@ public class ConfigSyncTests
         Assert.Contains("group_changed", kinds);
     }
 
+    [Fact]
+    public async Task Config_open_conflict_content_reupload_is_not_Superseded()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (group, _, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink));
+        var thorChange = await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, resolution: "2"))), group.HeadVersionId);
+        var odinChange = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), group.HeadVersionId);
+        Assert.Equal(SaveUploadStatus.Conflict, odinChange.Status);
+        // Pinned or not, an open conflict is not a settled copy.
+        await InDb(f, async db =>
+        {
+            (await db.ConfigVersions.SingleAsync(v => v.Id == odinChange.VersionId)).Pinned = true;
+            await db.SaveChangesAsync();
+            return 0;
+        });
+        var versions = await InDb(f, db => db.ConfigVersions.CountAsync(v => v.BundleId == group.BundleId));
+
+        var again = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), group.HeadVersionId);
+
+        Assert.Equal(SaveUploadStatus.Conflict, again.Status);
+        Assert.Equal(odinChange.VersionId, again.VersionId);
+        Assert.Equal(versions, await InDb(f, db => db.ConfigVersions.CountAsync(v => v.BundleId == group.BundleId)));
+        var bundle = await Bundle(f, group.BundleId);
+        Assert.True(bundle.OpenConflict);
+        Assert.Equal(thorChange.VersionId, bundle.HeadVersionId);
+    }
+
     [DockerFact]
     [Trait("Category", "Postgres")]
     public async Task Config_sync_on_postgres()

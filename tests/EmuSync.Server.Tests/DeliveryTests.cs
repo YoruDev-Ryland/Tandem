@@ -407,6 +407,154 @@ public class DeliveryTests
         Assert.True(await InDb(factory, db => db.SaveItems.Where(i => i.Id == v1.ItemId).Select(i => i.OpenConflict).SingleAsync()));
     }
 
+    /// <summary>A has v1 then v2 (head); B synced v1, then opens a conflict with its own content "b" on base v1.</summary>
+    private static async Task<(HttpClient A, HttpClient B, Guid BId, SaveUploadResponse V1, SaveUploadResponse V2, SaveUploadResponse Conflict)>
+        OpenConcurrentConflict(ServerFactory factory)
+    {
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(a, Sword);
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        (await Ack(b, Assert.Single(await Deliveries(b)).Id, DeliveryResult.Applied)).EnsureSuccessStatusCode();
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        var conflict = await Upload(b, Req(await Files(b, "b"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
+        return (a, b, bKey.DeviceId, v1, v2, conflict);
+    }
+
+    [Fact]
+    public async Task KeepVersion_loser_reupload_is_Superseded()
+    {
+        using var factory = NewFactory();
+        var (a, b, bId, v1, v2, conflict) = await OpenConcurrentConflict(factory);
+        (await a.PostJsonAsync($"/v1/conflicts/{v2.ItemId}/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, v2.VersionId))).EnsureSuccessStatusCode();
+        var versions = await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v2.ItemId));
+
+        var again = await Upload(b, Req(await Files(b, "b"), v1.VersionId));
+
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+        Assert.Equal(conflict.VersionId, again.VersionId);
+        Assert.Equal(v2.VersionId, again.HeadVersionId);
+        Assert.Equal(versions, await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v2.ItemId)));
+        Assert.Equal(conflict.VersionId, await Known(factory, bId, v2.ItemId));
+        Assert.Equal(v2.VersionId, Assert.Single(await Deliveries(b)).VersionId);
+    }
+
+    [Fact]
+    public async Task FirstSync_UseServer_loser_reupload_is_Superseded()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(a, Sword);
+        await Install(b, Sword);
+        var server = await Upload(a, Req(await Files(a, "server"), null));
+        var mine = await Upload(b, Req(await Files(b, "device"), null));
+        Assert.Equal(SaveUploadStatus.Conflict, mine.Status);
+        (await a.PostJsonAsync("/v1/conflicts/first-sync/resolve",
+            new BulkFirstSyncRequest(bKey.DeviceId, FirstSyncChoice.UseServer, null))).EnsureSuccessStatusCode();
+
+        var again = await Upload(b, Req(await Files(b, "device"), null));
+
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+        Assert.Equal(mine.VersionId, again.VersionId);
+        Assert.Equal(server.VersionId, again.HeadVersionId);
+        Assert.Equal(2, await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == server.ItemId)));
+        Assert.False(await InDb(factory, db => db.SaveItems.Where(i => i.Id == server.ItemId).Select(i => i.OpenConflict).SingleAsync()));
+        Assert.Equal(server.VersionId, Assert.Single(await Deliveries(b)).VersionId);
+    }
+
+    [Fact]
+    public async Task Upload_identical_to_pinned_only_version_is_Superseded()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(a, Sword);
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        (await a.PostAsync($"/v1/saves/{v1.ItemId}/pin/{v1.VersionId}", null)).EnsureSuccessStatusCode();
+        Assert.True(await InDb(factory, db => db.SaveVersions.AnyAsync(v => v.Id == v1.VersionId && v.ConflictReason == null
+            && !v.Resolved && v.Variant == null && v.Pinned)));
+
+        var again = await Upload(b, Req(await Files(b, "v1"), null));
+
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+        Assert.Equal(v1.VersionId, again.VersionId);
+        Assert.Equal(v2.VersionId, again.HeadVersionId);
+        Assert.Equal(2, await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v1.ItemId)));
+        Assert.Equal(v1.VersionId, await Known(factory, bKey.DeviceId, v1.ItemId));
+    }
+
+    [Fact]
+    public async Task Upload_identical_to_variant_only_version_is_Superseded()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(a, Sword);
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        // A labelled, unpinned, non-conflict version.
+        await InDb(factory, async db =>
+        {
+            var v = await db.SaveVersions.SingleAsync(x => x.Id == v1.VersionId);
+            v.Variant = "Old copy";
+            v.Pinned = false;
+            await db.SaveChangesAsync();
+            return 0;
+        });
+
+        var again = await Upload(b, Req(await Files(b, "v1"), null));
+
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+        Assert.Equal(v1.VersionId, again.VersionId);
+        Assert.Equal(v2.VersionId, again.HeadVersionId);
+        Assert.Equal(2, await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v1.ItemId)));
+        Assert.Equal(v1.VersionId, await Known(factory, bKey.DeviceId, v1.ItemId));
+    }
+
+    [Fact]
+    public async Task Different_content_after_a_resolve_still_conflicts()
+    {
+        using var factory = NewFactory();
+        var (a, b, _, v1, v2, _) = await OpenConcurrentConflict(factory);
+        (await a.PostJsonAsync($"/v1/conflicts/{v2.ItemId}/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, v2.VersionId))).EnsureSuccessStatusCode();
+
+        var other = await Upload(b, Req(await Files(b, "something else"), v1.VersionId));
+
+        Assert.Equal(SaveUploadStatus.Conflict, other.Status);
+        Assert.NotEqual(v1.VersionId, other.VersionId);
+        Assert.Equal(v2.VersionId, other.HeadVersionId);
+        Assert.True(await InDb(factory, db => db.SaveItems.Where(i => i.Id == v2.ItemId).Select(i => i.OpenConflict).SingleAsync()));
+    }
+
+    [Fact]
+    public async Task Open_conflict_content_reupload_is_not_Superseded()
+    {
+        using var factory = NewFactory();
+        var (a, b, _, v1, v2, conflict) = await OpenConcurrentConflict(factory);
+        // Even pinned, an open conflict is not a settled copy.
+        (await a.PostAsync($"/v1/saves/{v1.ItemId}/pin/{conflict.VersionId}", null)).EnsureSuccessStatusCode();
+        var versions = await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v1.ItemId));
+
+        var retry = await Upload(b, Req(await Files(b, "b"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, retry.Status);
+        Assert.Equal(conflict.VersionId, retry.VersionId);
+        Assert.Equal(versions, await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v1.ItemId)));
+
+        // Another device arriving with the same content on an old base opens its own conflict, as before.
+        var other = await Upload(a, Req(await Files(a, "b"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, other.Status);
+        Assert.NotEqual(conflict.VersionId, other.VersionId);
+        Assert.Equal(v2.VersionId, other.HeadVersionId);
+    }
+
     [Fact]
     public async Task Bulk_UseDevice_delivers_to_others_not_the_chosen_device()
     {

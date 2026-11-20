@@ -58,11 +58,12 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             }
             else if (head is not null && request.BaseVersionId != head.Id && await db.SaveVersions
                          .Where(v => v.ItemId == item.Id && v.Id != head.Id && v.ManifestHash == manifestHash
+                                     && (v.ConflictReason == null || v.Resolved) // never an open conflict
                                      && (v.Resolved || v.Variant != null || v.Pinned))
                          .OrderByDescending(v => v.Seq).Select(v => (Guid?)v.Id).FirstOrDefaultAsync(ct) is Guid settled)
             {
                 // A copy the server already holds and has settled (a resolved conflict, a variant or a pinned
-                // version) coming back on an old base: typically a resolve's loser uploading before it applies the
+                // version; never a still-open conflict) coming back on an old base: typically a resolve's loser uploading before it applies the
                 // head. No new version and no conflict; the device knows that copy and is sent the head.
                 if (deviceId is Guid d3) await SetKnownAsync(d3, item.Id, settled, ct);
                 response = new SaveUploadResponse(SaveUploadStatus.Superseded, item.Id, settled, head.Id);

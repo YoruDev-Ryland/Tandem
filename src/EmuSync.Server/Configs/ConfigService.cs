@@ -62,10 +62,11 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
                 response = new ConfigUploadResponse(SaveUploadStatus.Unchanged, bundle.Id, head.Id);
             }
             else if (head is not null && request.BaseVersionId != head.Id && await db.ConfigVersions
-                         .Where(v => v.BundleId == bundle.Id && v.Id != head.Id && v.ManifestHash == hash && (v.Resolved || v.Pinned))
+                         .Where(v => v.BundleId == bundle.Id && v.Id != head.Id && v.ManifestHash == hash
+                                     && (v.ConflictReason == null || v.Resolved) && (v.Resolved || v.Pinned))
                          .OrderByDescending(v => v.Seq).Select(v => (Guid?)v.Id).FirstOrDefaultAsync(ct) is Guid settled)
             {
-                // A settled copy (a resolved conflict or a pinned version) coming back on an old base: no new version
+                // A settled copy (a resolved conflict or a pinned version, never an open conflict) coming back on an old base: no new version
                 // and no conflict. The device is recorded as holding that copy and is sent the head.
                 config.AppliedVersionId = settled;
                 response = new ConfigUploadResponse(SaveUploadStatus.Superseded, bundle.Id, settled);
