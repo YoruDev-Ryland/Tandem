@@ -99,6 +99,97 @@ public class WebApiTests
         Assert.Equal(0, home.Attention.FailedDeliveries24h);
     }
 
+    private const string CfgPath = "Eden/config/qt-config.ini";
+
+    private static async Task<ConfigUploadResponse> Cfg(HttpClient device, string resolution, Guid? baseId)
+    {
+        var files = await Fixtures.Manifest(device, (CfgPath, Encoding.UTF8.GetBytes($"[Renderer]\nresolution_setup={resolution}\n")));
+        var r = await device.PostJsonAsync("/v1/configs/upload", new ConfigUploadRequest("eden", baseId, files));
+        Assert.True(r.StatusCode == HttpStatusCode.OK, $"{r.StatusCode}: {await r.Content.ReadAsStringAsync()}");
+        return await r.ReadAsync<ConfigUploadResponse>();
+    }
+
+    private static async Task WebEdit(HttpClient web, Guid bundleId, Guid baseId, string resolution, Guid? device = null)
+    {
+        var r = await web.PutAsJsonAsync($"/v1/configs/bundles/{bundleId}/files/{CfgPath}" + (device is null ? "" : $"?device={device}"),
+            new EditConfigFileRequest(baseId, $"[Renderer]\nresolution_setup={resolution}\n"), TestApi.Json);
+        Assert.True(r.IsSuccessStatusCode, $"{r.StatusCode}: {await r.Content.ReadAsStringAsync()}");
+    }
+
+    [Fact]
+    public async Task Config_conflicts_are_visible_in_versions_rows_and_attention()
+    {
+        using var f = NewFactory();
+        var (odin, odinKey) = await f.Register(Email, deviceName: "Odin");
+        var (thor, thorKey) = await f.PairSecondDevice(odin, "Thor");
+        var web = await f.WebLogin(Email);
+        await Status(odin, new EmulatorStatus("eden", "dev.eden", "0.1", null));
+        await Status(thor, new EmulatorStatus("eden", "dev.eden", "0.1", null));
+
+        // Odin seeds a group; the file is edited in the browser while Odin, still on its own base, changes it locally.
+        var odinSolo = await Cfg(odin, "1", null);
+        var created = await web.PostJsonAsync("/v1/configs/groups", new CreateGroupRequest("eden", "Handhelds", odinKey.DeviceId));
+        var group = await created.ReadAsync<SyncGroupDto>();
+        await WebEdit(web, group.BundleId, group.HeadVersionId!.Value, "7", odinKey.DeviceId);
+        var groupConflict = await Cfg(odin, "2", odinSolo.VersionId);
+        Assert.Equal(SaveUploadStatus.Conflict, groupConflict.Status);
+        // Thor stays solo, with a conflict of its own the same way.
+        var thorSolo = await Cfg(thor, "1", null);
+        await WebEdit(web, thorSolo.BundleId, thorSolo.VersionId, "8");
+        var soloConflict = await Cfg(thor, "3", thorSolo.VersionId);
+        Assert.Equal(SaveUploadStatus.Conflict, soloConflict.Status);
+
+        var versions = await Get<List<ConfigVersionSummary>>(web, $"/v1/configs/bundles/{group.BundleId}/versions");
+        var open = versions.Single(v => v.Id == groupConflict.VersionId);
+        Assert.Equal(ConflictReason.Concurrent, open.ConflictReason);
+        Assert.False(open.Resolved);
+        Assert.All(versions.Where(v => v.Id != groupConflict.VersionId), v => Assert.Null(v.ConflictReason));
+
+        var overview = await Get<ConfigOverview>(web, "/v1/web/configs");
+        var eden = Assert.Single(overview.Emulators);
+        Assert.True(Assert.Single(eden.Groups).OpenConflict);
+        Assert.True(Assert.Single(eden.Solo).OpenConflict);
+        Assert.True(Assert.Single((await Get<DeviceDetail>(web, $"/v1/web/devices/{odinKey.DeviceId}")).Configs).OpenConflict);
+        Assert.True(Assert.Single((await Get<DeviceDetail>(web, $"/v1/web/devices/{thorKey.DeviceId}")).Configs).OpenConflict);
+        Assert.Equal(2, (await Get<HomeResponse>(web, "/v1/web/home")).Attention.ConfigConflicts);
+
+        (await web.PostJsonAsync($"/v1/configs/bundles/{group.BundleId}/conflicts/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, groupConflict.VersionId))).EnsureSuccessStatusCode();
+
+        versions = await Get<List<ConfigVersionSummary>>(web, $"/v1/configs/bundles/{group.BundleId}/versions");
+        Assert.True(versions.Single(v => v.Id == groupConflict.VersionId).Resolved);
+        overview = await Get<ConfigOverview>(web, "/v1/web/configs");
+        Assert.False(Assert.Single(overview.Emulators).Groups.Single().OpenConflict);
+        Assert.True(overview.Emulators.Single().Solo.Single().OpenConflict);
+        Assert.False(Assert.Single((await Get<DeviceDetail>(web, $"/v1/web/devices/{odinKey.DeviceId}")).Configs).OpenConflict);
+        Assert.Equal(1, (await Get<HomeResponse>(web, "/v1/web/home")).Attention.ConfigConflicts);
+    }
+
+    [Fact]
+    public async Task Game_detail_marks_resolved_conflict_versions()
+    {
+        using var f = NewFactory();
+        var (odin, _) = await f.Register(Email, deviceName: "Odin");
+        var (thor, _) = await f.PairSecondDevice(odin, "Thor");
+        var web = await f.WebLogin(Email);
+        var v1 = await Save(odin, "a", null);
+        var first = await Save(thor, "b", null);
+        var second = await Save(thor, "c", Guid.NewGuid());
+        Assert.Equal(SaveUploadStatus.Conflict, first.Status);
+        (await web.PostJsonAsync($"/v1/conflicts/{v1.ItemId}/resolve", new ResolveConflictRequest(ResolveChoice.KeepVersion, v1.VersionId)))
+            .EnsureSuccessStatusCode();
+        var third = await Save(thor, "d", Guid.NewGuid()); // a new, still-open conflict
+
+        var versions = Assert.Single((await Get<GameDetail>(web, "/v1/web/games/eden/G1")).Items).Versions;
+
+        Assert.True(versions.Single(v => v.Id == first.VersionId).Resolved);
+        Assert.True(versions.Single(v => v.Id == second.VersionId).Resolved);
+        var stillOpen = versions.Single(v => v.Id == third.VersionId);
+        Assert.False(stillOpen.Resolved);
+        Assert.Equal(ConflictReason.Concurrent, stillOpen.ConflictReason);
+        Assert.False(versions.Single(v => v.Id == v1.VersionId).Resolved);
+    }
+
     [Fact]
     public async Task Games_merges_installs_and_saves()
     {

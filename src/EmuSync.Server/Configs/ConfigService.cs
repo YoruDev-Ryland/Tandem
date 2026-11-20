@@ -131,7 +131,7 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
             .OrderByDescending(v => v.Seq)
             .Select(v => new ConfigVersionSummary(v.Id, v.Seq, v.Source,
                 db.Devices.Where(d => d.Id == v.DeviceId).Select(d => d.Name).FirstOrDefault(),
-                v.ReceivedUtc, v.TotalSize, v.Pinned))
+                v.ReceivedUtc, v.TotalSize, v.Pinned, v.ConflictReason, v.Resolved))
             .ToListAsync(ct);
     }
 

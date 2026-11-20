@@ -26,8 +26,10 @@ public sealed record ApplyConfigRequest(Guid TargetDeviceId, string EmulatorId, 
 /// <param name="GroupId">The group the target is in after a Linked apply; null for Copy.</param>
 public sealed record ApplyConfigResponse(Guid BundleId, Guid HeadVersionId, Guid? GroupId);
 
+/// <param name="ConflictReason">Set on a version that was uploaded as a conflict (open or settled).</param>
+/// <param name="Resolved">True once a conflict version's conflict was resolved.</param>
 public sealed record ConfigVersionSummary(Guid Id, int Seq, ConfigSource Source, string? DeviceName, DateTimeOffset ReceivedUtc,
-    long TotalSize, bool Pinned);
+    long TotalSize, bool Pinned, ConflictReason? ConflictReason, bool Resolved);
 
 public enum FileDiffStatus { Added, Removed, Changed, Same }
 

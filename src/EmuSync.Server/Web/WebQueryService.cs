@@ -41,13 +41,14 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
         var since = time.GetUtcNow().AddHours(-24);
         var userDevices = db.Devices.Where(d => d.UserId == userId).Select(d => d.Id);
         var failed = await db.Deliveries.CountAsync(d => userDevices.Contains(d.DeviceId) && d.Result == DeliveryResult.Failed && d.AckedUtc >= since, ct);
+        var configConflicts = await db.ConfigBundles.CountAsync(b => b.UserId == userId && b.OpenConflict, ct);
 
         var recent = await db.ActivityEvents.AsNoTracking().Where(a => a.UserId == userId)
             .OrderByDescending(a => a.Id).Take(RecentCount)
             .Select(a => new ActivityItem(a.Id, a.Utc, a.Kind, a.Message, a.DeviceId,
                 db.Devices.Where(x => x.Id == a.DeviceId).Select(x => x.Name).FirstOrDefault(), a.EmulatorId, a.GameKey))
             .ToListAsync(ct);
-        return new HomeResponse(cont, devices, new Attention(concurrent, firstSync, shizuku, failed), recent);
+        return new HomeResponse(cont, devices, new Attention(concurrent, firstSync, shizuku, failed, configConflicts), recent);
     }
 
     public async Task<List<DeviceSummary>> DevicesAsync(Guid userId, Guid? current, CancellationToken ct) =>
@@ -114,7 +115,7 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
         var details = items.Select(i => new SaveItemDetail(i.Id, i.Kind, i.Slot, i.Core, i.HeadVersionId, i.OpenConflict,
             versions.Where(v => v.ItemId == i.Id).Select(v => new VersionSummary(v.Id, v.Seq,
                 v.DeviceId is Guid d && names.TryGetValue(d, out var n) ? n : null, v.ReceivedUtc, v.TotalSize, v.Core, v.Variant,
-                v.Pinned, v.ConflictReason, v.Id == i.HeadVersionId)).ToList())).ToList();
+                v.Pinned, v.ConflictReason, v.Id == i.HeadVersionId, v.Resolved)).ToList())).ToList();
         return new GameDetail(BuildRow(emulatorId, gameKey, items, installs, heads), details);
     }
 
@@ -138,7 +139,7 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
                 from g in groups.DefaultIfEmpty()
                 orderby c.EmulatorId
                 select new DeviceConfigRow(c.EmulatorId, b.Id, b.GroupId, g == null ? null : g.Name, c.AppliedVersionId, b.HeadVersionId,
-                    c.AppliedVersionId != null && c.AppliedVersionId == b.HeadVersionId))
+                    c.AppliedVersionId != null && c.AppliedVersionId == b.HeadVersionId, b.OpenConflict))
             .ToListAsync(ct);
 
         var pending = await db.Deliveries.CountAsync(d => d.DeviceId == deviceId && d.AckedUtc == null, ct);
@@ -169,10 +170,12 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
         foreach (var g in groups.OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase))
         {
             var members = configs.Where(c => c.BundleId == g.BundleId).Select(c => devices[c.DeviceId]).OrderBy(d => d.Name).ToList();
-            Row(g.EmulatorId).Groups.Add(new GroupRow(g.Id, g.Name, members, bundles.GetValueOrDefault(g.BundleId)?.HeadVersionId));
+            var bundle = bundles.GetValueOrDefault(g.BundleId);
+            Row(g.EmulatorId).Groups.Add(new GroupRow(g.Id, g.Name, members, bundle?.HeadVersionId, bundle?.OpenConflict ?? false));
         }
         foreach (var c in configs.Where(c => bundles[c.BundleId].OwnerDeviceId != null).OrderBy(c => devices[c.DeviceId].Name))
-            Row(c.EmulatorId).Solo.Add(new SoloRow(devices[c.DeviceId], c.BundleId, bundles[c.BundleId].HeadVersionId));
+            Row(c.EmulatorId).Solo.Add(new SoloRow(devices[c.DeviceId], c.BundleId, bundles[c.BundleId].HeadVersionId,
+                bundles[c.BundleId].OpenConflict));
 
         return new ConfigOverview(rows.OrderBy(r => r.Key, StringComparer.Ordinal)
             .Select(r => new EmulatorConfigRow(r.Key, r.Value.Groups, r.Value.Solo)).ToList());
