@@ -62,14 +62,16 @@ public sealed partial class ConfigTransform(EmuSyncDbContext db, IBlobStore stor
                 var tokenized = PathTokens.Tokenize(v.Value, roots);
                 changes[v.Key] = tokenized.DeviceLocal ? PathTokens.Requote(Local, quote) : tokenized.Value;
             }
-            result.Add(await RewriteAsync(userId, entry, file, changes, ct));
+            result.Add(await RewriteAsync(userId, entry, file, changes, null, ct));
         }
         return result;
     }
 
     /// <summary>The canonical files as the target device should write them, and the <c>path#key</c> values it has none for.</summary>
+    /// <param name="preview">Read-only use (diffs): when set, rewritten files are not stored as blobs; their text is
+    /// put here by hash instead. Without it the caller must hold the user's lock.</param>
     public async Task<(List<ManifestEntry> Manifest, List<string> MissingLocalKeys)> ExpandAsync(Guid userId, Guid deviceId,
-        string emulatorId, IReadOnlyList<ManifestEntry> canonical, CancellationToken ct)
+        string emulatorId, IReadOnlyList<ManifestEntry> canonical, CancellationToken ct, IDictionary<string, string>? preview = null)
     {
         var roots = await RootsAsync(deviceId, ct);
         var rawJson = await db.RawConfigUploads.AsNoTracking()
@@ -104,7 +106,7 @@ public sealed partial class ConfigTransform(EmuSyncDbContext db, IBlobStore stor
                     missing.Add($"{entry.Path}#{v.Key}");
                 }
             }
-            result.Add(await RewriteAsync(userId, entry, file, changes, ct));
+            result.Add(await RewriteAsync(userId, entry, file, changes, preview, ct));
         }
         return (result, missing);
     }
@@ -160,37 +162,57 @@ public sealed partial class ConfigTransform(EmuSyncDbContext db, IBlobStore stor
         return values.Count == 0 ? null : new TextFile(format, text, values);
     }
 
+    /// <param name="preview">When set, nothing is stored: rewritten text goes here by hash (read-only callers).</param>
     private async Task<ManifestEntry> RewriteAsync(Guid userId, ManifestEntry entry, TextFile file,
-        Dictionary<string, string> changes, CancellationToken ct)
+        Dictionary<string, string> changes, IDictionary<string, string>? preview, CancellationToken ct)
     {
         if (changes.Count == 0) return entry;
         var text = file.Format.Replace(file.Text, changes);
         if (text == file.Text) return entry;
-        var (hash, size) = await PutTextAsync(userId, text, ct);
+        string hash;
+        long size;
+        if (preview is null)
+        {
+            (hash, size) = await PutTextAsync(userId, text, ct);
+        }
+        else
+        {
+            var bytes = Encode(text);
+            (hash, size) = (Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)), bytes.Length);
+            preview[hash] = text;
+        }
         return entry with { Hash = hash, Size = size };
     }
 
-    /// <summary>Stores text (UTF-8, no BOM) as a blob of the user, if not already held. Callers must not have
-    /// pending changes (recording saves).</summary>
+    private static byte[] Encode(string text)
+    {
+        try { return StrictUtf8.GetBytes(text); }
+        catch (EncoderFallbackException) { throw new ApiException(400, "bad_request", "The text is not valid Unicode."); }
+    }
+
+    /// <summary>Stores text (UTF-8, no BOM) as a blob of the user. Self-healing: the file is written whenever it is
+    /// missing, even if the row exists, and the row is recorded whenever it is missing. Callers hold the user's lock
+    /// and must not have pending changes (recording saves).</summary>
     public async Task<(string Hash, long Size)> PutTextAsync(Guid userId, string text, CancellationToken ct)
     {
-        byte[] bytes;
-        try { bytes = StrictUtf8.GetBytes(text); }
-        catch (EncoderFallbackException) { throw new ApiException(400, "bad_request", "The text is not valid Unicode."); }
+        var bytes = Encode(text);
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
-        if (!await blobs.HasAsync(userId, hash, ct))
+        if (!await store.ExistsAsync(userId, hash, ct))
         {
-            await using (var content = new MemoryStream(bytes, writable: false))
-                await store.PutAsync(userId, hash, content, ct);
-            await RecordAsync(userId, hash, bytes.Length, ct);
+            await using var content = new MemoryStream(bytes, writable: false);
+            await store.PutAsync(userId, hash, content, ct);
         }
+        if (!await blobs.HasAsync(userId, hash, ct))
+            await RecordAsync(userId, hash, bytes.Length, ct);
         return (hash, bytes.Length);
     }
 
     /// <summary>The blob as text, or null when it is binary (not valid UTF-8) or larger than <see cref="MaxTextBytes"/>.</summary>
-    public async Task<string?> ReadTextAsync(Guid userId, ManifestEntry entry, CancellationToken ct)
+    public async Task<string?> ReadTextAsync(Guid userId, ManifestEntry entry, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? preview = null)
     {
         if (entry.Size > MaxTextBytes) return null;
+        if (preview is not null && preview.TryGetValue(entry.Hash, out var previewed)) return previewed;
         await using var stream = await store.OpenAsync(userId, entry.Hash, ct)
             ?? throw new InvalidOperationException($"Blob {entry.Hash} is recorded but missing from the store.");
         using var buffer = new MemoryStream();

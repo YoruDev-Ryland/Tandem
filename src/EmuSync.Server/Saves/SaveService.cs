@@ -302,11 +302,15 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         return response;
     }
 
+    /// <summary>Under the user's lock, so a prune run never deletes a version pinned after it picked candidates.
+    /// Called only from the endpoints (UserLocks is not reentrant).</summary>
     public async Task SetPinnedAsync(Guid userId, Guid itemId, Guid versionId, bool pinned, CancellationToken ct)
     {
-        var updated = await db.SaveVersions
-            .Where(v => v.Id == versionId && v.ItemId == itemId && db.SaveItems.Any(i => i.Id == itemId && i.UserId == userId))
-            .ExecuteUpdateAsync(s => s.SetProperty(v => v.Pinned, pinned), ct);
+        int updated;
+        using (await locks.Acquire(userId, ct))
+            updated = await db.SaveVersions
+                .Where(v => v.Id == versionId && v.ItemId == itemId && db.SaveItems.Any(i => i.Id == itemId && i.UserId == userId))
+                .ExecuteUpdateAsync(s => s.SetProperty(v => v.Pinned, pinned), ct);
         if (updated == 0) throw new ApiException(404, "version_not_found", "Version not found.");
     }
 

@@ -159,14 +159,16 @@ public static class ConfigDiff
 /// <summary>Reads config version files and diffs versions, canonical or expanded for one device.</summary>
 public sealed class ConfigDiffService(EmuSyncDbContext db, ConfigTransform transform)
 {
-    private sealed record Loaded(List<ManifestEntry> Manifest, string EmulatorId);
+    /// <param name="Preview">Text of files rewritten for the device, by hash: a diff never stores blobs (it runs
+    /// outside the user's lock, and nothing references what it computes).</param>
+    private sealed record Loaded(List<ManifestEntry> Manifest, string EmulatorId, Dictionary<string, string> Preview);
 
     public async Task<string> FileTextAsync(Guid userId, Guid versionId, string path, Guid? deviceId, CancellationToken ct)
     {
         var loaded = await LoadAsync(userId, versionId, deviceId, ct);
         var entry = loaded.Manifest.FirstOrDefault(e => e.Path == path)
             ?? throw new ApiException(404, "file_not_found", "That file is not in this version.");
-        return await transform.ReadTextAsync(userId, entry, ct)
+        return await transform.ReadTextAsync(userId, entry, ct, loaded.Preview)
             ?? throw new ApiException(415, "not_text", "That file is binary or too large to show as text.");
     }
 
@@ -190,8 +192,8 @@ public sealed class ConfigDiffService(EmuSyncDbContext db, ConfigTransform trans
                 continue;
             }
             var status = o is null ? FileDiffStatus.Added : n is null ? FileDiffStatus.Removed : FileDiffStatus.Changed;
-            var oldText = o is null ? "" : await transform.ReadTextAsync(userId, o, ct);
-            var newText = n is null ? "" : await transform.ReadTextAsync(userId, n, ct);
+            var oldText = o is null ? "" : await transform.ReadTextAsync(userId, o, ct, from.Preview);
+            var newText = n is null ? "" : await transform.ReadTextAsync(userId, n, ct, to.Preview);
             // A binary or oversized side gives no hunks, only the status.
             files.Add(new FileDiff(path, status, oldText is null || newText is null ? [] : ConfigDiff.Hunks(oldText, newText)));
         }
@@ -208,9 +210,10 @@ public sealed class ConfigDiffService(EmuSyncDbContext db, ConfigTransform trans
                 .FirstOrDefaultAsync(ct)
             ?? throw new ApiException(404, "version_not_found", "Version not found.");
         var canonical = Saves.Manifests.FromJson(row.ManifestJson);
-        if (deviceId is not Guid target) return new Loaded(canonical, row.EmulatorId);
-        var (expanded, _) = await transform.ExpandAsync(userId, target, row.EmulatorId, canonical, ct);
-        return new Loaded(expanded, row.EmulatorId);
+        var preview = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (deviceId is not Guid target) return new Loaded(canonical, row.EmulatorId, preview);
+        var (expanded, _) = await transform.ExpandAsync(userId, target, row.EmulatorId, canonical, ct, preview);
+        return new Loaded(expanded, row.EmulatorId, preview);
     }
 
 }

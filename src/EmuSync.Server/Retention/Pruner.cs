@@ -133,16 +133,31 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, IOption
             .Select(v => new Candidate(v.Id, v.ItemId, v.Seq, false))
             .ToListAsync(ct), settings.VaultVersions, protectedIds);
 
-        var count = saveDoomed.Count + configDoomed.Count + vaultDoomed.Count;
-        if (count == 0) return 0;
+        return await DeleteVersionsAsync(db, userId, saveDoomed, configDoomed, vaultDoomed, ct);
+    }
 
+    /// <summary>Deletes the given versions of the user in one transaction and returns how many went. Defence in depth:
+    /// the predicate re-checks the flags, so a version pinned, labelled or turned into a conflict after candidate
+    /// selection is never deleted.</summary>
+    internal static async Task<int> DeleteVersionsAsync(EmuSyncDbContext db, Guid userId, IReadOnlyList<Guid> saves,
+        IReadOnlyList<Guid> configs, IReadOnlyList<Guid> vaults, CancellationToken ct)
+    {
+        if (saves.Count + configs.Count + vaults.Count == 0) return 0;
+        var saveItems = db.SaveItems.Where(i => i.UserId == userId);
+        var bundles = db.ConfigBundles.Where(b => b.UserId == userId);
+        var vaultItems = db.VaultItems.Where(i => i.UserId == userId);
+        var count = 0;
         await using var tx = await db.Database.BeginTransactionAsync(ct);
-        foreach (var chunk in saveDoomed.Chunk(Chunk))
-            await db.SaveVersions.Where(v => chunk.Contains(v.Id) && saveItems.Any(i => i.Id == v.ItemId)).ExecuteDeleteAsync(ct);
-        foreach (var chunk in configDoomed.Chunk(Chunk))
-            await db.ConfigVersions.Where(v => chunk.Contains(v.Id) && bundles.Any(b => b.Id == v.BundleId)).ExecuteDeleteAsync(ct);
-        foreach (var chunk in vaultDoomed.Chunk(Chunk))
-            await db.VaultVersions.Where(v => chunk.Contains(v.Id) && vaultItems.Any(i => i.Id == v.ItemId)).ExecuteDeleteAsync(ct);
+        foreach (var chunk in saves.Chunk(Chunk))
+            count += await db.SaveVersions.Where(v => chunk.Contains(v.Id) && saveItems.Any(i => i.Id == v.ItemId)
+                                                      && !v.Pinned && v.Variant == null && v.ConflictReason == null)
+                .ExecuteDeleteAsync(ct);
+        foreach (var chunk in configs.Chunk(Chunk))
+            count += await db.ConfigVersions.Where(v => chunk.Contains(v.Id) && bundles.Any(b => b.Id == v.BundleId)
+                                                        && !v.Pinned && v.ConflictReason == null)
+                .ExecuteDeleteAsync(ct);
+        foreach (var chunk in vaults.Chunk(Chunk))
+            count += await db.VaultVersions.Where(v => chunk.Contains(v.Id) && vaultItems.Any(i => i.Id == v.ItemId)).ExecuteDeleteAsync(ct);
         await tx.CommitAsync(ct);
         return count;
     }

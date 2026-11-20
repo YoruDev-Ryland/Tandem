@@ -327,6 +327,91 @@ public class RetentionTests
         Assert.False(await BlobKept(f, u.UserId, b[2].Hash));
     }
 
+    [Fact]
+    public async Task Pinned_through_the_api_survives_prune()
+    {
+        using var f = NewFactory();
+        var u = await NewUser(f);
+        await SetRetention(u.Device, saves: 1);
+        var b = new List<ManifestEntry>();
+        for (var i = 1; i <= 3; i++) b.Add(await Blob(u.Device, $"v{i}"));
+        var (item, sv) = await SeedSave(f, u.UserId, "G", b.Select(x => M(x)).ToList());
+        PastGrace(f);
+
+        (await u.Device.PostAsync($"/v1/saves/{item}/pin/{sv[0]}", null)).EnsureSuccessStatusCode();
+        await Prune(f);
+
+        Assert.Equal([1, 3], await SaveSeqs(f, item));
+        Assert.True(await BlobKept(f, u.UserId, b[0].Hash));
+    }
+
+    [Fact]
+    public async Task Pin_waits_for_the_user_lock()
+    {
+        using var f = NewFactory();
+        var u = await NewUser(f);
+        var b = await Blob(u.Device, "v1");
+        var (item, sv) = await SeedSave(f, u.UserId, "G", [M(b)]);
+        Task<HttpResponseMessage> pin;
+        using (await f.Services.GetRequiredService<UserLocks>().Acquire(u.UserId))
+        {
+            pin = u.Device.PostAsync($"/v1/saves/{item}/pin/{sv[0]}", null);
+            await Task.Delay(300);
+            Assert.False(pin.IsCompleted, "Pinning must wait for the user's lock (a prune may be running).");
+        }
+        (await pin).EnsureSuccessStatusCode();
+        Assert.True(await InDb(f, db => db.SaveVersions.Where(v => v.Id == sv[0]).Select(v => v.Pinned).SingleAsync()));
+    }
+
+    [Fact]
+    public async Task Version_delete_skips_versions_flagged_after_selection()
+    {
+        using var f = NewFactory();
+        var u = await NewUser(f);
+        var b = new List<ManifestEntry>();
+        for (var i = 1; i <= 4; i++) b.Add(await Blob(u.Device, $"s{i}"));
+        // Selected as plain candidates, then flagged before the delete runs.
+        var (item, sv) = await SeedSave(f, u.UserId, "G", b.Select(x => M(x)).ToList(), tweak: (seq, v) =>
+        {
+            if (seq == 1) v.Pinned = true;
+            if (seq == 2) v.Variant = "Variant 1";
+            if (seq == 3) v.ConflictReason = ConflictReason.Concurrent;
+        });
+        var c = new List<ManifestEntry>();
+        for (var i = 1; i <= 3; i++) c.Add(await Blob(u.Device, $"c{i}", "config.ini"));
+        var (bundle, cv) = await SeedConfig(f, u, c.Select(x => M(x)).ToList(), (seq, v) =>
+        {
+            if (seq == 1) v.Pinned = true;
+            if (seq == 2) v.ConflictReason = ConflictReason.FirstSync;
+        });
+
+        var deleted = await InDb(f, db => Pruner.DeleteVersionsAsync(db, u.UserId, sv, cv, [], CancellationToken.None));
+
+        Assert.Equal(2, deleted);
+        Assert.Equal([1, 2, 3], await SaveSeqs(f, item));
+        Assert.Equal([1, 2], await ConfigSeqs(f, bundle));
+    }
+
+    [Fact]
+    public async Task Put_text_rewrites_a_missing_file_when_the_row_exists()
+    {
+        using var f = NewFactory();
+        var u = await NewUser(f);
+        var e = await Blob(u.Device, "[UI]\nkey=value\n", "config.ini");
+        File.Delete(BlobPath(f, u.UserId, e.Hash));
+
+        var (hash, _) = await InDb(f, async db =>
+        {
+            using var scope = f.Services.CreateScope();
+            return await scope.ServiceProvider.GetRequiredService<EmuSync.Server.Configs.ConfigTransform>()
+                .PutTextAsync(u.UserId, "[UI]\nkey=value\n", CancellationToken.None);
+        });
+
+        Assert.Equal(e.Hash, hash);
+        Assert.True(await BlobKept(f, u.UserId, e.Hash));
+        Assert.Equal("[UI]\nkey=value\n", await File.ReadAllTextAsync(BlobPath(f, u.UserId, e.Hash)));
+    }
+
     // ---- blob cleanup ----
 
     [Fact]

@@ -217,6 +217,23 @@ public class ConfigWebTests
     }
 
     [Fact]
+    public async Task Diff_and_file_text_for_device_store_no_blobs()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var v1 = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni("/storage/1111-ODIN/ROMs/a", "1"))), null);
+        var v2 = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni("/storage/1111-ODIN/ROMs/a", "2"))), v1.VersionId);
+        var before = await InDb(f, db => db.UserBlobs.AsNoTracking().Select(b => b.Hash).OrderBy(h => h).ToListAsync());
+
+        var forThor = Assert.Single((await Diff(s.Web, v1.VersionId, v2.VersionId, s.ThorId)).Files).Hunks.Single();
+        var text = await s.Web.GetAsync($"/v1/configs/versions/{v2.VersionId}/files/{Ini}?device={s.ThorId}");
+
+        Assert.Contains(forThor.Lines, l => l.Op == ' ' && l.Text == "Paths\\gamedirs\\1\\path=/storage/2222-THOR/ROMs/a");
+        Assert.Contains("path=/storage/2222-THOR/ROMs/a", await text.Content.ReadAsStringAsync());
+        Assert.Equal(before, await InDb(f, db => db.UserBlobs.AsNoTracking().Select(b => b.Hash).OrderBy(h => h).ToListAsync()));
+    }
+
+    [Fact]
     public async Task Web_edit_creates_version_and_delivers_to_group()
     {
         using var f = NewFactory();
