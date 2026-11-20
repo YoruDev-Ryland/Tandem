@@ -1,0 +1,19 @@
+# Vita3K config (synthetic fixture)
+pref-path: /storage/emulated/0/Android/data/org.vita3k.emulator/files/vita/
+backend-renderer: Vulkan
+log-level: 0
+user-id: "00"
+cpu:
+  cpu-opt: true
+  tracing: false
+gui:
+  theme-id: default   # trailing comment
+  paths:
+    background: 'content://com.android.externalstorage.documents/tree/primary%3AVita%2Fbg'
+lle-modules:
+  - SceLibc
+  - SceNet
+notes: |
+  multi: line
+  scalar: here
+last: end

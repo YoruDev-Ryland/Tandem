@@ -15,6 +15,9 @@
     <ProjectReference Include="..\..\src\EmuSync.Server\EmuSync.Server.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 </Project>
