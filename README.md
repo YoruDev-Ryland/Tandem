@@ -42,7 +42,7 @@ precedence over the plain names.
 | `PUID` / `PGID` | `1654` | The user and group the server runs as; the entrypoint chowns `/data` to them. |
 | `DATABASE_PROVIDER` | `sqlite` | `sqlite` or `postgres`. |
 | `DATABASE_CONNECTION` | none | Npgsql connection string for `postgres`; for `sqlite` an optional database file path. |
-| `TRUST_FORWARDED_HEADERS` | `false` | Trust `X-Forwarded-*` from a reverse proxy (set it when behind one). |
+| `TRUST_FORWARDED_HEADERS` | `false` | Trust `X-Forwarded-For`/`-Proto`/`-Host` from a reverse proxy (set it when behind one): rate limits are per client, the session cookie is `Secure` over https, and pairing QR codes use the public host. Every proxy address is trusted, so only turn it on when the server is reachable through the proxy alone. |
 | `SERVER_NAME` | `EmuSync` | Shown to clients (max 60 characters). |
 | `WEB_ROOT` | `wwwroot` beside the app | The built web UI. |
 

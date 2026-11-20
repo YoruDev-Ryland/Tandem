@@ -15,6 +15,7 @@ using EmuSync.Server.Pairing;
 using EmuSync.Server.Saves;
 using EmuSync.Server.Retention;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace EmuSync.Server;
@@ -63,8 +64,23 @@ public static class ServerSetup
     /// <summary>Builds the pipeline and maps endpoints. Each feature adds one line here.</summary>
     public static void Map(WebApplication app)
     {
+        var options = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServerOptions>>().Value;
+        // First in the pipeline, so the rate limiter, cookies and URLs see the client's address, scheme and host.
+        // The proxy sits on a docker network whose address is not known in advance, so every proxy is trusted:
+        // the option must only be turned on when the server is reachable through the proxy alone.
+        if (options.TrustForwardedHeaders)
+        {
+            var forwarded = new ForwardedHeadersOptions
+            {
+                ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost,
+            };
+            forwarded.KnownIPNetworks.Clear();
+            forwarded.KnownProxies.Clear();
+            app.UseForwardedHeaders(forwarded);
+        }
+
         app.Services.MigrateDatabase();
-        var dataDirectory = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServerOptions>>().Value.DataDirectory;
+        var dataDirectory = options.DataDirectory;
         WebEndpoints.SweepStaleUploads(dataDirectory);
         BackupService.SweepStaleTemps(dataDirectory);
         app.UseApiErrors();
