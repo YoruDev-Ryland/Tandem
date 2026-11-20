@@ -37,6 +37,8 @@ object Paths {
 interface EmulatorModule {
     val emulatorId: String
     val packages: List<String>                                     // preferred order
+    /** First segments a delivered config bundle path may start with: "data" maps to dataRoot, others to extraRoots. */
+    val configRoots: Set<String> get() = setOf("data")
     fun detect(fs: Fs, settings: DeviceSettings): Detected?
     fun saveItems(fs: Fs, d: Detected): List<LocalItem>
     fun watchDirs(fs: Fs, d: Detected): List<String>

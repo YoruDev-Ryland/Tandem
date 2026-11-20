@@ -21,6 +21,7 @@ class PpssppModule(
 
     override val emulatorId = "ppsspp"
     override val packages = listOf("org.ppsspp.ppsspp", "org.ppsspp.ppssppgold")
+    override val configRoots = setOf("memstick")
 
     private val idRe = Regex("[A-Z]{4}\\d{5}")
     private val stateRe = Regex("^([A-Z]{4}\\d{5})_([^_]+)_(\\d+)\\.ppst$")

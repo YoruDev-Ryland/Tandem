@@ -24,6 +24,7 @@ class AzaharModule(
 
     override val emulatorId = "azahar"
     override val packages = listOf("org.azahar_emu.azahar", "io.github.lime3ds.android")
+    override val configRoots = setOf("root")
 
     private val hex8 = Regex("^[0-9A-Fa-f]{8}$")
     private val hex16 = Regex("^[0-9A-Fa-f]{16}$")

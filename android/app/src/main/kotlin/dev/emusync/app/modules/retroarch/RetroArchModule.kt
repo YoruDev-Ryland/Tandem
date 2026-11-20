@@ -20,6 +20,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
 
     override val emulatorId = "retroarch"
     override val packages = listOf("com.retroarch.aarch64", "com.retroarch", "com.retroarch.ra32")
+    override val configRoots = setOf("data", "config")
 
     private val saveExts = setOf("srm", "sav", "rtc", "mcr", "eep", "fla", "dsv", "bin")
     private val romExts = setOf("gba", "gbc", "gb", "nes", "sfc", "smc", "md", "gen", "n64", "z64", "nds", "zip", "7z", "chd", "cue", "iso", "pbp")

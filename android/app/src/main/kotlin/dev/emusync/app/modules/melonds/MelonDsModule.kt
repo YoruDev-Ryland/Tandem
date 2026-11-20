@@ -17,6 +17,7 @@ class MelonDsModule(
 
     override val emulatorId = "melonds"
     override val packages = listOf("me.magnum.melonds")
+    override val configRoots = setOf("export")
 
     private val romExts = setOf("nds", "dsi", "zip", "7z")
     private val stateRe = Regex("^(.+)\\.ml([0-8])$", RegexOption.IGNORE_CASE)
