@@ -31,6 +31,8 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val shizukuOk: Boolean,
     val emulators: List<EmulatorStatus>,
     val roots: Map<String, String>,
+    /** Emulator ids running right now; replaces the server's list on every report. Null (omitted) means none. */
+    val runningEmulators: List<String>? = null,
 )
 
 @Serializable data class InstalledGame(

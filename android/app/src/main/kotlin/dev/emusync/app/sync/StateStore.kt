@@ -6,6 +6,8 @@ import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -81,6 +83,10 @@ class StateStore(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val lock = Any()
     private var data: StateData = load()
+    private val changeCount = MutableStateFlow(0L)
+
+    /** Incremented after every successful write (a failed write leaves it unchanged). For observers such as the UI. */
+    val changes: StateFlow<Long> get() = changeCount
 
     private fun load(): StateData {
         if (!file.exists()) return StateData()
@@ -110,6 +116,7 @@ class StateStore(
         Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         data = next
         runCatching { dirSync(dir) }
+        changeCount.value++
     }
 
     fun get(itemKey: String): ItemState? = synchronized(lock) { data.items[itemKey] }

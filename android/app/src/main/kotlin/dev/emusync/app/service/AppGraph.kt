@@ -4,6 +4,7 @@ import android.content.Context
 import dev.emusync.app.fs.ShizukuGate
 import dev.emusync.app.modules.Detected
 import dev.emusync.app.sync.StateStore
+import dev.emusync.app.sync.WaitingDelivery
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +34,14 @@ object AppGraph {
 
     val snapshot = MutableStateFlow(ServiceSnapshot())
     val snapshots: StateFlow<ServiceSnapshot> get() = snapshot
+
+    /** Written by [SyncService]: the deliveries its last apply pass held back because their emulator runs. */
+    internal val waitingState = MutableStateFlow<List<WaitingDelivery>>(emptyList())
+    val waiting: StateFlow<List<WaitingDelivery>> get() = waitingState
+
+    /** Written by [SyncService] on every process monitor tick: the emulator ids running; empty while sync is off. */
+    internal val runningState = MutableStateFlow<Set<String>>(emptySet())
+    val running: StateFlow<Set<String>> get() = runningState
 
     fun store(context: Context): StateStore = storeRef ?: synchronized(this) {
         storeRef ?: StateStore(File(context.applicationContext.filesDir, "state.json")).also { storeRef = it }

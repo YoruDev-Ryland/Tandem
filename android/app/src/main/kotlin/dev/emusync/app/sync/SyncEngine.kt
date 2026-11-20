@@ -48,6 +48,7 @@ class SyncEngine(
     private val onConflict: (SyncConflict) -> Unit,
     private val storageRoot: String = "/storage",
     private val quietMillis: Long = SyncConfig.quietMillis,
+    private val runningReportMillis: Long = SyncConfig.runningReportMillis,
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
 ) {
     private class Tracked(val module: EmulatorModule, val detected: Detected, val item: LocalItem)
@@ -80,6 +81,12 @@ class SyncEngine(
     private val shadowLogged = HashSet<String>()
     private val queued = HashSet<String>()                   // store keys whose last upload attempt failed
     private val titles = HashMap<String, String>()            // "<emulatorId>|<gameKey>" -> game title (items, installs)
+    private var running: Set<String> = emptySet()             // emulator ids the last [reportRunning] saw running
+
+    // The last status report attempt, touched only under [mutex].
+    private var sentRunning: List<String>? = null
+    private var sentAt = 0L
+    private var sentOk = false
 
     // Touched only under [mutex].
     private val lastInstalls = HashMap<String, List<InstalledGame>>()
@@ -114,6 +121,23 @@ class SyncEngine(
             }
         }
         for ((m, d) in found.values) if (!fs.isEmulatorRunning(m, d)) uploadConfigBundle(m, d)
+    }
+
+    /**
+     * Records the emulators running now (from the process monitor) and sends a status report when the set changed
+     * since the last report, or when [runningReportMillis] passed since it while an emulator runs or the last report
+     * failed. Nothing is sent while nothing runs and the last report went through.
+     */
+    suspend fun reportRunning(ids: Set<String>): Unit = mutex.withLock {
+        val found = synchronized(ev) {
+            running = ids
+            detected.values.toList()
+        }
+        val elapsed = clock() - sentAt   // wall clock: a step backwards counts as due rather than stalling the refresh
+        val current = runningOf(found)
+        val due = current != sentRunning ||
+            ((current.isNotEmpty() || !sentOk) && (elapsed >= runningReportMillis || elapsed < 0))
+        if (due) reportStatus(found)
     }
 
     /** Drops cached hashes for [paths] (files the applier wrote, deleted or restored). Lock-free. */
@@ -489,7 +513,20 @@ class SyncEngine(
         roots["{INTERNAL}"] = "$storageRoot/emulated/0"
         sdCard()?.let { roots["{SD}"] = it }
         for ((m, d) in found) roots["{EMU:${m.emulatorId}}"] = d.dataRoot
-        apiCall("status") { api.putStatus(DeviceStatusRequest("android", appVersion, shizukuOk(), emulators, roots)) }
+        val runningNow = runningOf(found)
+        sentRunning = runningNow
+        sentAt = clock()
+        sentOk = false
+        apiCall("status") {
+            api.putStatus(DeviceStatusRequest("android", appVersion, shizukuOk(), emulators, roots, runningNow))
+            sentOk = true
+        }
+    }
+
+    /** The running emulator ids among [found], sorted (the server drops ids it doesn't know). */
+    private fun runningOf(found: List<Pair<EmulatorModule, Detected>>): List<String> {
+        val ids = found.map { it.first.emulatorId }.toSet()
+        return synchronized(ev) { running.filter { it in ids }.sorted() }
     }
 
     private fun sdCard(): String? = try {

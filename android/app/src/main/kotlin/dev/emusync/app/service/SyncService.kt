@@ -125,6 +125,8 @@ class SyncService : Service() {
         destroyed = true
         scope.cancel()
         AppGraph.snapshot.value = ServiceSnapshot(running = false, status = "Not running")
+        AppGraph.runningState.value = emptySet()
+        AppGraph.waitingState.value = emptyList()
         super.onDestroy()
     }
 
@@ -200,7 +202,8 @@ class SyncService : Service() {
             onConflict = notifier::conflict,
         )
         val applier = DeliveryApplier(
-            fs, api, store, registry, engine, notifier::alert, s, cacheDir, log = log,
+            fs, api, store, registry, engine, notifier::alert, s, cacheDir,
+            onWaiting = { AppGraph.waitingState.value = it }, log = log,
         )
         val sess = Session(fs, engine, applier, WorkQueue(), planner)
         log("sync session starting ($url, auto-apply ${if (stored.autoApply) "on" else "off"})")
@@ -238,6 +241,9 @@ class SyncService : Service() {
             sess.queue.close()
             runCatching { fs.unwatchAll() }
             if (session === sess) session = null
+            // This session's knowledge ends with it; the next one probes and applies afresh.
+            AppGraph.runningState.value = emptySet()
+            AppGraph.waitingState.value = emptyList()
         }
     }
 
@@ -275,19 +281,31 @@ class SyncService : Service() {
         }
     }
 
-    /** Probes each detected emulator; on alive -> dead uploads its config and applies what waited for the exit. */
+    /**
+     * Probes each detected emulator, publishes the running set (and reports it to the server when it changed or is
+     * due), then on alive -> dead uploads its config and applies what waited for the exit.
+     */
     private suspend fun monitor(s: Session) {
         val found = s.engine.detectedEmulators()
         s.exits.retain(found.map { it.emulatorId }.toSet())
+        val running = LinkedHashSet<String>()
+        val exited = ArrayList<String>()
         for (d in found) {
             val m = registry.byId(d.emulatorId) ?: continue
             val alive = s.fs.isEmulatorRunning(m, d)   // any variant or sub-process; throws (ends the session) on probe failure
-            if (!s.exits.observe(d.emulatorId, alive)) continue
-            log("${d.emulatorId} exited")
-            s.engine.onEmulatorExited(d.emulatorId)
+            if (alive) running += d.emulatorId
+            if (s.exits.observe(d.emulatorId, alive)) exited += d.emulatorId
+        }
+        AppGraph.runningState.value = running
+        s.engine.reportRunning(running)
+        for (id in exited) {
+            log("$id exited")
+            s.engine.onEmulatorExited(id)
             if (s.planner.applyOnExit()) {
-                val r = s.applier.onEmulatorExited(d.emulatorId)
-                if (r.applied + r.failed > 0) log("${d.emulatorId}: ${r.applied} applied, ${r.failed} failed after exit")
+                val r = s.applier.onEmulatorExited(id)
+                if (r.applied + r.failed > 0) log("$id: ${r.applied} applied, ${r.failed} failed after exit")
+            } else {
+                s.applier.forgetWaiting(id)
             }
             rewatch(s)
             publish()
