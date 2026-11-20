@@ -57,7 +57,9 @@ public static class AccountEndpoints
         });
         account.MapPost("/password", async (ChangePasswordRequest request, HttpContext http, AccountService accounts, CancellationToken ct) =>
         {
-            await accounts.ChangePassword(http.User.UserId(), request, ct);
+            var current = http.Request.Cookies.TryGetValue(WebSessionCookie.Name, out var token) && !string.IsNullOrEmpty(token)
+                ? Secrets.Hash(token) : null;
+            await accounts.ChangePassword(http.User.UserId(), request, current, ct);
             return Results.NoContent();
         }).RequireAuthorization(AuthSetup.WebSessionPolicy);
         return app;

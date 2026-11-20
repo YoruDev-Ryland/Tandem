@@ -149,7 +149,9 @@ public sealed class AccountService(EmuSyncDbContext db, IOptions<ServerOptions> 
         return token;
     }
 
-    public async Task ChangePassword(Guid userId, ChangePasswordRequest request, CancellationToken ct)
+    /// <summary>Changes the password and signs out every other web session of the user; the session making the
+    /// change (<paramref name="currentSessionHash"/>) stays signed in. Device keys are unaffected.</summary>
+    public async Task ChangePassword(Guid userId, ChangePasswordRequest request, string? currentSessionHash, CancellationToken ct)
     {
         CheckPassword(request.New);
         var user = await db.Users.FirstAsync(u => u.Id == userId, ct);
@@ -157,6 +159,7 @@ public sealed class AccountService(EmuSyncDbContext db, IOptions<ServerOptions> 
             throw new ApiException(400, "wrong_password", "The current password is incorrect.");
         user.PasswordHash = Hasher.HashPassword(user, request.New);
         await db.SaveChangesAsync(ct);
+        await db.WebSessions.Where(s => s.UserId == userId && s.TokenHash != currentSessionHash).ExecuteDeleteAsync(ct);
     }
 
     /// <summary>Sets a new password for the account with this email (admin CLI). Existing devices stay signed in.</summary>

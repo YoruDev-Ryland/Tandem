@@ -124,6 +124,23 @@ public class AccountTests
     }
 
     [Fact]
+    public async Task Change_password_revokes_the_other_web_sessions_and_keeps_the_current_one()
+    {
+        using var factory = new ServerFactory();
+        var (device, _) = await factory.Register("a@example.com");
+        var current = await factory.WebLogin("a@example.com");
+        var other = await factory.WebLogin("a@example.com");
+        Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/v1/account")).StatusCode);
+
+        (await current.PostAsJsonAsync("/v1/account/password", new ChangePasswordRequest(TestApi.Password, "new password 1")))
+            .EnsureSuccessStatusCode();
+
+        Assert.Equal(HttpStatusCode.OK, (await current.GetAsync("/v1/account")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await other.GetAsync("/v1/account")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await device.GetAsync("/v1/account")).StatusCode); // device keys are not sessions
+    }
+
+    [Fact]
     public async Task Change_password_requires_a_web_session()
     {
         using var factory = new ServerFactory();
