@@ -323,21 +323,15 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
             }
             else
             {
-                ConfigBundle bundle;
+                // The target's own files must already be on the server before anything replaces them.
                 if (targetConfig is null)
-                {
-                    bundle = NewSoloBundle(userId, emulatorId, targetId);
-                    db.DeviceConfigs.Add(new DeviceConfig { DeviceId = targetId, EmulatorId = emulatorId, BundleId = bundle.Id });
-                }
-                else
-                {
-                    bundle = await LoadBundleForUpdateAsync(userId, targetConfig.BundleId, ct)
-                        ?? throw new InvalidOperationException("Config bundle vanished while locked.");
-                    if (bundle.GroupId is not null)
-                        throw new ApiException(409, "already_in_group", "The target follows a group; remove it from the group first.");
-                    if (bundle.OpenConflict)
-                        throw new ApiException(409, "conflict_open", "Resolve the target's open config conflict first.");
-                }
+                    throw new ApiException(400, "no_config", $"Open {emulatorId} once on that device so its config is backed up first.");
+                var bundle = await LoadBundleForUpdateAsync(userId, targetConfig.BundleId, ct)
+                    ?? throw new InvalidOperationException("Config bundle vanished while locked.");
+                if (bundle.GroupId is not null)
+                    throw new ApiException(409, "already_in_group", "The target follows a group; remove it from the group first.");
+                if (bundle.OpenConflict)
+                    throw new ApiException(409, "conflict_open", "Resolve the target's open config conflict first.");
                 var head = bundle.HeadVersionId is Guid headId ? await db.ConfigVersions.SingleAsync(v => v.Id == headId, ct) : null;
                 changed = head is null || head.ManifestHash != source.Version.ManifestHash;
                 if (changed)

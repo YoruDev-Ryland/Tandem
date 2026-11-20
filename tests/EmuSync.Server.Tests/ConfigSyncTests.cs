@@ -430,19 +430,53 @@ public class ConfigSyncTests
     }
 
     [Fact]
-    public async Task Apply_Copy_creates_solo_bundle_for_target_without_config()
+    public async Task Apply_Copy_to_target_without_config_is_rejected()
     {
         using var f = NewFactory();
         var s = await TwoDevices(f);
         var thor = await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink))), null);
 
-        var applied = await (await s.Web.PostJsonAsync("/v1/configs/apply",
-            new ApplyConfigRequest(s.OdinId, "eden", thor.VersionId, ApplyMode.Copy))).ReadAsync<ApplyConfigResponse>();
+        var r = await s.Web.PostJsonAsync("/v1/configs/apply", new ApplyConfigRequest(s.OdinId, "eden", thor.VersionId, ApplyMode.Copy));
 
-        Assert.Equal(s.OdinId, (await Bundle(f, applied.BundleId)).OwnerDeviceId);
-        var d = Assert.Single(await Deliveries(s.Odin));
-        Assert.Null(d.KnownVersionId);
-        Assert.Equal(new[] { $"{Ini}#{GameDirKey}" }, d.MissingLocalKeys);
+        Assert.Equal(HttpStatusCode.BadRequest, r.StatusCode);
+        var error = await r.ReadAsync<ErrorResponse>();
+        Assert.Equal("no_config", error.Code);
+        Assert.Equal("Open eden once on that device so its config is backed up first.", error.Message);
+        Assert.False(await InDb(f, db => db.DeviceConfigs.AnyAsync(c => c.DeviceId == s.OdinId)));
+        Assert.False(await InDb(f, db => db.ConfigBundles.AnyAsync(b => b.OwnerDeviceId == s.OdinId)));
+        Assert.Empty(await Deliveries(s.Odin));
+    }
+
+    [Fact]
+    public async Task Path_under_SD_delivered_to_device_without_SD_uses_own_value_or_reports_missing()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (loki, lokiKey) = await f.PairSecondDevice(s.Odin, "Loki");
+        var (heim, heimKey) = await f.PairSecondDevice(s.Odin, "Heim");
+        foreach (var device in new[] { loki, heim }) // no {SD} root on either
+        {
+            var r = await device.PutAsJsonAsync("/v1/devices/me/status", new DeviceStatusRequest("android", "1.0", true,
+                [new EmulatorStatus("eden", "dev.eden", "0.1", null)],
+                new Dictionary<string, string> { ["{INTERNAL}"] = "/storage/emulated/0" }));
+            r.EnsureSuccessStatusCode();
+        }
+        await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, screenshots: "/storage/2222-THOR/Shots"))), null);
+        await Upload(loki, await Files(loki, (Ini, EdenIni("", screenshots: "/storage/emulated/0/LokiShots"))), null);
+        await Upload(heim, await Files(heim, (Ini, EdenIni(""))), null);
+        var group = await CreateGroup(s.Web, s.ThorId);
+        Assert.Contains("Paths\\screenshotPath={SD}/Shots\n",
+            await FileText(s.Web, Manifest(await Version(f, group.HeadVersionId!.Value)), Ini));
+
+        await Join(s.Web, group.Id, lokiKey.DeviceId);
+        await Join(s.Web, group.Id, heimKey.DeviceId);
+
+        var toLoki = Assert.Single(await Deliveries(loki));
+        Assert.Contains("Paths\\screenshotPath=/storage/emulated/0/LokiShots\n", await FileText(loki, toLoki.Manifest, Ini));
+        Assert.Equal(new[] { $"{Ini}#{GameDirKey}" }, toLoki.MissingLocalKeys);
+        var toHeim = Assert.Single(await Deliveries(heim));
+        Assert.Contains("Paths\\screenshotPath=\n", await FileText(heim, toHeim.Manifest, Ini));
+        Assert.Equal(new[] { $"{Ini}#{GameDirKey}", $"{Ini}#UI/Paths\\screenshotPath" }.Order(), toHeim.MissingLocalKeys!.Order());
     }
 
     [Fact]
