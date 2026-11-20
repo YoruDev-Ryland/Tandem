@@ -15,6 +15,8 @@ public sealed class ServerOptions
     public bool TrustForwardedHeaders { get; set; }
     public string? WebRoot { get; set; }
     public long MaxBlobBytes { get; set; } = 8L * 1024 * 1024 * 1024;
+    /// <summary>Cumulative cap on the files of one web upload request.</summary>
+    public long MaxUploadBytes { get; set; } = 8L * 1024 * 1024 * 1024;
     public int AuthRequestsPerMinute { get; set; } = 10;
     public int EventHeartbeatSeconds { get; set; } = 25;
 

@@ -38,8 +38,9 @@ public static class ZipExport
                 throw new ApiException(404, "blob_not_found", "A file of this version is missing from storage.");
     }
 
-    public static async Task WriteAsync(Stream output, Guid userId, IEnumerable<ZipItem> items, IBlobStore store, CancellationToken ct)
+    public static async Task WriteAsync(Stream output, Guid userId, IEnumerable<ZipItem> items, IBlobStore store, CancellationToken ct, bool tolerateMissing = false)
     {
+        var missing = new List<string>();
         var archive = await ZipArchive.CreateAsync(new AsyncFriendlyStream(output), ZipArchiveMode.Create, leaveOpen: true, entryNameEncoding: null);
         await using (archive)
         {
@@ -55,11 +56,24 @@ public static class ZipExport
                         ? $"{item.EntryName[..dot]} ({n}){item.EntryName[dot..]}"
                         : $"{item.EntryName} ({n})";
                 }
-                await using var source = await store.OpenAsync(userId, item.Hash, ct)
-                    ?? throw new IOException("A blob went missing while the zip was streaming.");
+                var opened = await store.OpenAsync(userId, item.Hash, ct);
+                if (opened is null)
+                {
+                    if (!tolerateMissing) throw new IOException("A blob went missing while the zip was streaming.");
+                    used.Remove(name);
+                    missing.Add($"{item.EntryName}  {item.Hash}");
+                    continue;
+                }
+                await using var source = opened;
                 var entry = archive.CreateEntry(name, CompressionLevel.Fastest);
                 await using var target = await entry.OpenAsync(ct);
                 await source.CopyToAsync(target, ct);
+            }
+            if (missing.Count > 0)
+            {
+                var note = archive.CreateEntry("MISSING.txt", CompressionLevel.Fastest);
+                await using var noteStream = await note.OpenAsync(ct);
+                await noteStream.WriteAsync(Encoding.UTF8.GetBytes(string.Join('\n', missing) + "\n"), ct);
             }
         }
     }

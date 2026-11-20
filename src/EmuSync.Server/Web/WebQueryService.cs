@@ -288,7 +288,8 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time)
         {
             var otherVersions = await (from v in db.ConfigVersions.AsNoTracking()
                     join b in db.ConfigBundles.AsNoTracking() on v.BundleId equals b.Id
-                    where b.UserId == userId && b.EmulatorId == emu && v.DeviceId != null && v.DeviceId != deviceId
+                    join d in db.Devices.AsNoTracking() on v.DeviceId equals d.Id
+                    where b.UserId == userId && b.EmulatorId == emu && d.Id != deviceId && d.RevokedUtc == null
                     select v.Id).AnyAsync(ct);
             if (!otherVersions) continue;
             var row = own.FirstOrDefault(o => o.EmulatorId == emu);

@@ -50,6 +50,7 @@ public static class ServerSetup
     public static void Map(WebApplication app)
     {
         app.Services.MigrateDatabase();
+        WebEndpoints.SweepStaleUploads(app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServerOptions>>().Value.DataDirectory);
         app.UseApiErrors();
         app.UseMiddleware<ProtocolVersionMiddleware>(); // before routing so unknown /v1 routes still get 426
 

@@ -447,4 +447,124 @@ public class WebApiTests
         Assert.Equal(HttpStatusCode.BadRequest, (await web.PostAsync($"{url}/keep-own/nope", null)).StatusCode);
         _ = thorKey;
     }
+
+    private static string[] TempUploads(ServerFactory f)
+    {
+        var dir = Path.Combine(f.DataDirectory, "tmp");
+        return Directory.Exists(dir) ? Directory.GetFiles(dir, "upload-*") : [];
+    }
+
+    [Fact]
+    public async Task Web_upload_over_total_cap_is_413_and_leaves_no_temp_files()
+    {
+        using var f = NewFactory();
+        f.Settings["EmuSync:MaxBlobBytes"] = "100";
+        f.Settings["EmuSync:MaxUploadBytes"] = "25";
+        await f.Register(Email);
+        var web = await f.WebLogin(Email);
+
+        var r = await web.PostAsync("/v1/web/saves/upload", Form("G1", ("a", "0123456789"), ("b", "0123456789"), ("c", "0123456789")));
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, r.StatusCode);
+        Assert.Empty(TempUploads(f));
+        Assert.Equal(HttpStatusCode.OK, (await web.PostAsync("/v1/web/saves/upload", Form("G1", ("a", "0123456789"), ("b", "0123456789")))).StatusCode);
+        Assert.Empty(TempUploads(f));
+    }
+
+    [Fact]
+    public async Task Startup_sweeps_stale_upload_temp_files()
+    {
+        using var f = NewFactory();
+        var dir = Directory.CreateDirectory(Path.Combine(f.DataDirectory, "tmp")).FullName;
+        var stale = Path.Combine(dir, "upload-stale");
+        var fresh = Path.Combine(dir, "upload-fresh");
+        File.WriteAllText(stale, "x");
+        File.WriteAllText(fresh, "x");
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-2));
+
+        f.CreateClient(); // builds the host
+
+        Assert.False(File.Exists(stale));
+        Assert.True(File.Exists(fresh));
+    }
+
+    [Fact]
+    public async Task Export_skips_missing_blobs_and_lists_them()
+    {
+        using var f = NewFactory();
+        var (odin, _) = await f.Register(Email);
+        var web = await f.WebLogin(Email);
+        await Save(odin, "keep", null, "G1");
+        await Save(odin, "lost", null, "G2");
+        var lostHash = Fixtures.Sha256("lost"u8.ToArray());
+        File.Delete(Directory.GetFiles(f.DataDirectory, lostHash, SearchOption.AllDirectories).Single());
+
+        var r = await web.GetAsync("/v1/export.zip");
+
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        using var zip = await ReadZip(r);
+        Assert.Equal(["MISSING.txt", "eden/G1/save/default/data.dat"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+        using var reader = new StreamReader(zip.GetEntry("MISSING.txt")!.Open());
+        Assert.Equal($"eden/G2/save/default/data.dat  {lostHash}\n", await reader.ReadToEndAsync());
+    }
+
+    [Fact]
+    public async Task Second_user_sees_nothing_of_the_first()
+    {
+        using var f = NewFactory();
+        var (odin, odinKey) = await f.Register(Email, deviceName: "Odin");
+        await Status(odin, new EmulatorStatus("eden", "dev.eden", "1", null));
+        await odin.PutAsJsonAsync("/v1/devices/me/installs/eden", new InstallsRequest([new InstalledGame("G1", "Game", null)]));
+        var v = await Save(odin, "secret", null, "G1");
+        await f.Register("b@example.com", deviceName: "Bdev");
+        var b = await f.WebLogin("b@example.com");
+
+        var home = await Get<HomeResponse>(b, "/v1/web/home");
+        Assert.Empty(home.Continue);
+        Assert.Equal(["Bdev"], home.Devices.Select(d => d.Name));
+        Assert.DoesNotContain(home.Recent, a => a.GameKey == "G1");
+        Assert.Empty(await Get<GameRow[]>(b, "/v1/web/games"));
+        Assert.Equal(HttpStatusCode.NotFound, (await b.GetAsync("/v1/web/games/eden/G1")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await b.GetAsync($"/v1/web/devices/{odinKey.DeviceId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await b.GetAsync($"/v1/web/devices/{odinKey.DeviceId}/setup")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await b.PostAsync($"/v1/web/devices/{odinKey.DeviceId}/setup/keep-own/eden", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await b.GetAsync($"/v1/saves/versions/{v.VersionId}/download")).StatusCode);
+        using var zip = await ReadZip(await b.GetAsync("/v1/export.zip"));
+        Assert.Empty(zip.Entries);
+        Assert.Empty((await Get<ConfigOverview>(b, "/v1/web/configs")).Emulators);
+    }
+
+    [Fact]
+    public async Task Revoked_device_is_excluded_everywhere()
+    {
+        using var f = NewFactory();
+        var (thor, thorKey) = await f.Register(Email, deviceName: "Thor");
+        var (odin, odinKey) = await f.PairSecondDevice(thor, "Odin");
+        var web = await f.WebLogin(Email);
+        await Status(thor, new EmulatorStatus("retroarch", "com.retroarch", "1", ["mgba"]));
+        await Status(odin, new EmulatorStatus("eden", "dev.eden", "1", null));
+        await thor.PutAsJsonAsync("/v1/devices/me/installs/retroarch", new InstallsRequest([new InstalledGame("G1", null, null)]));
+        await odin.PutAsJsonAsync("/v1/devices/me/installs/eden", new InstallsRequest([new InstalledGame("E1", null, null)]));
+        var files = await Fixtures.Manifest(odin, ("config/qt-config.ini", "[UI]\nx=1\n"u8.ToArray()));
+        Assert.True((await odin.PostJsonAsync("/v1/configs/upload", new ConfigUploadRequest("eden", null, files))).IsSuccessStatusCode);
+        var (third, thirdKey) = await f.PairSecondDevice(thor, "Third");
+        await Status(third, new EmulatorStatus("eden", "dev.eden", "1", null));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await web.DeleteAsync($"/v1/devices/{odinKey.DeviceId}")).StatusCode);
+
+        var home = await Get<HomeResponse>(web, "/v1/web/home");
+        Assert.DoesNotContain(home.Devices, d => d.Id == odinKey.DeviceId);
+        var games = await Get<GameRow[]>(web, "/v1/web/games");
+        Assert.DoesNotContain(games, g => g.InstalledOn.Contains(odinKey.DeviceId));
+        Assert.DoesNotContain(games, g => g.GameKey == "E1");
+        Assert.Equal(HttpStatusCode.NotFound, (await web.GetAsync($"/v1/web/devices/{odinKey.DeviceId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await web.GetAsync($"/v1/web/devices/{odinKey.DeviceId}/setup")).StatusCode);
+        var overview = await Get<ConfigOverview>(web, "/v1/web/configs");
+        Assert.DoesNotContain(overview.Emulators.SelectMany(e => e.Solo), s => s.Device.Id == odinKey.DeviceId);
+        // Third's checklist no longer asks for Odin's emulator or its config versions.
+        var setup = await Get<SetupChecklist>(web, $"/v1/web/devices/{thirdKey.DeviceId}/setup");
+        Assert.DoesNotContain(setup.Steps, s => s.Kind == SetupStepKind.ChooseConfig);
+        Assert.Contains(setup.Steps, s => s is { Kind: SetupStepKind.InstallEmulator, EmulatorId: "retroarch" });
+        _ = thorKey;
+    }
 }

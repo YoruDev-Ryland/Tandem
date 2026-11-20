@@ -101,9 +101,8 @@ public static class WebEndpoints
             foreach (var e in Manifests.FromJson(r.ManifestJson).OrderBy(e => e.Path, StringComparer.Ordinal))
                 items.Add(new ZipItem(prefix + ZipExport.SanitizePath(e.Path), e.Hash));
         }
-        await ZipExport.RequireBlobsAsync(store, userId, items, ct);
         var name = string.IsNullOrEmpty(emulator) ? "emusync-export.zip" : $"emusync-{emulator}.zip";
-        return Results.Stream(s => ZipExport.WriteAsync(s, userId, items, store, ct), "application/zip", name);
+        return Results.Stream(s => ZipExport.WriteAsync(s, userId, items, store, ct, tolerateMissing: true), "application/zip", name);
     }
 
     // ---- upload from a PC ----
@@ -113,6 +112,8 @@ public static class WebEndpoints
     {
         var userId = http.User.UserId();
         var max = options.Value.MaxBlobBytes;
+        var totalCap = options.Value.MaxUploadBytes;
+        long totalSpooled = 0;
         if (!http.Request.HasFormContentType || !MediaTypeHeaderValue.TryParse(http.Request.ContentType, out var mt)
             || string.IsNullOrEmpty(HeaderUtilities.RemoveQuotes(mt.Boundary).Value))
             throw new ApiException(400, "bad_request", "A multipart/form-data body is required.");
@@ -138,7 +139,8 @@ public static class WebEndpoints
                             throw new ApiException(400, "bad_manifest", $"At most {Manifests.MaxEntries} files per upload.");
                         var tmp = Path.Combine(tmpDir, $"upload-{Guid.NewGuid():N}");
                         spooled.Add((file.FileName ?? "", tmp, "", 0)); // registered first so the finally cleans it up
-                        var (hash, size) = await SpoolAsync(file.FileStream!, tmp, max, ct);
+                        var (hash, size) = await SpoolAsync(file.FileStream!, tmp, max, totalCap - totalSpooled, ct);
+                        totalSpooled += size;
                         spooled[^1] = (file.FileName ?? "", tmp, hash, size);
                     }
                     else if (section.AsFormDataSection() is { } field)
@@ -193,7 +195,7 @@ public static class WebEndpoints
     }
 
     /// <summary>Copies the part to a temp file while hashing it, refusing anything over <paramref name="max"/>.</summary>
-    private static async Task<(string Hash, long Size)> SpoolAsync(Stream source, string tmp, long max, CancellationToken ct)
+    private static async Task<(string Hash, long Size)> SpoolAsync(Stream source, string tmp, long max, long remaining, CancellationToken ct)
     {
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         await using var file = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous);
@@ -203,11 +205,25 @@ public static class WebEndpoints
         while ((read = await source.ReadAsync(buffer, ct)) > 0)
         {
             total += read;
-            if (total > max) throw TooLarge();
+            if (total > max || total > remaining) throw TooLarge();
             hasher.AppendData(buffer, 0, read);
             await file.WriteAsync(buffer.AsMemory(0, read), ct);
         }
         return (Convert.ToHexStringLower(hasher.GetHashAndReset()), total);
+    }
+
+    /// <summary>Deletes upload temp files left behind (crash, kill) that are over an hour old.</summary>
+    public static void SweepStaleUploads(string dataDirectory)
+    {
+        var dir = Path.Combine(dataDirectory, "tmp");
+        if (!Directory.Exists(dir)) return;
+        var cutoff = DateTime.UtcNow.AddHours(-1);
+        foreach (var f in Directory.EnumerateFiles(dir, "upload-*"))
+        {
+            try { if (File.GetLastWriteTimeUtc(f) < cutoff) File.Delete(f); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     private static ApiException TooLarge() => new(413, "too_large", "A file exceeds the maximum allowed size.");
