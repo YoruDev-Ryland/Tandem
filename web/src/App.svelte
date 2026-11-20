@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { router } from "./lib/router.svelte";
   import { session } from "./lib/session.svelte";
+  import { PRODUCT_NAME } from "./lib/brand";
   import SignIn from "./pages/SignIn.svelte";
 
   const titles: Record<string, string> = {
@@ -32,6 +33,12 @@
 
 {#if route.name === "sign-in"}
   <SignIn />
+{:else if session.checked && session.error}
+  <main>
+    <h1>{PRODUCT_NAME}</h1>
+    <p class="error" role="alert">{session.error}</p>
+    <button type="button" onclick={() => session.check()}>Retry</button>
+  </main>
 {:else if session.checked && session.account}
   {#key key}
     <main>
@@ -59,6 +66,20 @@
     font-size: 28px;
     letter-spacing: -0.01em;
     color: var(--ink);
+  }
+  .error {
+    margin: 0 0 16px;
+    color: var(--fault);
+  }
+  button {
+    font: 600 14px "Barlow", system-ui, sans-serif;
+    height: 40px;
+    padding: 0 18px;
+    border-radius: 3px;
+    border: 1.5px solid var(--rule2);
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
   }
   .empty {
     margin: 0;

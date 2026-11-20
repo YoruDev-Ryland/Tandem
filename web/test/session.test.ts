@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { router } from "../src/lib/router.svelte";
-import { session } from "../src/lib/session.svelte";
+import { safeReturnTo, session } from "../src/lib/session.svelte";
 import { signIn as signInCall } from "../src/lib/api/endpoints";
 import { ApiError } from "../src/lib/api/http";
 
@@ -54,5 +54,26 @@ describe("session", () => {
     await session.signOut();
     expect(session.account).toBeNull();
     expect(router.path).toBe("/sign-in");
+  });
+
+  it("only accepts same-origin paths as a return target", () => {
+    expect(safeReturnTo("/configs/retroarch?x=1")).toBe("/configs/retroarch?x=1");
+    expect(safeReturnTo("//evil.com/x")).toBeNull();
+    expect(safeReturnTo("https://x")).toBeNull();
+    expect(safeReturnTo("/sign-in")).toBeNull();
+    expect(safeReturnTo("/\\evil.com")).toBeNull();
+  });
+
+  it("records a failed check that was not a 401 and clears it on retry", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
+    router.go("/vault");
+    await session.check();
+    expect(session.error).toMatch(/reach the server/);
+    expect(router.path).toBe("/vault");
+
+    vi.stubGlobal("fetch", vi.fn(async () => json(200, account)));
+    await session.check();
+    expect(session.error).toBeNull();
+    expect(session.account).toEqual(account);
   });
 });
