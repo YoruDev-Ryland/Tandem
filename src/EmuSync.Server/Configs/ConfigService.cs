@@ -112,7 +112,8 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
 
         await events.Raise(new ConfigsChanged(userId), ct);
         if (opened is not null) await events.Raise(opened, ct);
-        if (response.Status is SaveUploadStatus.Accepted or SaveUploadStatus.Conflict)
+        // A retry of an upload that already opened a conflict creates nothing: only a new conflict version is logged.
+        if (response.Status == SaveUploadStatus.Accepted || opened is not null)
         {
             var device = await DeviceNameAsync(deviceId, ct);
             if (response.Status == SaveUploadStatus.Accepted)

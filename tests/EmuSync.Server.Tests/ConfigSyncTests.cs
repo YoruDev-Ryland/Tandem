@@ -560,6 +560,32 @@ public partial class ConfigSyncTests
     }
 
     [Fact]
+    public async Task A_retried_conflicting_config_upload_logs_conflict_opened_once()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (group, _, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink));
+        await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, resolution: "2"))), group.HeadVersionId);
+        async Task<int> Opened() => (await (await s.Web.GetAsync("/v1/activity")).ReadAsync<ActivityPage>())
+            .Items.Count(i => i.Kind == "conflict_opened");
+
+        var first = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), group.HeadVersionId);
+        Assert.Equal(SaveUploadStatus.Conflict, first.Status);
+        for (var i = 0; i < 2; i++)
+        {
+            var retry = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), group.HeadVersionId);
+            Assert.Equal(first.VersionId, retry.VersionId);
+        }
+        Assert.Equal(1, await Opened());
+
+        // Different files are a new conflict version, and are logged.
+        var other = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "4"))), group.HeadVersionId);
+        Assert.Equal(SaveUploadStatus.Conflict, other.Status);
+        Assert.NotEqual(first.VersionId, other.VersionId);
+        Assert.Equal(2, await Opened());
+    }
+
+    [Fact]
     public async Task Concurrent_group_edits_conflict_and_hold_deliveries()
     {
         using var f = NewFactory();
@@ -582,6 +608,10 @@ public partial class ConfigSyncTests
         // A retry of the same upload gives the same answer and no new version.
         var retry = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), group.HeadVersionId);
         Assert.Equal(odinChange.VersionId, retry.VersionId);
+        // ...and no second conflict_opened row (final review I-2).
+        async Task<int> Opened() => (await (await s.Web.GetAsync("/v1/activity")).ReadAsync<ActivityPage>())
+            .Items.Count(i => i.Kind == "conflict_opened");
+        Assert.Equal(1, await Opened());
 
         await AssertError(await s.Web.PostJsonAsync($"/v1/configs/bundles/{group.BundleId}/conflicts/resolve",
             new ResolveConflictRequest(ResolveChoice.KeepBoth, odinChange.VersionId)), HttpStatusCode.BadRequest, "not_supported");

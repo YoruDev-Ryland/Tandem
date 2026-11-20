@@ -122,7 +122,9 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         }
 
         if (evt is not null) await events.Raise(evt, ct);
-        if (response.Status is SaveUploadStatus.Accepted or SaveUploadStatus.Conflict)
+        // A retry of an upload that already opened a conflict answers Conflict again but creates nothing: only a new
+        // conflict version is logged, or every rescan of a device would add another conflict_opened row.
+        if (response.Status == SaveUploadStatus.Accepted || evt is ConflictOpened)
         {
             var device = deviceId is Guid dn ? await DeviceNameAsync(dn, ct) : "The web app";
             var what = request.Kind == ItemKind.Save ? "save" : "state";

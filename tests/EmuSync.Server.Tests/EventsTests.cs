@@ -158,6 +158,27 @@ public class EventsTests
     }
 
     [Fact]
+    public async Task A_retried_conflicting_save_upload_logs_conflict_opened_once()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("e6@example.com", deviceName: "Thor");
+        var (b, _) = await factory.PairSecondDevice(a, "Pocket");
+        await Upload(a, Sword, "a1", "Sword");
+        await Upload(b, Sword, "b1"); // no base: first-sync conflict
+
+        // The client re-uploads the same content on every scan while the conflict is open: no new row.
+        await Upload(b, Sword, "b1");
+        await Upload(b, Sword, "b1");
+        async Task<int> Opened() => (await (await a.GetAsync("/v1/activity")).ReadAsync<ActivityPage>())
+            .Items.Count(i => i.Kind == "conflict_opened");
+        Assert.Equal(1, await Opened());
+
+        // Different content is a new conflict version, and is logged.
+        await Upload(b, Sword, "b2");
+        Assert.Equal(2, await Opened());
+    }
+
+    [Fact]
     public async Task Activity_filters_by_device_and_game_and_pages()
     {
         using var factory = NewFactory();
