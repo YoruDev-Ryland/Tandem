@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EmuSync · app status</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#2a2a2a;color:#eee;font:14px/1.5 Barlow,sans-serif;padding:28px 32px 80px}
+.intro{max-width:1150px;margin:0 0 22px}
+.intro h2{font:600 22px Barlow;margin:0 0 6px}
+.intro p{margin:0 0 4px;color:#bbb}
+.cap{color:#ccc;margin:0 0 10px}
+/* 960x540 dp screen shown at 1.25x */
+.dev{width:1200px;height:675px;overflow:hidden;margin-bottom:16px}
+.s{width:960px;height:540px;transform:scale(1.25);transform-origin:0 0}
+
+.k{--bg:#121212;--ink:#F2F2F0;--ink2:#A3A3A0;--ink3:#6E6E6B;--rule:rgba(255,255,255,.07);--focus-bg:#F2F2F0;--focus-ink:#121212;--wait:#F0A030;--fault:#FF6B55;--glyph:#2A2A2A;
+  background:var(--bg);color:var(--ink);font:400 14px/1.35 Barlow,sans-serif;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased}
+.k.light{--bg:#EDEDEA;--ink:#141414;--ink2:#55554F;--ink3:#7C7C76;--rule:rgba(0,0,0,.09);--focus-bg:#141414;--focus-ink:#EDEDEA;--wait:#B86E00;--fault:#C93A26;--glyph:#D6D6D1}
+.top{display:flex;align-items:center;gap:20px;padding:0 28px;height:52px;flex:none}
+.word{font:700 16px 'Barlow Semi Condensed';margin-right:8px}
+.tabs{display:flex;align-items:center;gap:20px;font:600 15px 'Barlow Semi Condensed'}
+.tabs span{color:var(--ink3)}.tabs .on{color:var(--ink)}
+.tabs .n{color:var(--fault)}
+.bump{font:700 10px Barlow;color:var(--ink2);border:1.5px solid var(--ink3);border-radius:4px 4px 2px 2px;padding:0 5px}
+.status{margin-left:auto;display:flex;gap:18px;font:500 13px Barlow;color:var(--ink2)}
+.status b{color:var(--ink);font-weight:600}
+.body{flex:1;display:grid;grid-template-columns:380px 1fr;column-gap:28px;padding:4px 28px 0;min-height:0}
+h1{margin:4px 0 12px;font:600 28px/1 'Barlow Semi Condensed'}
+h2{margin:4px 0 12px;font:600 15px 'Barlow Semi Condensed';color:var(--ink2)}
+.r{display:grid;align-items:center;column-gap:14px;height:40px;padding:0 12px;border-top:1px solid var(--rule)}
+.emu .r{grid-template-columns:1fr auto}
+.r .n{font:600 16px Barlow}
+.r .v{color:var(--ink2);font-size:13px}
+.r .v.w{color:var(--wait)}
+.r .v.off{color:var(--ink3)}
+.r.f{background:var(--focus-bg);color:var(--focus-ink);border-radius:3px;border-top-color:transparent}
+.r.f+.r{border-top-color:transparent}
+.r.f .v{color:color-mix(in srgb,var(--focus-ink) 65%,var(--focus-bg))}
+.r.f .v.w{color:var(--focus-ink);font-weight:600}
+.games .r{grid-template-columns:minmax(0,1fr) 90px 150px}
+.games .g{font:600 15px Barlow;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.games .h{font:600 11px Barlow;color:var(--ink3);height:24px;border:0;letter-spacing:.02em}
+.games .x{color:var(--ink2);font-size:13px}
+.games .x.w{color:var(--wait)}
+.note{margin:14px 12px 0;color:var(--ink2);font-size:13px;max-width:420px}
+.note b{color:var(--wait);font-weight:600}
+.hints{flex:none;display:flex;justify-content:flex-end;gap:20px;align-items:center;height:44px;padding:0 28px;border-top:1px solid var(--rule);font:500 13px Barlow;color:var(--ink2)}
+.hints span{display:flex;align-items:center;gap:7px}
+.hints i{font:700 11px Barlow;font-style:normal;width:20px;height:20px;border-radius:50%;background:var(--glyph);color:var(--ink);display:inline-flex;align-items:center;justify-content:center}
+.hints .left{margin-right:auto;color:var(--ink3)}
+</style>
+</head>
+<body>
+<div class="intro">
+  <h2>App · main screen on the Thor (landscape, 960×540 dp)</h2>
+  <p>Same look as the web UI. Left: your emulators on this device; the cursor sits on one. Right: that emulator's games and where each newest save is. L1/R1 switch tabs; the red count on Conflicts appears only when there is one.</p>
+</div>
+
+<p class="cap"><b>Dark</b>: cursor on Eden, which is open with a save waiting</p>
+<div class="dev"><div class="s k">
+  <div class="top"><span class="word">EmuSync</span>
+    <div class="tabs"><span class="bump">L1</span><span class="on">This device</span><span>Activity</span><span class="n">Conflicts 1</span><span>Settings</span><span class="bump">R1</span></div>
+    <div class="status"><span><b>Thor</b></span><span>Server connected</span><span>Shizuku on</span></div></div>
+  <div class="body">
+    <div class="emu"><h1>Emulators</h1>
+      <div class="r f"><span class="n">Eden</span><span class="v w">Open · 1 waiting</span></div>
+      <div class="r"><span class="n">Azahar</span><span class="v">3 saves</span></div>
+      <div class="r"><span class="n">melonDS</span><span class="v">1 save</span></div>
+      <div class="r"><span class="n">RetroArch</span><span class="v">config group</span></div>
+      <div class="r"><span class="n">Dolphin</span><span class="v off">not set up</span></div>
+    </div>
+    <div class="games"><h2>Eden · 15 games</h2>
+      <div class="r h"><span>GAME</span><span>NEWEST ON</span><span>HERE</span></div>
+      <div class="r"><span class="g">Pokémon Sword</span><span class="x">Odin 3</span><span class="x w">waiting for Eden to close</span></div>
+      <div class="r"><span class="g">Pokémon Brilliant Diamond</span><span class="x" style="color:var(--fault)">two saves</span><span class="x" style="color:var(--fault)">choose in Conflicts</span></div>
+      <div class="r"><span class="g">Xenoblade Chronicles X</span><span class="x">Thor</span><span class="x">this is the newest</span></div>
+      <div class="r"><span class="g">Pokémon FireRed</span><span class="x">Thor</span><span class="x">this is the newest</span></div>
+      <p class="note"><b>Close Eden to get the newer Pokémon Sword save from Odin 3.</b> Nothing is written while Eden is open.</p>
+    </div>
+  </div>
+  <div class="hints"><span class="left">Synced 2 min ago</span><span><i>A</i>Open</span><span><i>X</i>Sync now</span><span><i>Y</i>Emulator settings</span><span><i>B</i>Back</span></div>
+</div></div>
+
+<p class="cap"><b>Light</b>: cursor on melonDS, nothing to do</p>
+<div class="dev"><div class="s k light">
+  <div class="top"><span class="word">EmuSync</span>
+    <div class="tabs"><span class="bump">L1</span><span class="on">This device</span><span>Activity</span><span class="n">Conflicts 1</span><span>Settings</span><span class="bump">R1</span></div>
+    <div class="status"><span><b>Thor</b></span><span>Server connected</span><span>Shizuku on</span></div></div>
+  <div class="body">
+    <div class="emu"><h1>Emulators</h1>
+      <div class="r"><span class="n">Eden</span><span class="v w">Open · 1 waiting</span></div>
+      <div class="r"><span class="n">Azahar</span><span class="v">3 saves</span></div>
+      <div class="r f"><span class="n">melonDS</span><span class="v">1 save</span></div>
+      <div class="r"><span class="n">RetroArch</span><span class="v">config group</span></div>
+      <div class="r"><span class="n">Dolphin</span><span class="v off">not set up</span></div>
+    </div>
+    <div class="games"><h2>melonDS · 1 game</h2>
+      <div class="r h"><span>GAME</span><span>NEWEST ON</span><span>HERE</span></div>
+      <div class="r"><span class="g">Pokémon Platinum</span><span class="x">Odin 3</span><span class="x">up to date · save + state</span></div>
+    </div>
+  </div>
+  <div class="hints"><span class="left">Synced 2 min ago</span><span><i>A</i>Open</span><span><i>X</i>Sync now</span><span><i>Y</i>Emulator settings</span><span><i>B</i>Back</span></div>
+</div></div>
+</body>
+</html>
