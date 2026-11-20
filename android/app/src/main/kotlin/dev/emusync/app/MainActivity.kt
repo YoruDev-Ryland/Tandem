@@ -1,15 +1,17 @@
 package dev.emusync.app
 
 import android.content.ActivityNotFoundException
+import android.content.res.Configuration
+import android.graphics.Color as AndroidColor
+import android.graphics.drawable.ColorDrawable
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -17,8 +19,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.emusync.app.debug.DebugActivity
@@ -26,9 +29,6 @@ import dev.emusync.app.service.AppGraph
 import dev.emusync.app.service.LogBuffer
 import dev.emusync.app.service.SyncService
 import dev.emusync.app.ui.AppViewModel
-import dev.emusync.app.ui.input.Action
-import dev.emusync.app.ui.kit.ConsoleScaffold
-import dev.emusync.app.ui.kit.Hint
 import dev.emusync.app.ui.kit.TopBar
 import dev.emusync.app.ui.screens.ActivityActions
 import dev.emusync.app.ui.screens.ActivityScreen
@@ -36,11 +36,16 @@ import dev.emusync.app.ui.screens.ConflictsActions
 import dev.emusync.app.ui.screens.ConflictsScreen
 import dev.emusync.app.ui.screens.DeviceActions
 import dev.emusync.app.ui.screens.DeviceScreen
+import dev.emusync.app.ui.screens.SettingsScreen
+import dev.emusync.app.ui.screens.actions
 import dev.emusync.app.ui.screens.gameUrl
 import dev.emusync.app.ui.screens.syncNow
+import dev.emusync.app.sync.StateStore
+import dev.emusync.app.ui.theme.EmuColors
 import dev.emusync.app.ui.theme.EmuTheme
-import dev.emusync.app.ui.theme.EmuType
-import dev.emusync.app.ui.theme.LocalEmu
+import dev.emusync.app.ui.theme.ThemeMode
+import dev.emusync.app.ui.theme.isDark
+import dev.emusync.app.ui.theme.themeModeOf
 
 private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
 private val TABS = listOf("This device", "Activity", "Conflicts", "Settings")
@@ -55,8 +60,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent { EmuTheme { EmuSyncRoot(vm, this) } }
+        val store = AppGraph.store(this)
+        // Before the first frame, so a Light choice on a dark system (or the reverse) never flashes the other colours.
+        applyWindowTheme(themeModeOf(store.settings.theme).let { it == ThemeMode.Dark || (it == ThemeMode.System && systemDark()) })
+        setContent { StoredTheme(store, onDark = ::applyWindowTheme) { EmuSyncRoot(vm, this) } }
     }
 
     override fun onStart() {
@@ -72,6 +79,17 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
+    private fun systemDark() =
+        resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+
+    /** The window under Compose and the system bar icons, in the app's theme rather than the system's. */
+    private fun applyWindowTheme(dark: Boolean) {
+        window.setBackgroundDrawable(ColorDrawable((if (dark) EmuColors.Dark else EmuColors.Light).bg.toArgb()))
+        val bars = if (dark) SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+        else SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+        enableEdgeToEdge(bars, bars)
+    }
+
     internal fun view(url: String) {
         try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: ActivityNotFoundException) { }
     }
@@ -85,6 +103,7 @@ private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
     val activityUi by vm.activity.ui.collectAsStateWithLifecycle()
     val log by LogBuffer.lines.collectAsStateWithLifecycle()
     val conflictsUi by vm.conflicts.ui.collectAsStateWithLifecycle()
+    val settingsUi by vm.settings.ui.collectAsStateWithLifecycle()
     val openConflicts = conflictsUi.entries.size   // the ones this device is part of, as the tab lists them
     // Shizuku help is a later task; until then the fix opens Shizuku itself, when it is installed.
     val shizuku = remember { activity.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE) }
@@ -103,8 +122,8 @@ private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
             DeviceActions(
                 openGame = { emu, key -> vm.serverUrl?.let { activity.view(gameUrl(it, emu, key)) } },
                 syncNow = { syncNow(activity) },
-                // Settings will scroll to the emulator once it exists (Task 9); for now it only switches tab.
-                settings = { tab = TAB_SETTINGS },
+                // Y: Settings › Emulators with the cursor on this emulator.
+                settings = { id -> vm.settings.focusEmulator(id); tab = TAB_SETTINGS },
                 // Setup is a later task; the debug screen holds sign-in until then.
                 setup = { activity.startActivity(Intent(activity, DebugActivity::class.java)) },
                 back = { activity.onBackPressedDispatcher.onBackPressed() },
@@ -122,14 +141,28 @@ private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
             conflictsUi, top,
             ConflictsActions(resolve = vm.conflicts::resolve, bulk = vm.conflicts::bulk, back = { tab = TAB_DEVICE }),
         )
-        else -> PlaceholderTab(TABS[tab], top) { tab = TAB_DEVICE }
+        else -> {
+            LaunchedEffect(Unit) { vm.settings.show() }   // emulators may have been installed while away
+            SettingsScreen(
+                settingsUi, top,
+                vm.settings.actions(
+                    diagnostics = { activity.startActivity(Intent(activity, DebugActivity::class.java)) },
+                    back = { tab = TAB_DEVICE },
+                ),
+            )
+        }
     }
 }
 
-/** A tab whose screen arrives in a later task: its name and nothing else. B goes back to This device. */
+/**
+ * The app's theme as Settings › Appearance stores it, following every change. [onDark] hears which colours are in
+ * use after each change, for what Compose does not draw (the window background, the system bar icons).
+ */
 @Composable
-private fun PlaceholderTab(name: String, top: @Composable RowScope.() -> Unit, back: () -> Unit) {
-    ConsoleScaffold(top = top, hints = listOf(Hint(Action.B, "Back", back))) {
-        BasicText(name, Modifier.padding(top = 4.dp), style = EmuType.title.copy(color = LocalEmu.current.ink))
-    }
+internal fun StoredTheme(store: StateStore, onDark: (Boolean) -> Unit = {}, content: @Composable () -> Unit) {
+    val changes by store.changes.collectAsState()
+    val mode = remember(changes) { themeModeOf(store.settings.theme) }
+    val dark = mode.isDark()
+    LaunchedEffect(dark) { onDark(dark) }   // only when it changes: the store changes often while syncing
+    EmuTheme(mode, content)
 }

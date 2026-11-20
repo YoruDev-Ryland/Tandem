@@ -55,7 +55,7 @@ class EdenModuleTest {
     @Test fun eden_package_override_and_order() {
         val fs = LocalFs().apply { packages.addAll(listOf("dev.igawa6.edenduo", "dev.eden.eden_emulator.combo")) }
         assertEquals("dev.eden.eden_emulator.combo", m.detect(fs, none)!!.pkg)
-        val o = DeviceSettings(emptyList(), mapOf("eden.package" to "dev.igawa6.edenduo"))
+        val o = DeviceSettings(emptyList(), emptyMap(), mapOf("eden" to "dev.igawa6.edenduo"))
         assertEquals("dev.igawa6.edenduo", m.detect(fs, o)!!.pkg)
     }
 

@@ -37,7 +37,7 @@ class AzaharModule(
     private val zeroId = "0".repeat(32)
 
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {
-        val pkg = packages.firstOrNull { it in fs.installedPackages() } ?: return null
+        val pkg = activePackage(fs.installedPackages(), settings) ?: return null
         val root = settings.overrides["azahar.root"]?.takeIf { it.isNotBlank() }?.let { rooted(it).trimEnd('/') }
             ?: findRoot(fs, pkg)
             ?: return null

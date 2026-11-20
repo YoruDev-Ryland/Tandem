@@ -63,7 +63,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
 
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {
         val installed = fs.installedPackages()
-        val pkg = packages.firstOrNull { it in installed } ?: return null
+        val pkg = activePackage(installed, settings) ?: return null
         val dataRoot = rooted("/sdcard/Android/data/$pkg/files")
         val extra = LinkedHashMap<String, String>()
         extra["INTERNAL"] = internalRoot

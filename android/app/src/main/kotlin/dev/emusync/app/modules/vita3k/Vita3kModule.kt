@@ -21,7 +21,7 @@ class Vita3kModule(private val internalRoot: String = "/storage/emulated/0") : E
     private val titleRe = Regex("^[A-Z0-9]{9}$")
 
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {
-        val pkg = packages.firstOrNull { it in fs.installedPackages() } ?: return null
+        val pkg = activePackage(fs.installedPackages(), settings) ?: return null
         return Detected(emulatorId, pkg, "", rooted("/sdcard/Android/data/$pkg/files"), mapOf("INTERNAL" to internalRoot))
     }
 

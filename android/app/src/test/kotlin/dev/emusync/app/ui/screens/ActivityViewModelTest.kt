@@ -188,4 +188,11 @@ class ActivityViewModelTest {
         assertEquals("just now", t("2026-11-20T12:05:00+00:00"))   // clock skew
         assertEquals("", t("garbage"))
     }
+
+    @Test fun only_an_opened_conflict_takes_the_fault_tone() = runTest {
+        val kinds = listOf("save_uploaded", "config_uploaded", "vault_uploaded", "device_paired", "conflict_opened", "conflict_resolved")
+        val f = Fake().apply { pages = { _, _ -> ActivityPage(kinds.mapIndexed { i, k -> item(10L - i, kind = k) }) } }
+        val vm = vm(f); vm.refresh(); runCurrent()
+        assertEquals(listOf(false, false, false, false, true, false), vm.ui.value.entries.map { it.fault })
+    }
 }

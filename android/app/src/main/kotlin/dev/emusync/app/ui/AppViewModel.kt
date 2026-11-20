@@ -11,8 +11,9 @@ import dev.emusync.app.service.SyncService
 import dev.emusync.app.ui.screens.ActivityViewModel
 import dev.emusync.app.ui.screens.ConflictsViewModel
 import dev.emusync.app.ui.screens.DeviceViewModel
+import dev.emusync.app.ui.screens.SettingsViewModel
+import android.content.pm.PackageManager
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -44,7 +45,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     )
     val state = AppState.create(AppGraph, store, AppGraph.gate(app), viewModelScope, server)
     val device = DeviceViewModel(state, server.games, { store.deviceId }, viewModelScope)
-    private val emulatorNames = ModuleRegistry.default().all().associate { it.emulatorId to it.displayName }
+    private val modules = ModuleRegistry.default().all()
+    private val emulatorNames = modules.associate { it.emulatorId to it.displayName }
     val conflicts = ConflictsViewModel(
         conflicts = server.conflicts,
         running = state.running,
@@ -64,10 +66,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         nudges = merge<Any?>(AppGraph.deliveryNudges, server.games.map { it.updatedAt }),
     )
 
+    val settings = SettingsViewModel(
+        store = store,
+        modules = modules,
+        // The manifest's <queries> make every known emulator package visible; a variant chosen on the
+        // diagnostics screen may be another package, which is then visible only if it is queryable too.
+        installed = { (modules.flatMap { it.packages } + store.settings.variants.values).filterTo(HashSet()) { app.isInstalled(it) } },
+        label = { app.appLabel(it) },
+        deviceName = server.deviceName,
+        reload = { SyncService.tryStart(app, SyncService.ACTION_RELOAD) },
+        afterSignOut = { server.refresh() },   // no key: the server data clears
+        scope = viewModelScope,
+    )
+
     /** The server URL for links to the web app, or null when signed out. */
     val serverUrl: String? get() = store.serverUrl
 
     init { server.start() }
 
     override fun onCleared() = server.stop()
+}
+
+private fun Application.isInstalled(pkg: String): Boolean = try {
+    packageManager.getPackageInfo(pkg, 0); true
+} catch (_: PackageManager.NameNotFoundException) {
+    false
+}
+
+private fun Application.appLabel(pkg: String): String? = try {
+    packageManager.getApplicationInfo(pkg, 0).loadLabel(packageManager).toString().ifBlank { null }
+} catch (_: PackageManager.NameNotFoundException) {
+    null
 }

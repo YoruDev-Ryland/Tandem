@@ -210,7 +210,7 @@ class SyncService : Service() {
                 lastStatus = SentStatus(url, key, it)
             }
             val stored = store.settings
-            val s = DeviceSettings(stored.romDirs, stored.overrides)
+            val s = DeviceSettings(stored.romDirs, stored.overrides, stored.variants)
             val planner = WorkPlanner(stored.autoApply)
             val engine = SyncEngine(
                 fs, api, store, registry, s,

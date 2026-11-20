@@ -53,6 +53,10 @@ data class DeviceSettingsData(
     val overrides: Map<String, String> = emptyMap(),
     /** When false (the default) deliveries are applied only on an explicit request from the debug screen. */
     val autoApply: Boolean = false,
+    /** The app's colours: "system" (follow the device), "light" or "dark". */
+    val theme: String = "system",
+    /** The active variant (package) per emulator id; see EmulatorModule.activePackage. */
+    val variants: Map<String, String> = emptyMap(),
 )
 
 /** What the debug screen's sign-in form last held (never the password). Not used for syncing. */
@@ -91,7 +95,7 @@ class StateStore(
     private fun load(): StateData {
         if (!file.exists()) return StateData()
         return try {
-            json.decodeFromString(StateData.serializer(), file.readText())
+            migrate(json.decodeFromString(StateData.serializer(), file.readText()))
         } catch (e: Exception) {
             if (e !is kotlinx.serialization.SerializationException && e !is IllegalArgumentException) throw e
             // Throws if the corrupt copy can't be preserved: never start empty and overwrite it.
@@ -101,6 +105,16 @@ class StateStore(
             )
             StateData()
         }
+    }
+
+    /**
+     * Brings an older file up to date in memory; the next write persists it. The Eden package override that predates
+     * per-emulator variants becomes Eden's variant (a variant already chosen wins) and leaves the overrides.
+     */
+    private fun migrate(d: StateData): StateData {
+        val eden = d.settings.overrides[LEGACY_EDEN_PACKAGE] ?: return d
+        val variants = if ("eden" in d.settings.variants || eden.isBlank()) d.settings.variants else d.settings.variants + ("eden" to eden)
+        return d.copy(settings = d.settings.copy(overrides = d.settings.overrides - LEGACY_EDEN_PACKAGE, variants = variants))
     }
 
     private fun mutate(f: (StateData) -> StateData): Unit = synchronized(lock) {
@@ -151,10 +165,18 @@ class StateStore(
     var settings: DeviceSettingsData
         get() = synchronized(lock) { data.settings }
         set(v) = mutate { it.copy(settings = v) }
+    /** Changes the settings from their current value in one write. */
+    fun updateSettings(f: (DeviceSettingsData) -> DeviceSettingsData) = mutate { it.copy(settings = f(it.settings)) }
+
+    /** Forgets this device's key and id in one write; the server URL stays for the next sign-in. */
+    fun signOut() = mutate { it.copy(deviceKey = null, deviceId = null) }
+
     var signInForm: SignInForm
         get() = synchronized(lock) { data.signInForm }
         set(v) = mutate { it.copy(signInForm = v) }
 }
+
+private const val LEGACY_EDEN_PACKAGE = "eden.package"
 
 /** fsyncs a directory so a rename inside it is durable. Best effort: some file systems refuse to open a directory. */
 private fun syncDir(dir: File) {

@@ -13,17 +13,27 @@ import androidx.compose.runtime.CompositionLocalProvider
 
 enum class ThemeMode { System, Light, Dark }
 
+/** How a theme choice is stored (DeviceSettingsData.theme): "system", "light" or "dark". */
+val ThemeMode.setting: String get() = name.lowercase()
+
+/** The stored choice as a mode; anything unknown follows the system. */
+fun themeModeOf(setting: String): ThemeMode = ThemeMode.entries.firstOrNull { it.setting == setting } ?: ThemeMode.System
+
+/** Whether [this] mode draws the dark colours here. */
+@Composable
+fun ThemeMode.isDark(): Boolean = when (this) {
+    ThemeMode.System -> isSystemInDarkTheme()
+    ThemeMode.Light -> false
+    ThemeMode.Dark -> true
+}
+
 /**
  * Provides [EmuColors] through [LocalEmu]. Material 3 is plumbing only: its colour scheme and typography are
  * mapped from the console tokens so any Material internals stay neutral, but screens draw with ui/kit, not Material.
  */
 @Composable
 fun EmuTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {
-    val dark = when (mode) {
-        ThemeMode.System -> isSystemInDarkTheme()
-        ThemeMode.Light -> false
-        ThemeMode.Dark -> true
-    }
+    val dark = mode.isDark()
     val colors = if (dark) EmuColors.Dark else EmuColors.Light
     CompositionLocalProvider(
         LocalEmu provides colors,

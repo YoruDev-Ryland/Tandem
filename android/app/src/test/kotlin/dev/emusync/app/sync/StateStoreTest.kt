@@ -98,4 +98,34 @@ class StateStoreTest {
         assertEquals("v1", StateStore(f).get("k")!!.knownVersionId)
         assertEquals("v1", s.get("k")!!.knownVersionId)   // in-memory state not advanced either
     }
+
+    @Test fun old_files_get_theme_and_variants_defaults_and_the_eden_package_override_moves_to_variants() {
+        val f = File(tmp.root, "state.json")
+        f.writeText("""{"settings":{"romDirs":["/r"],"overrides":{"eden.package":"dev.igawa6.edenduo","azahar.root":"/a"}}}""")
+        val s = StateStore(f)
+        assertEquals("system", s.settings.theme)
+        assertEquals(mapOf("eden" to "dev.igawa6.edenduo"), s.settings.variants)
+        assertEquals(mapOf("azahar.root" to "/a"), s.settings.overrides)
+        s.deviceId = "d1"   // any write persists the migrated settings
+        val r = StateStore(f)
+        assertEquals(mapOf("eden" to "dev.igawa6.edenduo"), r.settings.variants)
+        assertFalse(f.readText().contains("eden.package"))
+    }
+
+    @Test fun a_chosen_eden_variant_wins_over_a_leftover_eden_package_override() {
+        val f = File(tmp.root, "state.json")
+        f.writeText("""{"settings":{"overrides":{"eden.package":"dev.igawa6.edenduo"},"variants":{"eden":"dev.eden.eden_emulator"}}}""")
+        assertEquals(mapOf("eden" to "dev.eden.eden_emulator"), StateStore(f).settings.variants)
+    }
+
+    @Test fun sign_out_clears_the_key_and_id_and_keeps_the_server() {
+        val f = File(tmp.root, "state.json")
+        val s = StateStore(f)
+        s.serverUrl = "http://x"; s.deviceKey = "dk"; s.deviceId = "d1"
+        val before = s.changes.value
+        s.signOut()
+        assertEquals(before + 1, s.changes.value)
+        val r = StateStore(f)
+        assertNull(r.deviceKey); assertNull(r.deviceId); assertEquals("http://x", r.serverUrl)
+    }
 }

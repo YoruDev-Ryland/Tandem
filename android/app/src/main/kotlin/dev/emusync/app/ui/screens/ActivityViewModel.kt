@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-/** One line of this device's server activity, with its time already worded. */
+/** One line of this device's server activity, with its time already worded. [fault]: a conflict was opened. */
 data class ActivityEntry(val id: Long, val time: String, val message: String, val fault: Boolean)
 
 data class ActivityUi(
@@ -166,7 +166,7 @@ class ActivityViewModel(
         val note = if (!offline) null else updatedAt?.let { "Offline · last updated ${HHMM.format(it.atZone(z))}" } ?: "Offline"
         state.value = ActivityUi(
             signedIn = api() != null,
-            entries = items.map { ActivityEntry(it.id, activityTime(it.utc, now, z), it.message, it.kind.contains("conflict")) },
+            entries = items.map { ActivityEntry(it.id, activityTime(it.utc, now, z), it.message, it.kind == "conflict_opened") },
             loaded = loaded, error = error, offline = offline, offlineNote = note,
             hasOlder = nextBefore != null, loadingOlder = loadingOlder, olderError = olderError,
         )
