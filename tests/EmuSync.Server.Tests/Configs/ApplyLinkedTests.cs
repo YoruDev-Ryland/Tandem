@@ -69,4 +69,52 @@ public partial class ConfigSyncTests
         Assert.Equal(applied.HeadVersionId, d.VersionId);
         Assert.Equal(EdenIni(OdinLink, resolution: "6"), await FileText(s.Odin, d.Manifest, Ini));
     }
+
+    [Fact]
+    public async Task Linked_ToExistingGroup_WithOlderGroupVersion_WritesNextHeadAndDeliversToEveryMember()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (group, _, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink));
+        var second = await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, resolution: "2"))), group.HeadVersionId);
+        await AckOnly(s.Odin);
+        var (loki, lokiKey) = await f.PairSecondDevice(s.Odin, "Loki");
+        await Upload(loki, await Files(loki, (Ini, EdenIni(""))), null);
+
+        var applied = await (await s.Web.PostJsonAsync("/v1/configs/apply",
+            new ApplyConfigRequest(lokiKey.DeviceId, "eden", group.HeadVersionId!.Value, ApplyMode.Linked))).ReadAsync<ApplyConfigResponse>();
+
+        Assert.Equal(group.Id, applied.GroupId);
+        var versions = await GroupVersions(f, group.BundleId);
+        Assert.Equal(new[] { 1, 2, 3 }, versions.Select(v => v.Seq));
+        var head = versions[^1];
+        Assert.Equal(applied.HeadVersionId, head.Id);
+        Assert.Equal(second.VersionId, head.BaseVersionId);
+        Assert.Equal(ConfigSource.Copy, head.Source);
+        Assert.Equal(versions[0].ManifestHash, head.ManifestHash);
+        foreach (var device in new[] { s.Odin, s.Thor, loki })
+            Assert.Equal(head.Id, Assert.Single(await Deliveries(device)).VersionId);
+    }
+
+    [Fact]
+    public async Task Linked_ToGroupWithOpenConflict_IsRejectedWhenItWouldChangeTheHead()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (group, odinSolo, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink));
+        await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, resolution: "2"))), group.HeadVersionId);
+        await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), odinSolo.VersionId);
+        Assert.True((await Bundle(f, group.BundleId)).OpenConflict);
+        var (loki, lokiKey) = await f.PairSecondDevice(s.Odin, "Loki");
+        await Upload(loki, await Files(loki, (Ini, EdenIni(""))), null);
+        var before = (await GroupVersions(f, group.BundleId)).Count;
+
+        var r = await s.Web.PostJsonAsync("/v1/configs/apply",
+            new ApplyConfigRequest(lokiKey.DeviceId, "eden", group.HeadVersionId!.Value, ApplyMode.Linked));
+
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, r.StatusCode);
+        Assert.Contains("conflict_open", await r.Content.ReadAsStringAsync());
+        Assert.Equal(before, (await GroupVersions(f, group.BundleId)).Count);
+        Assert.Empty(await Deliveries(loki));
+    }
 }

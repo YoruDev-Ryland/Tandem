@@ -430,6 +430,8 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
                 var headChanged = groupHead.ManifestHash != source.Version.ManifestHash;
                 if (headChanged)
                 {
+                    if (groupBundle.OpenConflict)
+                        throw new ApiException(409, "conflict_open", "Resolve the group's open config conflict first.");
                     var copy = await NewVersionAsync(groupBundle.Id, groupHead.Id, null, ConfigSource.Copy, source.Version.ManifestJson,
                         source.Version.ManifestHash, source.Version.TotalSize, ct);
                     groupBundle.HeadVersionId = copy.Id;
