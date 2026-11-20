@@ -81,12 +81,13 @@ public sealed class BackupTests : IDisposable
     }
 
     /// <summary>An admin with two versions of one save (and so blobs, activity, device state).</summary>
-    private static async Task<(HttpClient Device, DeviceKeyResponse Key, SaveUploadResponse V2)> Seed(ServerFactory f)
+    /// <summary>Returns the admin's web session (admin routes need one); the saves are uploaded by its device.</summary>
+    private static async Task<(HttpClient Admin, DeviceKeyResponse Key, SaveUploadResponse V2)> Seed(ServerFactory f)
     {
         var (device, key) = await f.Register(Admin);
         var v1 = await Upload(device, "version one", null);
         var v2 = await Upload(device, "version two", v1.VersionId);
-        return (device, key, v2);
+        return (await f.WebLogin(Admin), key, v2);
     }
 
     private static async Task<(int Code, string Output, string Error)> Cli(ServerFactory f, params string[] args)
@@ -370,7 +371,8 @@ public sealed class BackupTests : IDisposable
     public async Task Backup_settings_are_admin_only_and_never_return_the_passphrase()
     {
         using var f = NewFactory();
-        var (admin, _) = await f.Register(Admin);
+        await f.Register(Admin);
+        var admin = await f.WebLogin(Admin);
         var (user, _) = await f.Register("user@example.com");
 
         var defaults = await (await admin.GetAsync("/v1/admin/backup")).ReadAsync<BackupSettingsResponse>();

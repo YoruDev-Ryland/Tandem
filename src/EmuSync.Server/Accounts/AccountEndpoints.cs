@@ -59,7 +59,7 @@ public static class AccountEndpoints
         {
             await accounts.ChangePassword(http.User.UserId(), request, ct);
             return Results.NoContent();
-        });
+        }).RequireAuthorization(AuthSetup.WebSessionPolicy);
         return app;
     }
 }

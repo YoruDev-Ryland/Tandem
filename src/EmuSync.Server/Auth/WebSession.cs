@@ -27,6 +27,10 @@ public static class ClaimsExtensions
 {
     public const string DeviceClaim = "emusync:device";
     public const string AdminClaim = "emusync:admin";
+    /// <summary>How the request authenticated: <see cref="AuthKindDevice"/> (a device key) or <see cref="AuthKindWeb"/> (a session cookie).</summary>
+    public const string AuthKindClaim = "emusync:auth";
+    public const string AuthKindDevice = "device";
+    public const string AuthKindWeb = "web";
 
     public static Guid UserId(this ClaimsPrincipal user) =>
         Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier) ?? throw new InvalidOperationException("Not authenticated."));

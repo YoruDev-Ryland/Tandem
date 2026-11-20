@@ -55,7 +55,7 @@ public sealed class DeviceKeyAuthenticationHandler(
 
         var now = time.GetUtcNow();
         await db.Devices.Where(d => d.Id == device.Id).ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenUtc, now));
-        return Success(device.UserId, device.Id, user.IsAdmin);
+        return Success(device.UserId, device.Id, user.IsAdmin, ClaimsExtensions.AuthKindDevice);
     }
 
     private async Task<AuthenticateResult> AuthenticateSession(string token)
@@ -84,7 +84,7 @@ public sealed class DeviceKeyAuthenticationHandler(
         if (user is null) return AuthenticateResult.Fail("Unknown user.");
 
         await db.WebSessions.Where(s => s.TokenHash == hash).ExecuteUpdateAsync(s => s.SetProperty(x => x.LastUsedUtc, now));
-        return Success(session.UserId, deviceId, user.IsAdmin);
+        return Success(session.UserId, deviceId, user.IsAdmin, ClaimsExtensions.AuthKindWeb);
     }
 
     private AuthenticateResult Revoked()
@@ -93,9 +93,9 @@ public sealed class DeviceKeyAuthenticationHandler(
         return AuthenticateResult.Fail("Device revoked.");
     }
 
-    private AuthenticateResult Success(Guid userId, Guid? deviceId, bool isAdmin)
+    private AuthenticateResult Success(Guid userId, Guid? deviceId, bool isAdmin, string authKind)
     {
-        var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId.ToString()) };
+        var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId.ToString()), new(ClaimsExtensions.AuthKindClaim, authKind) };
         if (deviceId is { } d) claims.Add(new Claim(ClaimsExtensions.DeviceClaim, d.ToString()));
         if (isAdmin) claims.Add(new Claim(ClaimsExtensions.AdminClaim, "true"));
         var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, SchemeName));
@@ -119,15 +119,24 @@ public sealed class DeviceKeyAuthenticationHandler(
 
 public static class AuthSetup
 {
+    /// <summary>An admin signed in through a web session (a device key never reaches admin routes).</summary>
     public const string AdminPolicy = "Admin";
+    /// <summary>A web session (browser sign-in), not a device key.</summary>
+    public const string WebSessionPolicy = "WebSession";
     public const string AuthRateLimit = "auth";
 
     public static void AddEmuSyncAuth(this IServiceCollection services, ServerOptions options)
     {
         services.AddAuthentication(DeviceKeyAuthenticationHandler.SchemeName)
             .AddScheme<AuthenticationSchemeOptions, DeviceKeyAuthenticationHandler>(DeviceKeyAuthenticationHandler.SchemeName, null);
-        services.AddAuthorization(o => o.AddPolicy(AdminPolicy, p =>
-            p.RequireAuthenticatedUser().RequireClaim(ClaimsExtensions.AdminClaim, "true")));
+        services.AddAuthorization(o =>
+        {
+            o.AddPolicy(AdminPolicy, p => p.RequireAuthenticatedUser()
+                .RequireClaim(ClaimsExtensions.AuthKindClaim, ClaimsExtensions.AuthKindWeb)
+                .RequireClaim(ClaimsExtensions.AdminClaim, "true"));
+            o.AddPolicy(WebSessionPolicy, p => p.RequireAuthenticatedUser()
+                .RequireClaim(ClaimsExtensions.AuthKindClaim, ClaimsExtensions.AuthKindWeb));
+        });
 
         var limit = Math.Max(1, options.AuthRequestsPerMinute);
         services.AddRateLimiter(o =>

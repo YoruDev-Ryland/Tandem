@@ -11,7 +11,8 @@ public class AdminTests
     public async Task Admin_setting_AllowRegistration_overrides_env()
     {
         using var factory = new ServerFactory();
-        var (admin, _) = await factory.Register("admin@example.com");
+        await factory.Register("admin@example.com");
+        var admin = await factory.WebLogin("admin@example.com");
 
         var closed = await factory.Client().PostAsJsonAsync("/v1/auth/register",
             new RegisterRequest("b@example.com", TestApi.Password, "d", "android"));
@@ -43,10 +44,34 @@ public class AdminTests
     }
 
     [Fact]
+    public async Task Admin_device_key_gets_403_on_admin_routes_web_session_is_allowed()
+    {
+        using var factory = new ServerFactory();
+        var (device, _) = await factory.Register("admin@example.com"); // the first account: an admin
+
+        var settings = await (await factory.WebLogin("admin@example.com")).GetAsync("/v1/admin/backup");
+        Assert.Equal(HttpStatusCode.OK, settings.StatusCode);
+        var body = await settings.Content.ReadAsStringAsync();
+
+        foreach (var r in new[]
+                 {
+                     await device.GetAsync("/v1/admin/backup"),
+                     await device.PutAsync("/v1/admin/backup", new StringContent(body, System.Text.Encoding.UTF8, "application/json")),
+                     await device.GetAsync("/v1/admin/users"),
+                     await device.GetAsync("/v1/admin/settings"),
+                 })
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, r.StatusCode);
+            Assert.Equal("forbidden", (await r.ReadAsync<ErrorResponse>()).Code);
+        }
+    }
+
+    [Fact]
     public async Task Admin_creates_lists_and_deletes_users()
     {
         using var factory = new ServerFactory();
-        var (admin, adminKey) = await factory.Register("admin@example.com");
+        var (_, adminKey) = await factory.Register("admin@example.com");
+        var admin = await factory.WebLogin("admin@example.com");
 
         var created = await (await admin.PostAsJsonAsync("/v1/admin/users", new CreateUserRequest("New@Example.com", false)))
             .ReadAsync<CreatedUserResponse>();

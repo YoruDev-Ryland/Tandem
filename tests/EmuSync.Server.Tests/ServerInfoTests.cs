@@ -72,7 +72,8 @@ public class ServerInfoTests
     public async Task RegistrationOpen_follows_admin_setting()
     {
         using var factory = new ServerFactory();
-        var (admin, _) = await factory.Register("a@example.com");
+        await factory.Register("a@example.com");
+        var admin = await factory.WebLogin("a@example.com");
         await admin.PutAsJsonAsync("/v1/admin/settings", new AdminSettings(true));
         Assert.True(await RegistrationOpen(factory));
         await admin.PutAsJsonAsync("/v1/admin/settings", new AdminSettings(false));

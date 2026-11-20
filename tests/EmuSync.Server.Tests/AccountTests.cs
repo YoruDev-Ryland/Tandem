@@ -115,11 +115,24 @@ public class AccountTests
     public async Task Change_password_works()
     {
         using var factory = new ServerFactory();
-        var (device, _) = await factory.Register("a@example.com");
-        var bad = await device.PostAsJsonAsync("/v1/account/password", new ChangePasswordRequest("nope nope nope", "new password 1"));
+        await factory.Register("a@example.com");
+        var web = await factory.WebLogin("a@example.com");
+        var bad = await web.PostAsJsonAsync("/v1/account/password", new ChangePasswordRequest("nope nope nope", "new password 1"));
         Assert.False(bad.IsSuccessStatusCode);
-        (await device.PostAsJsonAsync("/v1/account/password", new ChangePasswordRequest(TestApi.Password, "new password 1"))).EnsureSuccessStatusCode();
+        (await web.PostAsJsonAsync("/v1/account/password", new ChangePasswordRequest(TestApi.Password, "new password 1"))).EnsureSuccessStatusCode();
         await factory.WebLogin("a@example.com", "new password 1");
+    }
+
+    [Fact]
+    public async Task Change_password_requires_a_web_session()
+    {
+        using var factory = new ServerFactory();
+        var (device, _) = await factory.Register("a@example.com");
+
+        var r = await device.PostAsJsonAsync("/v1/account/password", new ChangePasswordRequest(TestApi.Password, "new password 1"));
+
+        await AssertError(r, HttpStatusCode.Forbidden, "forbidden");
+        await factory.WebLogin("a@example.com"); // unchanged
     }
 
     [Fact]
