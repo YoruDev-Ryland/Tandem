@@ -25,6 +25,9 @@ public static class SaveEndpoints
             return Results.NoContent();
         });
 
+        saves.MapPost("/{itemId:guid}/versions/{versionId:guid}/restore", (HttpContext http, Guid itemId, Guid versionId, RestoreRequest request, SaveService svc, CancellationToken ct) =>
+            svc.RestoreAsync(http.User.UserId(), itemId, versionId, request, ct));
+
         // Web session or device key: simple conflicts can be settled on the handheld.
         var conflicts = app.MapGroup("/v1/conflicts").RequireAuthorization();
 

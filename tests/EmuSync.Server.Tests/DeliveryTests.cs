@@ -1,0 +1,591 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text;
+using EmuSync.Protocol;
+using EmuSync.Server.Data;
+using EmuSync.Server.Deliveries;
+using EmuSync.Server.Events;
+using EmuSync.Server.Tests.Infrastructure;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Testcontainers.PostgreSql;
+using WebApplicationFactoryOfProgram = Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program>;
+
+namespace EmuSync.Server.Tests;
+
+public class DeliveryTests
+{
+    private const string Sword = "0100E66006406000";
+    private const string Shield = "01008DB008C2C000";
+
+    private static ServerFactory NewFactory()
+    {
+        var factory = new ServerFactory();
+        factory.Settings["EmuSync:AllowRegistration"] = "true";
+        return factory;
+    }
+
+    private static SaveUploadRequest Req(IReadOnlyList<ManifestEntry> manifest, Guid? baseId, string game = Sword,
+        ItemKind kind = ItemKind.Save, string slot = "", string core = "") =>
+        new("eden", kind, game, slot, core, baseId, manifest, null);
+
+    private static Task<List<ManifestEntry>> Files(HttpClient device, string content) =>
+        Fixtures.Manifest(device, ("data.dat", Encoding.UTF8.GetBytes(content)));
+
+    private static async Task<SaveUploadResponse> Upload(HttpClient device, SaveUploadRequest request)
+    {
+        var response = await device.PostJsonAsync("/v1/saves/upload", request);
+        Assert.True(response.StatusCode == HttpStatusCode.OK, $"{response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+        return await response.ReadAsync<SaveUploadResponse>();
+    }
+
+    private static async Task Install(HttpClient device, params string[] games)
+    {
+        var response = await device.PutAsJsonAsync("/v1/devices/me/installs/eden",
+            new InstallsRequest(games.Select(g => new InstalledGame(g, null, null)).ToList()));
+        Assert.True(response.IsSuccessStatusCode, $"{response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+    }
+
+    private static async Task<IReadOnlyList<DeliveryDto>> Deliveries(HttpClient device)
+    {
+        var response = await device.GetAsync("/v1/deliveries");
+        Assert.True(response.StatusCode == HttpStatusCode.OK, $"{response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+        return (await response.ReadAsync<DeliveryList>()).Items;
+    }
+
+    private static Task<HttpResponseMessage> Ack(HttpClient device, Guid id, DeliveryResult result, string? detail = null) =>
+        device.PostJsonAsync($"/v1/deliveries/{id}/ack", new AckRequest(result, detail));
+
+    private static async Task AssertError(HttpResponseMessage r, HttpStatusCode status, string code)
+    {
+        Assert.Equal(status, r.StatusCode);
+        Assert.Equal(code, (await r.ReadAsync<ErrorResponse>()).Code);
+    }
+
+    private static async Task<T> InDb<T>(ServerFactory factory, Func<EmuSyncDbContext, Task<T>> query)
+    {
+        using var scope = factory.Services.CreateScope();
+        return await query(scope.ServiceProvider.GetRequiredService<EmuSyncDbContext>());
+    }
+
+    private static Task<List<Delivery>> AllDeliveries(ServerFactory f) =>
+        InDb(f, db => db.Deliveries.AsNoTracking().ToListAsync());
+
+    private static Task<Guid?> Known(ServerFactory f, Guid deviceId, Guid itemId) =>
+        InDb(f, db => db.DeviceItemStates.Where(s => s.DeviceId == deviceId && s.ItemId == itemId)
+            .Select(s => (Guid?)s.KnownVersionId).SingleOrDefaultAsync());
+
+    [Fact]
+    public async Task Head_change_delivers_only_to_devices_with_game_installed()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (thor, thorKey) = await factory.PairSecondDevice(a, "Thor");
+        var (odin, _) = await factory.PairSecondDevice(a, "Odin");
+        await Install(thor, Sword);
+        await Install(odin, Shield);
+        var manifest = await Files(a, "v1");
+
+        var v1 = await Upload(a, Req(manifest, null, core: "mGBA"));
+
+        Assert.Empty(await Deliveries(odin));
+        var d = Assert.Single(await Deliveries(thor));
+        Assert.Equal(DeliveryKind.Save, d.Kind);
+        Assert.Equal(v1.ItemId, d.TargetId);
+        Assert.Equal(v1.VersionId, d.VersionId);
+        Assert.Null(d.KnownVersionId);
+        Assert.Equal("eden", d.EmulatorId);
+        Assert.Equal(Sword, d.GameKey);
+        Assert.Equal(ItemKind.Save, d.ItemKind);
+        Assert.Equal("", d.Slot);
+        Assert.Equal("mGBA", d.Core); // the version's core: a Save item's own Core is always ""
+        Assert.Equal(manifest, d.Manifest);
+        Assert.Null(d.MissingLocalKeys);
+        var row = Assert.Single(await AllDeliveries(factory));
+        Assert.Equal(thorKey.DeviceId, row.DeviceId);
+        Assert.Equal(factory.Time.GetUtcNow(), row.CreatedUtc);
+    }
+
+    [Fact]
+    public async Task Revoked_device_gets_no_delivery()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(b, Sword);
+        (await a.DeleteAsync($"/v1/devices/{bKey.DeviceId}")).EnsureSuccessStatusCode();
+
+        await Upload(a, Req(await Files(a, "v1"), null));
+
+        Assert.Empty(await AllDeliveries(factory));
+    }
+
+    [Fact]
+    public async Task Uploader_gets_no_delivery_of_its_own_version()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        await Install(a, Sword);
+
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+
+        Assert.Empty(await Deliveries(a));
+        Assert.Empty(await AllDeliveries(factory));
+    }
+
+    [Fact]
+    public async Task Installing_game_later_creates_delivery_of_head()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        Assert.Empty(await Deliveries(b));
+
+        await Install(b, Sword);
+
+        var d = Assert.Single(await Deliveries(b));
+        Assert.Equal(v2.VersionId, d.VersionId);
+    }
+
+    [Fact]
+    public async Task Save_for_uninstalled_game_is_kept_but_not_delivered()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        await Install(b, Shield);
+
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+
+        Assert.Equal(v1.VersionId, await InDb(factory, db => db.SaveItems.Where(i => i.Id == v1.ItemId).Select(i => i.HeadVersionId).SingleAsync()));
+        Assert.Empty(await Deliveries(a));
+        Assert.Empty(await Deliveries(b));
+        Assert.Empty(await AllDeliveries(factory));
+    }
+
+    [Fact]
+    public async Task States_follow_the_same_rule()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        await Install(b, Sword);
+
+        var s = await Upload(a, Req(await Files(a, "st"), null, kind: ItemKind.State, slot: "3", core: "c1"));
+
+        var d = Assert.Single(await Deliveries(b));
+        Assert.Equal(s.VersionId, d.VersionId);
+        Assert.Equal(ItemKind.State, d.ItemKind);
+        Assert.Equal("3", d.Slot);
+        Assert.Equal("c1", d.Core);
+    }
+
+    [Fact]
+    public async Task Open_conflict_holds_deliveries_until_resolved()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        var (c, _) = await factory.PairSecondDevice(a, "C");
+        await Install(c, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        Assert.Equal(v2.VersionId, Assert.Single(await Deliveries(c)).VersionId);
+
+        var conflict = await Upload(b, Req(await Files(b, "b"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
+
+        Assert.Empty(await Deliveries(c));
+        Assert.Empty(await AllDeliveries(factory));
+
+        (await a.PostJsonAsync($"/v1/conflicts/{v1.ItemId}/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, conflict.VersionId))).EnsureSuccessStatusCode();
+
+        Assert.Equal(conflict.VersionId, Assert.Single(await Deliveries(c)).VersionId);
+    }
+
+    [Fact]
+    public async Task Resolve_delivers_head_to_losing_device_not_winner()
+    {
+        using var factory = NewFactory();
+        var (a, aKey) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(a, Sword);
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        (await Ack(b, Assert.Single(await Deliveries(b)).Id, DeliveryResult.Applied)).EnsureSuccessStatusCode();
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        var conflict = await Upload(b, Req(await Files(b, "b"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
+
+        (await a.PostJsonAsync($"/v1/conflicts/{v1.ItemId}/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, conflict.VersionId))).EnsureSuccessStatusCode();
+
+        Assert.Empty(await Deliveries(b));
+        Assert.Equal(conflict.VersionId, await Known(factory, bKey.DeviceId, v1.ItemId));
+        Assert.Equal(v2.VersionId, await Known(factory, aKey.DeviceId, v1.ItemId));
+        Assert.Equal(conflict.VersionId, Assert.Single(await Deliveries(a)).VersionId);
+    }
+
+    [Fact]
+    public async Task Resolve_to_an_older_version_still_delivers_it_to_its_uploader()
+    {
+        using var factory = NewFactory();
+        var (a, aKey) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        await Install(a, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        var conflict = await Upload(b, Req(await Files(b, "b"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
+
+        (await a.PostJsonAsync($"/v1/conflicts/{v1.ItemId}/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, v1.VersionId))).EnsureSuccessStatusCode();
+
+        // A uploaded v2 after v1, so it no longer holds v1 and must be sent it.
+        Assert.Equal(v2.VersionId, await Known(factory, aKey.DeviceId, v1.ItemId));
+        Assert.Equal(v1.VersionId, Assert.Single(await Deliveries(a)).VersionId);
+    }
+
+    [Fact]
+    public async Task Bulk_UseDevice_delivers_to_others_not_the_chosen_device()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(a, Sword);
+        await Install(b, Sword);
+        await Upload(a, Req(await Files(a, "server"), null));
+        Assert.Single(await Deliveries(b));
+        var mine = await Upload(b, Req(await Files(b, "device"), null));
+        Assert.Equal(SaveUploadStatus.Conflict, mine.Status);
+        Assert.Empty(await AllDeliveries(factory));
+
+        (await b.PostJsonAsync("/v1/conflicts/first-sync/resolve",
+            new BulkFirstSyncRequest(bKey.DeviceId, FirstSyncChoice.UseDevice, null))).EnsureSuccessStatusCode();
+
+        Assert.Empty(await Deliveries(b));
+        Assert.Equal(mine.VersionId, Assert.Single(await Deliveries(a)).VersionId);
+    }
+
+    [Fact]
+    public async Task Newer_head_replaces_unacked_delivery()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var first = Assert.Single(await Deliveries(b));
+
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+
+        var d = Assert.Single(await Deliveries(b));
+        Assert.Equal(v2.VersionId, d.VersionId);
+        Assert.Single(await AllDeliveries(factory));
+        await AssertError(await Ack(b, first.Id, DeliveryResult.Applied), HttpStatusCode.NotFound, "delivery_not_found");
+    }
+
+    [Fact]
+    public async Task Ack_Applied_updates_known_version()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var d = Assert.Single(await Deliveries(b));
+
+        await AssertError(await Ack(a, d.Id, DeliveryResult.Applied), HttpStatusCode.NotFound, "delivery_not_found");
+        var r = await Ack(b, d.Id, DeliveryResult.Applied);
+
+        Assert.Equal(HttpStatusCode.NoContent, r.StatusCode);
+        Assert.Equal(v1.VersionId, await Known(factory, bKey.DeviceId, v1.ItemId));
+        Assert.Empty(await Deliveries(b));
+        var row = Assert.Single(await AllDeliveries(factory));
+        Assert.Equal(DeliveryResult.Applied, row.Result);
+        Assert.Equal(factory.Time.GetUtcNow(), row.AckedUtc);
+        await AssertError(await Ack(b, d.Id, DeliveryResult.Applied), HttpStatusCode.Conflict, "already_acked");
+
+        // The next upload from B is based on what it applied: a plain head change, not a conflict.
+        var v2 = await Upload(b, Req(await Files(b, "v2"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Accepted, v2.Status);
+    }
+
+    [Fact]
+    public async Task Ack_SkippedLocalChanged_closes_and_recomputes()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        var d = Assert.Single(await Deliveries(b));
+
+        // B's local copy turned out to equal the head already: the upload is Unchanged and B now knows the head.
+        var same = await Upload(b, Req(await Files(b, "v2"), null));
+        Assert.Equal(SaveUploadStatus.Unchanged, same.Status);
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, d.Id, DeliveryResult.SkippedLocalChanged)).StatusCode);
+
+        Assert.Empty(await Deliveries(b));
+        var row = Assert.Single(await AllDeliveries(factory));
+        Assert.Equal(DeliveryResult.SkippedLocalChanged, row.Result);
+        Assert.NotNull(row.AckedUtc);
+
+        // Without an upload that settles it, the recompute hands the head out again.
+        var v3 = await Upload(a, Req(await Files(a, "v3"), v2.VersionId));
+        var d3 = Assert.Single(await Deliveries(b));
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, d3.Id, DeliveryResult.SkippedLocalChanged)).StatusCode);
+        var again = Assert.Single(await Deliveries(b));
+        Assert.NotEqual(d3.Id, again.Id);
+        Assert.Equal(v3.VersionId, again.VersionId);
+    }
+
+    [Fact]
+    public async Task Failed_ack_suppresses_redelivery_for_10_minutes()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        var failed = new ConcurrentQueue<DeliveryFailed>();
+        factory.Services.GetRequiredService<IDomainEvents>()
+            .Subscribe<DeliveryFailed>((e, _) => { failed.Enqueue(e); return Task.CompletedTask; });
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var d = Assert.Single(await Deliveries(b));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, d.Id, DeliveryResult.Failed, "disk full")).StatusCode);
+
+        Assert.Equal(new DeliveryFailed(bKey.UserId, bKey.DeviceId, d.Id, "disk full"), Assert.Single(failed));
+        Assert.Empty(await Deliveries(b));
+        Assert.Null(await Known(factory, bKey.DeviceId, v1.ItemId));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        factory.Time.Advance(TimeSpan.FromMinutes(9));
+        Assert.Empty(await Deliveries(b));
+
+        factory.Time.Advance(TimeSpan.FromMinutes(2));
+
+        var retry = Assert.Single(await Deliveries(b));
+        Assert.Equal(v2.VersionId, retry.VersionId);
+    }
+
+    [Fact]
+    public async Task Restore_makes_new_head_from_old_version_and_delivers_to_installed_devices()
+    {
+        using var factory = NewFactory();
+        var (a, aKey) = await factory.Register("a@example.com", deviceName: "Thor");
+        var (b, _) = await factory.PairSecondDevice(a, "Odin");
+        var (c, _) = await factory.PairSecondDevice(a, "Loki");
+        await Install(a, Sword);
+        await Install(b, Sword);
+        var m1 = await Files(a, "v1");
+        var v1 = await Upload(a, Req(m1, null, core: "core-1"));
+        (await Ack(b, Assert.Single(await Deliveries(b)).Id, DeliveryResult.Applied)).EnsureSuccessStatusCode();
+        factory.Time.Advance(TimeSpan.FromHours(1));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId, core: "core-2"));
+        (await Ack(b, Assert.Single(await Deliveries(b)).Id, DeliveryResult.Applied)).EnsureSuccessStatusCode();
+        var web = await factory.WebLogin("a@example.com");
+
+        var response = await web.PostJsonAsync($"/v1/saves/{v1.ItemId}/versions/{v1.VersionId}/restore", new RestoreRequest(aKey.DeviceId));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var restored = await response.ReadAsync<RestoreResponse>();
+        Assert.Equal(v1.ItemId, restored.ItemId);
+        var versions = await InDb(factory, db => db.SaveVersions.AsNoTracking().Where(v => v.ItemId == v1.ItemId).OrderBy(v => v.Seq).ToListAsync());
+        Assert.Equal([1, 2, 3], versions.Select(v => v.Seq));
+        var v3 = versions[2];
+        Assert.Equal(restored.VersionId, v3.Id);
+        Assert.Equal(v2.VersionId, v3.BaseVersionId);
+        Assert.Null(v3.DeviceId);
+        Assert.Equal(versions[0].ManifestHash, v3.ManifestHash);
+        Assert.Equal(versions[0].ManifestJson, v3.ManifestJson);
+        Assert.Equal("core-1", v3.Core);
+        Assert.Null(v3.ConflictReason);
+        Assert.True(versions[1].Pinned);
+        Assert.Equal("Thor 2026-11-19 13:00", versions[1].Variant);
+        Assert.Equal(v3.Id, await InDb(factory, db => db.SaveItems.Where(i => i.Id == v1.ItemId).Select(i => i.HeadVersionId).SingleAsync()));
+
+        foreach (var device in new[] { a, b })
+        {
+            var d = Assert.Single(await Deliveries(device));
+            Assert.Equal(v3.Id, d.VersionId);
+            Assert.Equal(m1, d.Manifest);
+            Assert.Equal("core-1", d.Core);
+        }
+        Assert.Empty(await Deliveries(c));
+    }
+
+    [Fact]
+    public async Task Restore_keeps_an_already_pinned_head_as_is()
+    {
+        using var factory = NewFactory();
+        var (a, aKey) = await factory.Register("a@example.com");
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        (await a.PostAsync($"/v1/saves/{v1.ItemId}/pin/{v2.VersionId}", null)).EnsureSuccessStatusCode();
+
+        (await a.PostJsonAsync($"/v1/saves/{v1.ItemId}/versions/{v1.VersionId}/restore", new RestoreRequest(aKey.DeviceId)))
+            .EnsureSuccessStatusCode();
+
+        var old = await InDb(factory, db => db.SaveVersions.AsNoTracking().SingleAsync(v => v.Id == v2.VersionId));
+        Assert.True(old.Pinned);
+        Assert.Null(old.Variant);
+    }
+
+    [Fact]
+    public async Task Restore_rejects_open_conflict_foreign_version_and_foreign_device()
+    {
+        using var factory = NewFactory();
+        var (a, aKey) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        var (other, otherKey) = await factory.Register("other@example.com");
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var shield = await Upload(a, Req(await Files(a, "s"), null, game: Shield));
+        var otherV = await Upload(other, Req(await Files(other, "o"), null));
+
+        string Url(Guid item, Guid version) => $"/v1/saves/{item}/versions/{version}/restore";
+        await AssertError(await a.PostJsonAsync(Url(v1.ItemId, shield.VersionId), new RestoreRequest(aKey.DeviceId)),
+            HttpStatusCode.NotFound, "version_not_found");
+        await AssertError(await a.PostJsonAsync(Url(otherV.ItemId, otherV.VersionId), new RestoreRequest(aKey.DeviceId)),
+            HttpStatusCode.NotFound, "version_not_found");
+        await AssertError(await a.PostJsonAsync(Url(v1.ItemId, v1.VersionId), new RestoreRequest(otherKey.DeviceId)),
+            HttpStatusCode.NotFound, "device_not_found");
+
+        await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, (await Upload(b, Req(await Files(b, "b"), v1.VersionId))).Status);
+        await AssertError(await a.PostJsonAsync(Url(v1.ItemId, v1.VersionId), new RestoreRequest(aKey.DeviceId)),
+            HttpStatusCode.Conflict, "conflict_open");
+        Assert.Equal(3, await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v1.ItemId)));
+    }
+
+    [Fact]
+    public async Task Deliveries_require_a_device_identity()
+    {
+        using var factory = NewFactory();
+        await factory.Register("a@example.com");
+        var web = await factory.WebLogin("a@example.com");
+
+        await AssertError(await web.GetAsync("/v1/deliveries"), HttpStatusCode.BadRequest, "no_device");
+        await AssertError(await Ack(web, Guid.NewGuid(), DeliveryResult.Applied), HttpStatusCode.BadRequest, "no_device");
+    }
+
+    [Fact]
+    public async Task Recompute_is_idempotent()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var before = await AllDeliveries(factory);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var svc = scope.ServiceProvider.GetRequiredService<DeliveryService>();
+            await svc.RecomputeForItemAsync(v1.ItemId, CancellationToken.None);
+            await svc.RecomputeForItemAsync(v1.ItemId, CancellationToken.None);
+            await svc.RecomputeForDeviceAsync(bKey.DeviceId, CancellationToken.None);
+        }
+        await factory.Services.GetRequiredService<IDomainEvents>()
+            .Raise(new SaveHeadChanged(bKey.UserId, v1.ItemId, v1.VersionId), CancellationToken.None);
+
+        var after = await AllDeliveries(factory);
+        Assert.Equal(before.Select(d => (d.Id, d.DeviceId, d.VersionId)), after.Select(d => (d.Id, d.DeviceId, d.VersionId)));
+    }
+
+    [Fact]
+    public async Task New_delivery_notifies_device()
+    {
+        using var root = NewFactory();
+        var hub = new RecordingHub();
+        using var factory = root.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IEventHub>(hub)));
+        var (a, _) = await RegisterOn(factory, "a@example.com");
+        var (b, bKey) = await PairOn(factory, a);
+        await Install(b, Sword);
+        Assert.Empty(hub.Devices);
+
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        Assert.Equal([bKey.DeviceId], hub.Devices);
+
+        // A recompute that creates nothing new notifies nobody.
+        await Deliveries(b);
+        Assert.Single(hub.Devices);
+        await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        Assert.Equal([bKey.DeviceId, bKey.DeviceId], hub.Devices);
+    }
+
+    [DockerFact]
+    [Trait("Category", "Postgres")]
+    public async Task Deliveries_and_restore_on_postgres()
+    {
+        await using var container = new PostgreSqlBuilder("postgres:17-alpine").Build();
+        await container.StartAsync();
+        using var factory = NewFactory();
+        factory.Settings["EmuSync:DatabaseProvider"] = "postgres";
+        factory.Settings["EmuSync:DatabaseConnection"] = container.GetConnectionString();
+
+        var (a, aKey) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(a, Sword);
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        (await Ack(b, Assert.Single(await Deliveries(b)).Id, DeliveryResult.Applied)).EnsureSuccessStatusCode();
+        Assert.Equal(v1.VersionId, await Known(factory, bKey.DeviceId, v1.ItemId));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        Assert.Equal(v2.VersionId, Assert.Single(await Deliveries(b)).VersionId);
+
+        var restored = await (await a.PostJsonAsync($"/v1/saves/{v1.ItemId}/versions/{v1.VersionId}/restore",
+            new RestoreRequest(aKey.DeviceId))).ReadAsync<RestoreResponse>();
+
+        Assert.Equal(restored.VersionId, Assert.Single(await Deliveries(b)).VersionId);
+        Assert.Equal(restored.VersionId, Assert.Single(await Deliveries(a)).VersionId); // a knew v2, so it gets the restore too
+    }
+
+    private static async Task<(HttpClient, DeviceKeyResponse)> RegisterOn(WebApplicationFactoryOfProgram factory, string email)
+    {
+        var response = await Client(factory).PostAsJsonAsync("/v1/auth/register", new RegisterRequest(email, TestApi.Password, "A", "android"));
+        response.EnsureSuccessStatusCode();
+        var key = await response.ReadAsync<DeviceKeyResponse>();
+        return (Authed(factory, key), key);
+    }
+
+    private static async Task<(HttpClient, DeviceKeyResponse)> PairOn(WebApplicationFactoryOfProgram factory, HttpClient device)
+    {
+        var code = await (await device.PostAsync("/v1/pairing/codes", null)).ReadAsync<PairingCodeResponse>();
+        var redeem = await Client(factory).PostAsJsonAsync("/v1/pairing/redeem", new RedeemPairingRequest(code.Code, "B", "android"));
+        redeem.EnsureSuccessStatusCode();
+        var key = await redeem.ReadAsync<DeviceKeyResponse>();
+        return (Authed(factory, key), key);
+    }
+
+    private static HttpClient Client(WebApplicationFactoryOfProgram factory)
+    {
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(Protocol.Protocol.Header, Protocol.Protocol.Version.ToString());
+        return client;
+    }
+
+    private static HttpClient Authed(WebApplicationFactoryOfProgram factory, DeviceKeyResponse key)
+    {
+        var client = Client(factory);
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", key.DeviceKey);
+        return client;
+    }
+
+    private sealed class RecordingHub : IEventHub
+    {
+        private readonly ConcurrentQueue<Guid> _devices = new();
+
+        public Guid[] Devices => [.. _devices];
+
+        public void NotifyDevice(Guid deviceId) => _devices.Enqueue(deviceId);
+
+        public void NotifyUser(Guid userId, string topic) { }
+    }
+}

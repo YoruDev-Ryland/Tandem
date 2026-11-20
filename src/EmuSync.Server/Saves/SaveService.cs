@@ -129,6 +129,9 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             foreach (var v in open) v.Resolved = true;
             item.HeadVersionId = keep.Id;
             item.OpenConflict = false;
+            // The winning device already holds the head; every other device keeps its old known version and so is
+            // sent the head by the delivery recompute.
+            await SetKnownForUploaderAsync(keep, ct);
             await db.SaveChangesAsync(ct);
             if (tx is not null) await tx.CommitAsync(ct);
             evt = new SaveHeadChanged(userId, item.Id, keep.Id);
@@ -174,6 +177,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                     if (item.HeadVersionId is Guid oldHead && mine.All(v => v.Id != oldHead))
                         await LabelVariantsAsync([await db.SaveVersions.SingleAsync(v => v.Id == oldHead, ct)], ct);
                     item.HeadVersionId = mine[^1].Id; // the device's most recent upload
+                    await SetKnownForUploaderAsync(mine[^1], ct);
                 }
                 foreach (var v in mine) v.Resolved = true;
                 item.OpenConflict = open.Count > mine.Count;
@@ -185,6 +189,58 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         }
 
         foreach (var evt in raised) await events.Raise(evt, ct);
+    }
+
+    /// <summary>
+    /// Rollback: makes a copy of an earlier version the new head (Seq+1, based on the current head, no device). The
+    /// displaced head is kept as a pinned, labelled variant. Delivery then sends the copy to every device with the game.
+    /// </summary>
+    public async Task<RestoreResponse> RestoreAsync(Guid userId, Guid itemId, Guid versionId, RestoreRequest request, CancellationToken ct)
+    {
+        if (request is null || !await db.Devices.AnyAsync(d => d.Id == request.DeviceId && d.UserId == userId, ct))
+            throw new ApiException(404, "device_not_found", "Device not found.");
+
+        RestoreResponse response;
+        SaveHeadChanged? evt = null;
+        using (await locks.Acquire(userId, ct))
+        {
+            await using var tx = await BeginAsync(ct);
+            var item = await LoadItemForUpdateAsync(userId, itemId, ct)
+                ?? throw new ApiException(404, "version_not_found", "Version not found.");
+            var chosen = await db.SaveVersions.FirstOrDefaultAsync(v => v.Id == versionId && v.ItemId == item.Id, ct)
+                ?? throw new ApiException(404, "version_not_found", "Version not found.");
+            if (item.OpenConflict)
+                throw new ApiException(409, "conflict_open", "Resolve the open conflict before restoring.");
+
+            var head = item.HeadVersionId is Guid headId
+                ? await db.SaveVersions.SingleAsync(v => v.Id == headId, ct)
+                : null;
+            if (head is not null && head.ManifestHash == chosen.ManifestHash)
+            {
+                response = new RestoreResponse(item.Id, head.Id); // the head already has this content
+            }
+            else
+            {
+                var seq = (await db.SaveVersions.Where(v => v.ItemId == item.Id).MaxAsync(v => (int?)v.Seq, ct) ?? 0) + 1;
+                var copy = new SaveVersion
+                {
+                    Id = Guid.NewGuid(), ItemId = item.Id, Seq = seq, BaseVersionId = head?.Id, DeviceId = null,
+                    ReceivedUtc = time.GetUtcNow(), ManifestJson = chosen.ManifestJson, ManifestHash = chosen.ManifestHash,
+                    TotalSize = chosen.TotalSize, Core = chosen.Core,
+                };
+                db.SaveVersions.Add(copy);
+                if (head is { Pinned: false }) await LabelVariantsAsync([head], ct);
+                item.HeadVersionId = copy.Id;
+                response = new RestoreResponse(item.Id, copy.Id);
+                evt = new SaveHeadChanged(userId, item.Id, copy.Id);
+            }
+
+            await db.SaveChangesAsync(ct);
+            if (tx is not null) await tx.CommitAsync(ct);
+        }
+
+        if (evt is not null) await events.Raise(evt, ct);
+        return response;
     }
 
     public async Task SetPinnedAsync(Guid userId, Guid itemId, Guid versionId, bool pinned, CancellationToken ct)
@@ -288,6 +344,19 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             .FromSql($"""SELECT * FROM "SaveItems" WHERE "Id" = {itemId} AND "UserId" = {userId} FOR UPDATE""")
             .ToListAsync(ct);
         return rows.SingleOrDefault();
+    }
+
+    /// <summary>
+    /// After a resolve, the device that uploaded the winning version already holds it, so it needs no delivery. Only
+    /// when it is that device's latest upload of the item: a device that uploaded something newer since (or a winner
+    /// picked from older history) no longer holds the winner and must be sent it.
+    /// </summary>
+    private async Task SetKnownForUploaderAsync(SaveVersion winner, CancellationToken ct)
+    {
+        if (winner.DeviceId is not Guid deviceId) return;
+        var latest = await db.SaveVersions.Where(v => v.ItemId == winner.ItemId && v.DeviceId == deviceId)
+            .OrderByDescending(v => v.Seq).Select(v => (Guid?)v.Id).FirstOrDefaultAsync(ct);
+        if (latest == winner.Id) await SetKnownAsync(deviceId, winner.ItemId, winner.Id, ct);
     }
 
     private async Task SetKnownAsync(Guid deviceId, Guid itemId, Guid versionId, CancellationToken ct)

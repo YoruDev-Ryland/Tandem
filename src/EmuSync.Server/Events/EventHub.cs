@@ -33,3 +33,19 @@ public sealed class DomainEvents(ILogger<DomainEvents> logger) : IDomainEvents
             }
     }
 }
+
+/// <summary>Pushes "something changed" nudges to connected clients. Task 9 provides the real implementation.</summary>
+public interface IEventHub
+{
+    /// <summary>The device has new deliveries.</summary>
+    void NotifyDevice(Guid deviceId);
+
+    void NotifyUser(Guid userId, string topic);
+}
+
+public sealed class NoOpEventHub : IEventHub
+{
+    public void NotifyDevice(Guid deviceId) { }
+
+    public void NotifyUser(Guid userId, string topic) { }
+}

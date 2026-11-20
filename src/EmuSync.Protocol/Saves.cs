@@ -21,3 +21,9 @@ public enum FirstSyncChoice { UseDevice, UseServer }
 
 /// <param name="ItemIds">Only these items; null means every open first-sync conflict of the device.</param>
 public sealed record BulkFirstSyncRequest(Guid DeviceId, FirstSyncChoice Choice, IReadOnlyList<Guid>? ItemIds);
+
+/// <param name="DeviceId">The device the restore was requested for (recorded for the activity log).</param>
+public sealed record RestoreRequest(Guid DeviceId);
+
+/// <param name="VersionId">The new head: a copy of the chosen version.</param>
+public sealed record RestoreResponse(Guid ItemId, Guid VersionId);
