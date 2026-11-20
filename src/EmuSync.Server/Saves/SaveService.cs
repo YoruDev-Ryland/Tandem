@@ -406,14 +406,20 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     /// <summary>
     /// After a resolve, the device that uploaded the winning version already holds it, so it needs no delivery.
     /// Callers only pass a winner that is one of the open conflict versions being resolved (a winner picked from
-    /// history says nothing about what its uploader holds now), and only when it is that device's latest upload.
+    /// history says nothing about what its uploader holds now), only when it is that device's latest upload, and only
+    /// while the device's known version is still the winner's base (or unset). If the device has since applied another
+    /// version its files are no longer the winner's, so marking the winner known would let a later upload based on
+    /// that version silently overwrite the resolved head.
     /// </summary>
     private async Task SetKnownForUploaderAsync(SaveVersion winner, CancellationToken ct)
     {
         if (winner.DeviceId is not Guid deviceId) return;
         var latest = await db.SaveVersions.Where(v => v.ItemId == winner.ItemId && v.DeviceId == deviceId)
             .OrderByDescending(v => v.Seq).Select(v => (Guid?)v.Id).FirstOrDefaultAsync(ct);
-        if (latest == winner.Id) await SetKnownAsync(deviceId, winner.ItemId, winner.Id, ct);
+        if (latest != winner.Id) return;
+        var known = await db.DeviceItemStates.Where(s => s.DeviceId == deviceId && s.ItemId == winner.ItemId)
+            .Select(s => (Guid?)s.KnownVersionId).FirstOrDefaultAsync(ct);
+        if (known is null || known == winner.BaseVersionId) await SetKnownAsync(deviceId, winner.ItemId, winner.Id, ct);
     }
 
     private async Task SetKnownAsync(Guid deviceId, Guid itemId, Guid versionId, CancellationToken ct)
