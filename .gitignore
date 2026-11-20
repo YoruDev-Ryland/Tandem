@@ -7,3 +7,4 @@ obj/
 node_modules/
 data/
 TestResults/
+web/dist
