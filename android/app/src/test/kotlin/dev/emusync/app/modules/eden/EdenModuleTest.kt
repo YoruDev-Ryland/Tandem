@@ -119,11 +119,43 @@ class EdenModuleTest {
     }
 
     @Test fun eden_installed_reads_gamedirs_from_config() {
-        val data = dataRootWith("thor")
-        val fs = LocalFs()
-        // Thor's gamedir is a real device path, so only check it parses and does not fail on a missing dir.
-        val g = m.installedGames(fs, detected("${tmp.root}/save", data = data), none)
-        assertTrue(g.isEmpty())
+        val data = dataRootWith("thor")   // gamedir: primary:Games/switch
+        put("${tmp.root}/Games/switch/Some Game [0100DEAD0000A000].nsp")
+        val d = detected("${tmp.root}/save", data = data).let { it.copy(extraRoots = it.extraRoots + ("INTERNAL" to tmp.root.path)) }
+        val g = m.installedGames(LocalFs(), d, none)
+        assertEquals(listOf("0100DEAD0000A000"), g.map { it.gameKey })
+        assertEquals("Some Game", g[0].displayName)
+    }
+
+    @Test fun eden_target_dir_rejects_unsafe_keys() {
+        val sr = "${tmp.root}/save"
+        put("$sr/0000000000000000/$odinProfile/0100BBBB00000000/b.bin")
+        for (k in listOf("../x", "../../01002C9022770000", "0100BBBB0000000/", "", "01002C9022770000/..", "ZZZZ2C9022770000", "01002C90227700000")) {
+            try { m.targetDirFor(LocalFs(), detected(sr), ItemKind.Save, k, "", ""); fail("accepted '$k'") }
+            catch (e: ModuleException) { }
+        }
+    }
+
+    @Test fun eden_target_dir_reuses_existing_dir_case_insensitively() {
+        val sr = "${tmp.root}/save"
+        put("$sr/0000000000000000/$odinProfile/0100bbbb00000000/b.bin")
+        assertEquals("$sr/0000000000000000/$odinProfile/0100bbbb00000000",
+            m.targetDirFor(LocalFs(), detected(sr), ItemKind.Save, "0100BBBB00000000", "", ""))
+    }
+
+    @Test fun eden_detect_then_saveItems_on_thor_layout() {
+        val root = tmp.newFolder("dev").path
+        val data = "$root/Android/data/dev.eden.eden_emulator/files"
+        fixture("thor").copyTo(File(data, "config/config.ini").also { it.parentFile.mkdirs() })
+        val mod = EdenModule(root)
+        val fs = LocalFs().apply { packages.add("dev.eden.eden_emulator") }
+        val d = mod.detect(fs, none)!!
+        assertEquals(data, d.dataRoot)
+        assertEquals("$root/Games/switch-saves/user/save", d.extraRoots["saveRoot"])
+        put("$root/Games/switch-saves/user/save/0000000000000000/$thorProfile/01002C9022770000/savedata/save000/data.dat")
+        val items = mod.saveItems(fs, d)
+        assertEquals(listOf("01002C9022770000"), items.map { it.gameKey })
+        assertEquals(listOf("savedata/save000/data.dat"), items[0].files)
     }
 
     private fun pfs0(vararg names: String): ByteArray {

@@ -19,4 +19,14 @@ class ContentUrisTest {
         assertEquals("/storage/emulated/0/x", Paths.canonical("/sdcard/x"))
         assertEquals("/storage/ABCD-1234/x", Paths.canonical("/storage/ABCD-1234/x"))
     }
+
+    @Test fun safe_segment_and_relative_helpers() {
+        Paths.requireSafeSegment("0100AAAA00000000"); Paths.requireSafeRelative("a/b.c/d")
+        for (b in listOf("", ".", "..", "a/b", "a\\b", "a\u0000b")) {
+            try { Paths.requireSafeSegment(b); fail("segment '$b'") } catch (e: ModuleException) { }
+        }
+        for (b in listOf("", "/a", "a/../b", "a//b", "..", "a/./b", "a\\b", "a\u0000")) {
+            try { Paths.requireSafeRelative(b); fail("relative '$b'") } catch (e: ModuleException) { }
+        }
+    }
 }

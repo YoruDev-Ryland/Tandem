@@ -5,7 +5,13 @@ import dev.emusync.app.model.InstalledGame
 import dev.emusync.app.model.ItemKind
 import dev.emusync.app.modules.*
 
-class EdenModule : EmulatorModule {
+/** [internalRoot] replaces /storage/emulated/0 (for tests). */
+class EdenModule(private val internalRoot: String = "/storage/emulated/0") : EmulatorModule {
+    private fun rooted(p: String): String {
+        val c = Paths.canonical(p)
+        return if (internalRoot != "/storage/emulated/0" && c.startsWith("/storage/emulated/0")) internalRoot + c.removePrefix("/storage/emulated/0") else c
+    }
+
     override val emulatorId = "eden"
     override val packages = listOf("dev.eden.eden_emulator", "dev.eden.eden_emulator.combo", "dev.igawa6.edenduo")
 
@@ -18,9 +24,9 @@ class EdenModule : EmulatorModule {
         val installed = fs.installedPackages()
         val pkg = settings.overrides["eden.package"]?.takeIf { it in installed }
             ?: packages.firstOrNull { it in installed } ?: return null
-        val root = Paths.canonical("/sdcard/Android/data/$pkg/files")
+        val root = rooted("/sdcard/Android/data/$pkg/files")
         val cfg = readConfig(fs, root)
-        return Detected(emulatorId, pkg, "", root, mapOf("saveRoot" to saveRoot(cfg, root), "nand" to nand(cfg, root)))
+        return Detected(emulatorId, pkg, "", root, mapOf("saveRoot" to saveRoot(cfg, root), "nand" to nand(cfg, root), "INTERNAL" to internalRoot))
     }
 
     /** Parsed Qt ini: plain keys, last-wins, flattened; keeps "Paths\x" and bare "x" forms. */
@@ -42,7 +48,7 @@ class EdenModule : EmulatorModule {
     }
 
     private fun cfgPath(cfg: Map<String, String>, key: String): String? =
-        (cfg["Paths\\$key"]?.takeIf { it.isNotEmpty() } ?: cfg[key]?.takeIf { it.isNotEmpty() })?.let { Paths.canonical(it) }
+        (cfg["Paths\\$key"]?.takeIf { it.isNotEmpty() } ?: cfg[key]?.takeIf { it.isNotEmpty() })?.let { rooted(it) }
 
     internal fun nand(cfg: Map<String, String>, root: String) = cfgPath(cfg, "nand_directory") ?: "$root/nand"
     internal fun saveRoot(cfg: Map<String, String>, root: String) =
@@ -81,7 +87,7 @@ class EdenModule : EmulatorModule {
         val cfg = readConfig(fs, d.dataRoot)
         val dirs = LinkedHashSet<String>()
         cfg.filterKeys { Regex("Paths\\\\gamedirs\\\\\\d+\\\\path").matches(it) }.values
-            .mapNotNullTo(dirs) { ContentUris.toPath(it) }
+            .mapNotNullTo(dirs) { ContentUris.toPath(it, d.extraRoots) }
         settings.romDirs.mapTo(dirs) { Paths.canonical(it) }
         for (dir in dirs) {
             for (f in fs.walk(dir)) {
@@ -130,10 +136,14 @@ class EdenModule : EmulatorModule {
     }
 
     override fun targetDirFor(fs: Fs, d: Detected, kind: ItemKind, gameKey: String, slot: String, core: String): String {
+        if (!hex16.matches(gameKey)) throw ModuleException("invalid Eden title id: '$gameKey'")
+        Paths.requireSafeSegment(gameKey)
         val base = "${saveRootOf(d)}/$userId"
         val profile = activeProfile(fs, d)?.substringAfterLast('/') ?: avatarProfile(fs, d)
             ?: throw ModuleException("no Eden profile yet; open Eden once")
-        return "$base/$profile/${gameKey.uppercase()}"
+        Paths.requireSafeSegment(profile)
+        val existing = fs.list("$base/$profile").firstOrNull { it.isDir && it.path.substringAfterLast('/').equals(gameKey, true) }
+        return existing?.path ?: "$base/$profile/${gameKey.uppercase()}"
     }
 
     private fun avatarProfile(fs: Fs, d: Detected): String? =

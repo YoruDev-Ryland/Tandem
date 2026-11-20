@@ -21,6 +21,17 @@ object Paths {
         p.startsWith("/sdcard/") -> "/storage/emulated/0/" + p.removePrefix("/sdcard/")
         else -> p
     }
+
+    fun requireSafeSegment(s: String) {
+        if (s.isEmpty() || s == "." || s == ".." || s.any { it == '/' || it == '\\' || it == '\u0000' })
+            throw ModuleException("unsafe path segment: '${s.replace('\u0000', '?')}'")
+    }
+
+    fun requireSafeRelative(p: String) {
+        if (p.startsWith("/")) throw ModuleException("absolute path not allowed: '$p'")
+        if (p.contains('\u0000')) throw ModuleException("unsafe path")
+        p.split('/').forEach { requireSafeSegment(it) }
+    }
 }
 
 interface EmulatorModule {
