@@ -6,6 +6,8 @@
   import { installInput } from "./lib/input";
   import SignIn from "./pages/SignIn.svelte";
   import Home from "./pages/Home.svelte";
+  import Games from "./pages/Games.svelte";
+  import Game from "./pages/Game.svelte";
   import AppTopBar from "./lib/ui/AppTopBar.svelte";
 
   const titles: Record<string, string> = {
@@ -50,6 +52,10 @@
   {#key key}
     {#if route.name === "home"}
       <Home />
+    {:else if route.name === "games"}
+      <Games />
+    {:else if route.name === "game"}
+      <Game />
     {:else}
     <main>
       {#if route.name === "not-found"}

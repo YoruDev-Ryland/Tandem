@@ -2,7 +2,8 @@
   import { getGames, getHome } from "../lib/api/endpoints";
   import { gamePath } from "../lib/api/paths";
   import { resource } from "../lib/api/resource.svelte";
-  import type { GameDeviceState, GameRow } from "../lib/api/types";
+  import type { GameRow } from "../lib/api/types";
+  import { deviceStateCopy, differing, otherDevices } from "../lib/deviceStates";
   import { emulatorName } from "../lib/emulators";
   import { onAction } from "../lib/input/actions";
   import { router } from "../lib/router.svelte";
@@ -52,27 +53,6 @@
     }),
   );
 
-  function differing(g: GameRow): string {
-    const names = g.devices.filter((d) => d.state === "Differs").map((d) => d.deviceName);
-    const list = names.length >= 2 ? names : g.devices.map((d) => d.deviceName);
-    return list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]} differ` : `${list[0] ?? "Saves"} differ`;
-  }
-
-  function others(g: GameRow): GameDeviceState[] {
-    return g.devices.filter((d) => d.state !== "Newest" && d.deviceId !== g.newestOnDeviceId);
-  }
-
-  function copy(d: GameDeviceState, g: GameRow): { text: string; tone: string } {
-    switch (d.state) {
-      case "Pending": return { text: `${d.deviceName}, on its way`, tone: "" };
-      case "Waiting": return { text: `${d.deviceName}, until ${emulatorName(g.emulatorId)} closes`, tone: "wait" };
-      case "Behind": return { text: `${d.deviceName}, older save`, tone: "ink2" };
-      case "NotInstalled": return { text: `not on ${d.deviceName}`, tone: "ink3" };
-      case "Differs": return { text: `${d.deviceName} differs`, tone: "fault" };
-      default: return { text: d.deviceName, tone: "" };
-    }
-  }
-
   const title = (g: GameRow) => g.displayName ?? g.gameKey;
 </script>
 
@@ -108,8 +88,8 @@
             <span class="ink3">—</span>
           {/if}
           <span class="others">
-            {#each others(g) as d, i (d.deviceId)}
-              {@const c = copy(d, g)}{#if i > 0}; {/if}<span class={c.tone || "ink2"}>{c.text}</span>
+            {#each otherDevices(g) as d, i (d.deviceId)}
+              {@const c = deviceStateCopy(d, g.emulatorId)}{#if i > 0}<span class="ink2">;&nbsp;</span>{/if}<span class={c.tone || "ink2"}>{c.text}</span>
             {/each}
           </span>
           <span class="end ink3">{g.newestUtc ? relativeTime(g.newestUtc) : "—"}</span>

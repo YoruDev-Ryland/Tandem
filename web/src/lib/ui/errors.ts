@@ -16,5 +16,5 @@ export function errorText(code: string): string {
 
 /** Copy for anything a request can throw: API errors by code, anything else as a lost connection. */
 export function describeError(error: unknown): string {
-  return error instanceof ApiError ? errorText(error.code) : "Can't reach the server. Check your connection and try again.";
+  return error instanceof ApiError ? errorText(error.status === 413 ? "too_large" : error.code) : "Can't reach the server. Check your connection and try again.";
 }

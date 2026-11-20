@@ -15,7 +15,7 @@ describe("App", () => {
 
   const signedIn = (devices: unknown[] = []) =>
     vi.fn(async (url: string) =>
-      json(200, url.endsWith("/v1/devices") ? devices : { id: "1", email: "a@b.c", isAdmin: false }));
+      json(200, url.includes("/v1/web/games") ? [] : url.endsWith("/v1/devices") ? devices : { id: "1", email: "a@b.c", isAdmin: false }));
 
   it("shows the page tabs and device status when signed in, and r1 moves to the next page", async () => {
     vi.stubGlobal("fetch", signedIn([{
