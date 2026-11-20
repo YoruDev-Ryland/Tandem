@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { getActivity, getDevices } from "../lib/api/endpoints";
+  import { getActivity, getDevices, getGames } from "../lib/api/endpoints";
   import { gamePath } from "../lib/api/paths";
   import { connectEvents } from "../lib/api/events";
   import { ApiError } from "../lib/api/http";
@@ -35,6 +35,10 @@
   }
 
   const devices = resource(getDevices, ["devices"]);
+  const games = resource(() => getGames(), ["saves"]);
+  const gameName = $derived(
+    (games.data ?? []).find((g) => g.gameKey === game && (!emulator || g.emulatorId === emulator))?.displayName ?? game,
+  );
 
   // Emulators that have appeared so far, kept across filter changes so a filtered view can still switch back.
   let seen = $state<string[]>([]);
@@ -74,6 +78,10 @@
     untrack(() => {
       const mine = ++seq;
       loaded = false;
+      items = [];
+      nextBefore = null;
+      error = undefined;
+      olderError = false;
       getActivity(filter()).then(
         (p) => {
           if (mine !== seq) return;
@@ -116,10 +124,12 @@
   $effect(() => connectEvents((t) => { if (t === "activity") refresh(); }, refresh));
 
   let loadingOlder = $state(false);
+  let olderError = $state(false);
   function older() {
     if (nextBefore === null || loadingOlder) return;
     const mine = seq;
     loadingOlder = true;
+    olderError = false;
     getActivity({ ...filter(), before: nextBefore }).then(
       (p) => {
         if (mine !== seq) return;
@@ -128,16 +138,19 @@
         nextBefore = p.nextBefore;
         note(p.items);
       },
-      fail,
+      () => { if (mine === seq) olderError = true; },
     ).finally(() => { loadingOlder = false; });
   }
 
   // The last row is the "Load older" button, so the cursor and A reach it.
   type Row = { kind: "item"; item: ActivityItem } | { kind: "older" };
-  const rows = $derived<Row[]>([...items.map((item) => ({ kind: "item" as const, item })), { kind: "older" }]);
+  const rows = $derived<Row[]>([
+    ...items.map((item) => ({ kind: "item" as const, item })),
+    ...(nextBefore === null ? [] : [{ kind: "older" as const }]),
+  ]);
 
   function open(r: Row) {
-    if (r.kind === "older") return older();
+    if (r.kind === "older") return loadingOlder ? undefined : older();
     const { emulatorId, gameKey } = r.item;
     if (emulatorId && gameKey) router.go(gamePath(emulatorId, gameKey));
   }
@@ -166,7 +179,7 @@
     <Field label="Emulator" options={emulatorOptions} bind:value={() => emulator, (v) => setFilter("emulator", v)} />
   </div>
   {#if game}
-    <p class="only"><span>Only {game}</span> <Button onclick={() => setFilter("game", "")}>Show all</Button></p>
+    <p class="only"><span>Only {gameName}</span> <Button onclick={() => setFilter("game", "")}>Show all</Button></p>
   {/if}
 
   {#if error && items.length === 0}
@@ -177,7 +190,7 @@
     <Empty text="No activity matches these filters." />
   {:else}
     <List {rows} columns="140px 160px minmax(0,1fr)" header={["Time", "Device", "What happened"]} bind:index onOpen={open}
-      key={(r) => (r.kind === "item" ? r.item.id : "older")}>
+      key={(r) => (r.kind === "item" ? r.item.id : "older")} disabled={(r) => r.kind === "older" && loadingOlder}>
       {#snippet row(r: Row)}
         {#if r.kind === "item"}
           {@const bad = r.item.kind.includes("conflict")}
@@ -186,12 +199,15 @@
           <span class="ellipsis" class:fault={bad} title={r.item.message}>{r.item.message}</span>
         {:else}
           <span></span><span></span>
-          <span class={nextBefore === null ? "ink3" : "strong"}>
-            {nextBefore === null ? "Nothing older" : loadingOlder ? "Loading…" : "Load older"}
-          </span>
+          <span class={loadingOlder ? "ink3" : "strong"}>{loadingOlder ? "Loading…" : "Load older"}</span>
         {/if}
       {/snippet}
     </List>
+    {#if olderError}
+      <p class="older-error" role="alert">Couldn't load older activity. Try again.</p>
+    {:else if nextBefore === null}
+      <p class="end-note">Nothing older</p>
+    {/if}
   {/if}
 </section>
 
@@ -230,6 +246,17 @@
   .mono {
     font: 400 13px "JetBrains Mono", ui-monospace, monospace;
     font-variant-numeric: tabular-nums;
+  }
+  .older-error,
+  .end-note {
+    margin: 0;
+    padding: 12px 16px;
+  }
+  .end-note {
+    color: var(--ink3);
+  }
+  .older-error {
+    color: var(--fault);
   }
   .loading {
     color: var(--ink3);

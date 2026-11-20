@@ -10,9 +10,11 @@
     onclick?: (e: MouseEvent) => void;
     onpointermove?: (e: PointerEvent) => void;
     onfocus?: () => void;
+    /** Looks and reads as unavailable (aria-disabled); the page ignores its activation. */
+    disabled?: boolean;
     children: Snippet;
   }
-  let { focused, columns, size = "list", onclick, onpointermove, onfocus, children }: Props = $props();
+  let { focused, columns, size = "list", onclick, onpointermove, onfocus, disabled = false, children }: Props = $props();
 
   let el: HTMLButtonElement;
   $effect(() => {
@@ -30,6 +32,7 @@
   class="row {size}"
   class:focused
   style:grid-template-columns={columns}
+  aria-disabled={disabled || undefined}
   aria-current={focused ? "true" : undefined}
   tabindex={focused ? 0 : -1}
   {onclick}

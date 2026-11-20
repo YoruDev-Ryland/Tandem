@@ -21,6 +21,8 @@
     active?: boolean;
     /** Stable identity for each row; defaults to the row's position. */
     key?: (row: T, i: number) => unknown;
+    /** Rows that read as unavailable (aria-disabled). */
+    disabled?: (row: T) => boolean;
   }
   let {
     rows,
@@ -33,6 +35,7 @@
     index = $bindable(0),
     active = true,
     key = (_r: T, i: number) => i,
+    disabled = () => false,
   }: Props = $props();
 
   const c = cursor(() => rows.length);
@@ -124,6 +127,7 @@
   {#each rows as r, i (key(r, i))}
     <Row
       focused={active && i === c.index}
+      disabled={disabled(r)}
       {columns}
       {size}
       onpointermove={(e) => pointerMove(e, i)}

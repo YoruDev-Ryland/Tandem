@@ -24,17 +24,21 @@ const item = (id: number, over: Partial<ActivityItem> = {}): ActivityItem => ({
 
 let pages: (url: URL) => ActivityPage;
 let calls: URL[];
+let fail: ((u: URL) => boolean) | undefined;
 
 describe("Activity", () => {
   beforeEach(() => {
     router.go("/activity");
     listeners.length = 0;
     calls = [];
+    fail = undefined;
     pages = () => ({ items: [item(3), item(2)], nextBefore: 2 });
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", vi.fn(async (u: string) => {
       const url = new URL(u, "http://x");
       if (url.pathname === "/v1/devices") return json(devices);
+      if (url.pathname === "/v1/web/games") return json([{ emulatorId: "melonds", gameKey: "nds/Pokemon - Platinum Version (USA)", displayName: "Pokémon Platinum" }]);
+      if (fail?.(url)) return new Response(JSON.stringify({ code: "boom" }), { status: 500, headers: { "Content-Type": "application/json" } });
       calls.push(url);
       return json(pages(url));
     }));
@@ -109,5 +113,51 @@ describe("Activity", () => {
     const msg = await screen.findByText("<b>x</b> clash");
     expect(msg.classList.contains("fault")).toBe(true);
     expect(screen.getByText("Server")).toBeTruthy();
+  });
+
+  it("keeps rows and shows an error in place when Load older fails", async () => {
+    render(Activity);
+    await screen.findByText("Event 3");
+    fail = (u) => u.searchParams.has("before");
+    const btn = screen.getByRole("button", { name: "Load older" });
+    await fireEvent.pointerMove(btn, { clientX: 5, clientY: 5 });
+    await fireEvent.click(btn);
+    expect((await screen.findByRole("alert")).textContent).toContain("Couldn't load older activity. Try again.");
+    expect(screen.getByText("Event 3")).toBeTruthy();
+  });
+
+  it("drops the old rows when filters change, and shows the error if that fetch fails", async () => {
+    render(Activity);
+    await screen.findByText("Event 3");
+    fail = (u) => u.searchParams.get("device") === "d-thor";
+    await fireEvent.change(screen.getByLabelText("Device"), { target: { value: "d-thor" } });
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.queryByText("Event 3")).toBeNull();
+  });
+
+  it("names the game by its display name", async () => {
+    router.go("/activity?emulator=melonds&game=" + encodeURIComponent("nds/Pokemon - Platinum Version (USA)"));
+    render(Activity);
+    expect(await screen.findByText("Only Pokémon Platinum")).toBeTruthy();
+  });
+
+  it("renders Nothing older as plain text, and disables Load older while it loads", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    pages = () => ({ items: [item(3)], nextBefore: 3 });
+    render(Activity);
+    await screen.findByText("Event 3");
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (u: string, i: RequestInit) => {
+      if (new URL(u, "http://x").searchParams.has("before")) { await gate; return json({ items: [], nextBefore: null }); }
+      return real(u, i);
+    }));
+    const btn = screen.getByRole("button", { name: "Load older" });
+    await fireEvent.pointerMove(btn, { clientX: 5, clientY: 5 });
+    await fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByRole("button", { name: /Loading/ }).getAttribute("aria-disabled")).toBe("true"));
+    release();
+    await screen.findByText("Nothing older");
+    expect(screen.getByText("Nothing older").closest("button")).toBeNull();
   });
 });
