@@ -82,6 +82,7 @@ class DeliveryApplier(
     private val pendingWhileRunning = HashMap<String, String>()   // delivery id -> emulatorId
     private val notifiedRunning = HashSet<String>()                // delivery ids already notified
     private val notifiedRecovery = HashSet<String>()               // marker keys whose failed recovery was notified
+    private val notifiedUndetected = HashSet<String>()             // marker keys postponed because detect failed
 
     // ---- public API ----
 
@@ -392,6 +393,8 @@ class DeliveryApplier(
                 }
                 if (pkg == null) {
                     log("${mk.storeKey}: ${mk.emulatorId} not detected; recovery of interrupted write postponed")
+                    if (notifiedUndetected.add(mk.storeKey))
+                        notifier("EmuSync couldn't finish restoring ${mk.name}; backup at ${mk.backupDir ?: "none"}")
                     continue
                 }
                 if (fs.isProcessAlive(pkg)) {
@@ -414,26 +417,41 @@ class DeliveryApplier(
     }
 
     /**
-     * Undoes only this apply's own changes, judged by current content: a file still holding what we wrote (or, for a
-     * file we deleted, still missing) is restored from the backup, or deleted when we created it. A file that is
-     * missing or still holds its backed-up content is left alone; so is any other content (the user changed it
-     * after the crash), which the engine later uploads as a local change. Returns true when every file is handled.
-     * [FsUnavailableException] propagates.
+     * Undoes only this apply's own changes, decided per item from current content. If any file holds content that
+     * is neither what we wrote nor its backup (or, for a file we deleted, reappeared with other content), the user
+     * played after the crash: every file is left exactly as it is and the engine later uploads the item as a local
+     * change. Otherwise a file still holding what we wrote (for a deleted extra: still missing) is restored from the
+     * backup, or deleted when we created it; missing or backup-content files are left. Returns true when the item is
+     * handled. [FsUnavailableException] propagates.
      */
     private fun undo(mk: ApplyMarker): Boolean {
         val errors = mutableListOf<String>()
+        val ours = ArrayList<Pair<String, MarkerFile>>()
+        var userChanged = false
         for ((abs, f) in mk.files.toSortedMap()) {
             try {
                 val exists = fs.exists(abs)
                 val current = if (exists) sha(abs).first else null
-                val ours = if (f.deliveredHash == null) !exists else current == f.deliveredHash
                 when {
-                    ours && f.backupRel != null ->
-                        if (mk.backupDir == null) errors += "$abs: no backup dir" else fs.copy("${mk.backupDir}/${f.backupRel}", abs)
-                    ours -> if (exists && !fs.delete(abs) && fs.exists(abs)) errors += "$abs: not deleted"
+                    if (f.deliveredHash == null) !exists else current == f.deliveredHash -> ours += abs to f
                     !exists || current == f.backupHash -> {}
-                    else -> log("$abs: changed after the interrupted write of ${mk.deliveryId}; left alone")
+                    else -> userChanged = true
                 }
+            } catch (e: FsUnavailableException) {
+                throw e
+            } catch (e: Exception) {
+                errors += "$abs: ${e.message}"
+            }
+        }
+        if (errors.isEmpty() && userChanged) {
+            log("${mk.storeKey}: user changed ${mk.name} after an interrupted apply; keeping their files")
+            return true
+        }
+        if (errors.isEmpty()) for ((abs, f) in ours) {
+            try {
+                if (f.backupRel != null) {
+                    if (mk.backupDir == null) errors += "$abs: no backup dir" else fs.copy("${mk.backupDir}/${f.backupRel}", abs)
+                } else if (!fs.delete(abs) && fs.exists(abs)) errors += "$abs: not deleted"
             } catch (e: FsUnavailableException) {
                 throw e
             } catch (e: Exception) {

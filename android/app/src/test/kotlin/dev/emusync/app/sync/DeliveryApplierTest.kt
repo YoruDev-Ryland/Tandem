@@ -725,16 +725,17 @@ class DeliveryApplierTest {
     }
 
     @Test fun recovery_deletes_only_unchanged_files_we_created() = runBlocking {
-        put("saves/G1/b.sav", "new-b"); put("saves/G1/c.sav", "user-c")
+        put("saves/G1/b.sav", "new-b"); put("saves/G1/keep.sav", "k")
+        backupFile("keep.sav", "k")
         crashMarker(mapOf(
-            "b.sav" to MarkerFile(h("new-b"), null, null),   // ours, unchanged -> deleted
-            "c.sav" to MarkerFile(h("new-c"), null, null),   // user saved over it -> kept
-            "d.sav" to MarkerFile(h("new-d"), null, null),   // never written -> nothing to do
+            "b.sav" to MarkerFile(h("new-b"), null, null),           // ours, unchanged -> deleted
+            "d.sav" to MarkerFile(h("new-d"), null, null),           // never written -> nothing to do
+            "keep.sav" to MarkerFile(h("new-k"), "keep.sav", h("k")), // not yet overwritten -> left
         ))
         applier().applyAll()
         assertFalse(File(root, "saves/G1/b.sav").exists())
-        assertEquals("user-c", read("saves/G1/c.sav"))
         assertFalse(File(root, "saves/G1/d.sav").exists())
+        assertEquals("k", read("saves/G1/keep.sav"))
         assertTrue(store.applyMarkers().isEmpty())
     }
 
@@ -750,6 +751,35 @@ class DeliveryApplierTest {
         val det = module.detect(fs(), none)!!
         assertEquals(SaveUploadStatus.Accepted, engine.upload(module, det, module.saveItems(fs(), det)[0]))
         assertEquals(listOf(h("played")), api.saves.single().manifest.map { it.hash })
+    }
+
+    @Test fun recovery_keeps_whole_item_when_any_file_user_changed() = runBlocking {
+        put("saves/G1/a.sav", "new-a"); put("saves/G1/b.sav", "played-b"); put("saves/G1/c.sav", "new-c")
+        backupFile("a.sav", "old-a"); backupFile("b.sav", "old-b"); backupFile("x.sav", "extra")
+        crashMarker(mapOf(
+            "a.sav" to MarkerFile(h("new-a"), "a.sav", h("old-a")),   // delivered content
+            "b.sav" to MarkerFile(h("new-b"), "b.sav", h("old-b")),   // user changed after the crash
+            "c.sav" to MarkerFile(h("new-c"), null, null),            // we created it
+            "x.sav" to MarkerFile(null, "x.sav", h("extra")),         // we deleted it
+        ))
+        applier().applyAll()
+        assertEquals("new-a", read("saves/G1/a.sav"))
+        assertEquals("played-b", read("saves/G1/b.sav"))
+        assertEquals("new-c", read("saves/G1/c.sav"))
+        assertFalse(File(root, "saves/G1/x.sav").exists())
+        assertTrue(store.applyMarkers().isEmpty())
+        assertTrue(logs.any { it.contains("user changed Game G1 after an interrupted apply; keeping their files") })
+        assertTrue(notes.none { it.startsWith("Restore failed") })
+    }
+
+    @Test fun undetectable_emulator_with_live_marker_notifies_once() = runBlocking {
+        put("saves/G1/a.sav", "new"); backupFile("a.sav", "old")
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
+        val a = applier(LocalFs())
+        a.applyAll(); a.applyAll()
+        val dir = File(backupRoot, "crash").path
+        assertEquals(listOf("EmuSync couldn't finish restoring Game G1; backup at $dir"), notes)
+        assertEquals(1, store.applyMarkers().size)
     }
 
     @Test fun recovery_skipped_when_detect_fails() = runBlocking {
