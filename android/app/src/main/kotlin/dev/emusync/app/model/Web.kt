@@ -17,13 +17,15 @@ import kotlinx.serialization.Serializable
     val emulatorId: String,
     val gameKey: String,
     val displayName: String? = null,
-    val installedOn: List<String> = emptyList(),
+    val installedOn: List<String>,
     val saveItemId: String? = null,
     val newestOnDeviceId: String? = null,
     val newestUtc: String? = null,
-    val stateCount: Int = 0,
-    val openConflict: Boolean = false,
+    val stateCount: Int,
+    val openConflict: Boolean,
+    // added by the web-UI server work; absent on older servers
     val devices: List<GameDeviceState> = emptyList(),
+    // added by the web-UI server work; absent on older servers
     val newestOnDeviceName: String? = null,
 )
 
@@ -33,27 +35,28 @@ import kotlinx.serialization.Serializable
     val deviceName: String? = null,
     val receivedUtc: String,
     val totalSize: Long,
-    val core: String = "",
+    val core: String,
     val variant: String? = null,
-    val pinned: Boolean = false,
+    val pinned: Boolean,
     val conflictReason: ConflictReason? = null,
-    val isHead: Boolean = false,
-    val resolved: Boolean = false,
-    val manifestHash: String,
-    val fileCount: Int,
+    val isHead: Boolean,
+    val resolved: Boolean,
+    // added by the web-UI server work; absent on older servers
+    val manifestHash: String = "",
+    val fileCount: Int = 0,
 )
 
 @Serializable data class SaveItemDetail(
     val itemId: String,
     val kind: ItemKind,
-    val slot: String = "",
-    val core: String = "",
+    val slot: String,
+    val core: String,
     val headVersionId: String? = null,
-    val openConflict: Boolean = false,
-    val versions: List<VersionSummary> = emptyList(),
+    val openConflict: Boolean,
+    val versions: List<VersionSummary>,
 )
 
-@Serializable data class GameDetail(val row: GameRow, val items: List<SaveItemDetail> = emptyList())
+@Serializable data class GameDetail(val row: GameRow, val items: List<SaveItemDetail>)
 
 @Serializable data class ConflictSide(
     val versionId: String,
@@ -63,7 +66,7 @@ import kotlinx.serialization.Serializable
     val totalSize: Long,
     val fileCount: Int,
     val manifestHash: String,
-    val isHead: Boolean = false,
+    val isHead: Boolean,
 )
 
 @Serializable data class ConflictRow(
@@ -75,7 +78,7 @@ import kotlinx.serialization.Serializable
     val slot: String? = null,
     val core: String? = null,
     val reason: ConflictReason,
-    val sides: List<ConflictSide> = emptyList(),
+    val sides: List<ConflictSide>,
 )
 
 @Serializable data class ResolveConflictRequest(
@@ -95,25 +98,25 @@ import kotlinx.serialization.Serializable
 @Serializable data class GroupRow(
     val id: String,
     val name: String,
-    val members: List<DeviceRef> = emptyList(),
+    val members: List<DeviceRef>,
     val headVersionId: String? = null,
-    val openConflict: Boolean = false,
+    val openConflict: Boolean,
 )
 
 @Serializable data class SoloRow(
     val device: DeviceRef,
     val bundleId: String,
     val headVersionId: String? = null,
-    val openConflict: Boolean = false,
+    val openConflict: Boolean,
 )
 
 @Serializable data class EmulatorConfigRow(
     val emulatorId: String,
-    val groups: List<GroupRow> = emptyList(),
-    val solo: List<SoloRow> = emptyList(),
+    val groups: List<GroupRow>,
+    val solo: List<SoloRow>,
 )
 
-@Serializable data class ConfigOverview(val emulators: List<EmulatorConfigRow> = emptyList())
+@Serializable data class ConfigOverview(val emulators: List<EmulatorConfigRow>)
 
 @Serializable data class JoinGroupRequest(val deviceId: String)
 
@@ -130,11 +133,11 @@ import kotlinx.serialization.Serializable
     val kind: SetupStepKind,
     val emulatorId: String,
     val label: String,
-    val done: Boolean = false,
+    val done: Boolean,
     val detail: String? = null,
 )
 
-@Serializable data class SetupChecklist(val steps: List<SetupStep> = emptyList())
+@Serializable data class SetupChecklist(val steps: List<SetupStep>)
 
 @Serializable data class ActivityItem(
     val id: Long,
@@ -147,7 +150,7 @@ import kotlinx.serialization.Serializable
     val gameKey: String? = null,
 )
 
-@Serializable data class ActivityPage(val items: List<ActivityItem> = emptyList(), val nextBefore: Long? = null)
+@Serializable data class ActivityPage(val items: List<ActivityItem>, val nextBefore: Long? = null)
 
 @Serializable data class DeviceSummary(
     val id: String,
@@ -155,6 +158,7 @@ import kotlinx.serialization.Serializable
     val platform: String,
     val lastSeenUtc: String? = null,
     val shizukuOk: Boolean? = null,
-    val isCurrent: Boolean = false,
+    val isCurrent: Boolean,
+    // added by the web-UI server work; absent on older servers
     val runningEmulators: List<String> = emptyList(),
 )

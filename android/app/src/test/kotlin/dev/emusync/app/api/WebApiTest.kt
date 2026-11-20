@@ -52,7 +52,7 @@ class WebApiTest {
     }
 
     @Test fun game_encodes_key_segments_keeping_slash() = runBlocking {
-        ok("""{"row":{"emulatorId":"melonds","gameKey":"k","devices":[]},"items":[
+        ok("""{"row":{"emulatorId":"melonds","gameKey":"k","installedOn":[],"stateCount":0,"openConflict":false,"devices":[]},"items":[
             {"itemId":"i1","kind":"Save","slot":"","core":"","headVersionId":"v1","openConflict":false,"versions":[
               {"id":"v1","seq":3,"deviceName":"Deck","receivedUtc":"2026-01-02T03:04:05+00:00","totalSize":2048,
                "core":"","variant":null,"pinned":true,"conflictReason":"FirstSync","isHead":true,"resolved":false,
@@ -70,7 +70,7 @@ class WebApiTest {
     }
 
     @Test fun game_encodes_reserved_characters_per_segment() = runBlocking {
-        ok("""{"row":{"emulatorId":"e","gameKey":"k"},"items":[]}""")
+        ok("""{"row":{"emulatorId":"e","gameKey":"k","installedOn":[],"stateCount":0,"openConflict":false,"devices":[]},"items":[]}""")
         client().game("e", "a b/c#d?e%f/ü")
         assertEquals("/v1/web/games/e/a%20b/c%23d%3Fe%25f/%C3%BC", server.takeRequest().target)
     }
@@ -213,6 +213,18 @@ class WebApiTest {
             assertEquals(409, e.status)
             assertEquals("conflict_open", e.code)
             assertEquals("Resolve the conflict first.", e.message)
+        }
+        Unit
+    }
+
+    @Test fun payload_missing_a_required_field_fails_instead_of_defaulting() = runBlocking {
+        // "openConflict" is required on the server; a rename must not decode silently as false.
+        ok("""[{"emulatorId":"e","gameKey":"k","installedOn":[],"stateCount":0,"devices":[]}]""")
+        try {
+            client().games(null)
+            fail("expected a SerializationException")
+        } catch (e: kotlinx.serialization.SerializationException) {
+            assertTrue(e.message, e.message!!.contains("openConflict"))
         }
         Unit
     }
