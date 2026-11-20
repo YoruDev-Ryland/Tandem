@@ -193,15 +193,20 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         }
         val files = fs.walk(root).filter { !it.isDir }
         val matches = files.filter { name(it.path).equals(fileName, true) }
-        // The sender's core folder means nothing here: this device may use another core for the game.
-        val preferred = if (sorted) localCoreDir(fs, d, root, base, files) else root
+        // A state only works with the core that made it, and its key includes that core: it keeps its own core
+        // folder. A save's key has no core, and this device may use another core for the game.
+        val preferred = when {
+            !sorted -> root
+            kind == ItemKind.State -> if (core.isNotEmpty()) "$root/$core" else root
+            else -> localCoreDir(fs, d, root, base, files)
+        }
         if (matches.any { it.path.substringBeforeLast('/') == preferred }) return preferred
         val existing = matches.firstOrNull()
         return existing?.path?.substringBeforeLast('/') ?: preferred
     }
 
     /**
-     * Where a sorted save or state for [base] goes on this device: (1) the core this device's playlists give the
+     * Where a sorted save (never a state) for [base] goes on this device: (1) the core this device's playlists give the
      * game (an entry's core, or its playlist's default), reusing an existing folder's spelling; (2) the core folder
      * under [root] holding the most files; (3) [root] itself (unsorted).
      */

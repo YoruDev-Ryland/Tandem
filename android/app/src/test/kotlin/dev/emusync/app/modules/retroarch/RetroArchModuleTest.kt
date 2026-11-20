@@ -129,7 +129,9 @@ class RetroArchModuleTest {
         assertEquals(ra("saves"), mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", ""))
         put(ra("saves/Gambatte/Game.srm"))
         assertEquals(ra("saves/Gambatte"), mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "mGBA"))
-        assertEquals(ra("states"), mod.targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "auto", "mGBA"))
+        // a state keeps its own core's folder (its key includes the core)
+        assertEquals(ra("states/mGBA"), mod.targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "auto", "mGBA"))
+        assertEquals(ra("states"), mod.targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "auto", ""))
         assertThrows(ModuleException::class.java) { mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "..") }
         assertThrows(ModuleException::class.java) { mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/a/b", "srm", "") }
     }
@@ -143,7 +145,8 @@ class RetroArchModuleTest {
             {"path":"/x/Game.zip#Game (USA).gba","core_path":"/data/cores/mgba_libretro_android.so","core_name":"Nintendo - Game Boy Advance (mGBA)"}]}""")
         val d = detect()
         assertEquals(ra("saves/mGBA"), m().targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game (USA)", "srm", "Gambatte"))
-        assertEquals(ra("states/mGBA"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/Game (USA)", "", "Gambatte"))
+        // states ignore the playlist core: always the folder of the state's own core
+        assertEquals(ra("states/Gambatte"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/Game (USA)", "", "Gambatte"))
     }
 
     @Test fun playlist_core_reuses_existing_folder_spelling_and_playlist_default() {
@@ -161,7 +164,7 @@ class RetroArchModuleTest {
         put(ra("playlists/builtin/content_history.lpl"), """{"items":[{"path":"/x/Game.gba","core_path":"DETECT","core_name":"DETECT"}]}""")
         val d = detect()
         assertEquals(ra("saves/Gambatte"), m().targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "mGBA"))
-        assertEquals(ra("states/Snes9x"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "1", "mGBA"))
+        assertEquals(ra("states/mGBA"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "1", "mGBA"))
     }
 
     @Test fun unsorted_target_is_the_root() {
@@ -194,7 +197,7 @@ class RetroArchModuleTest {
         val s = m().saveItems(fs(), detect()).single()
         assertEquals("12", s.slot)
         val d = detect()
-        assertEquals(ra("states/mGBA"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "12", "Gambatte"))
+        assertEquals(ra("states/mGBA"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "12", "mGBA"))
         assertThrows(ModuleException::class.java) { m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "../x", "mGBA") }
         assertThrows(ModuleException::class.java) { m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "1a", "mGBA") }
     }
