@@ -483,8 +483,16 @@ public class SaveTests
         Assert.Equal(s3.VersionId, i3.HeadVersionId);
         Assert.True(i3.OpenConflict);
         Assert.False((await Versions(factory, s3.ItemId)).Single(v => v.Id == concurrent.VersionId).Resolved);
-        // Every version is kept.
-        Assert.Equal(2, (await Versions(factory, s1.ItemId)).Count);
+        // Every version is kept, and the displaced server heads become pinned, labelled variants.
+        var v1 = await Versions(factory, s1.ItemId);
+        Assert.Equal(2, v1.Count);
+        var displaced1 = v1.Single(v => v.Id == s1.VersionId);
+        Assert.Equal("Test device 2026-11-19 12:00", displaced1.Variant);
+        Assert.True(displaced1.Pinned);
+        var displaced2 = (await Versions(factory, s2.ItemId)).Single(v => v.Id == s2.VersionId);
+        Assert.Equal("Test device 2026-11-19 12:00", displaced2.Variant);
+        Assert.True(displaced2.Pinned);
+        Assert.Null(v1.Single(v => v.Id == d1.VersionId).Variant);
         Assert.Equal(
             new HashSet<object> { new SaveHeadChanged(bKey.UserId, s1.ItemId, d1.VersionId), new SaveHeadChanged(bKey.UserId, s2.ItemId, d2.VersionId) },
             seen.ToHashSet());

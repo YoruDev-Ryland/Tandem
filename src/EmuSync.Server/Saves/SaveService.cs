@@ -169,7 +169,12 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 if (mine.Count == 0) continue;
 
                 if (request.Choice == FirstSyncChoice.UseDevice)
+                {
+                    // The displaced server head stays as a pinned, labelled variant so the choice is reversible.
+                    if (item.HeadVersionId is Guid oldHead && mine.All(v => v.Id != oldHead))
+                        await LabelVariantsAsync([await db.SaveVersions.SingleAsync(v => v.Id == oldHead, ct)], ct);
                     item.HeadVersionId = mine[^1].Id; // the device's most recent upload
+                }
                 foreach (var v in mine) v.Resolved = true;
                 item.OpenConflict = open.Count > mine.Count;
                 raised.Add(new SaveHeadChanged(userId, item.Id, item.HeadVersionId!.Value));
