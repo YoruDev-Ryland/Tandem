@@ -236,15 +236,52 @@ class ConflictsScreenTest {
         assertEquals("Thu, Nov 19, 21:48", e.columns[0].received)
     }
 
-    @Test fun twoVersionsFromThisDeviceAloneAreNotAConflictWithAnotherDevice() {
-        val r = conflict("i1", "A", sides = listOf(side(THOR, "Thor", true, version = "a"), side(THOR, "Thor", false, version = "b")))
-        assertTrue(ui(listOf(r)).entries.isEmpty())
+    /** A conflict against this device's own older upload (the head), with two newer uploads of its own open. */
+    private val selfOnly = conflict("i1", "Pokémon Brilliant Diamond", ConflictReason.Concurrent, sides = listOf(
+        side(THOR, "Thor", true, version = "head", received = "2026-11-17T10:12:00+00:00"),
+        side(THOR, "Thor", false, version = "mid", received = "2026-11-18T08:00:00+00:00"),
+        side(THOR, "Thor", false, version = "newest", received = "2026-11-19T21:48:00+00:00"),
+    ))
+
+    @Test fun aConflictWithOnlyThisDevicesOwnSavesIsListed() {
+        val e = ui(listOf(selfOnly)).entries.single()
+        assertEquals("This Thor has two different saves for this game. Both are safe on the server.", e.subtitle)
+        assertEquals(listOf("This Thor", "Earlier save"), e.columns.map { it.title })
+        assertEquals(listOf("Thu, Nov 19, 21:48", "Tue, Nov 17, 10:12"), e.columns.map { it.received })
+        assertEquals(null, e.otherId)
     }
 
-    @Test fun serverTimesWithAnOffsetAndSevenFractionDigitsRead() {
-        assertEquals("Thu, Nov 19, 21:48", formatWhen("2026-11-19T21:48:00+00:00", ZoneOffset.UTC))
-        assertEquals("Thu, Nov 19, 21:48", formatWhen("2026-11-19T21:48:00.1234567+00:00", ZoneOffset.UTC))
-        assertEquals("Thu, Nov 19, 21:48", formatWhen("2026-11-19T22:48:00+01:00", ZoneOffset.UTC))
+    @Test fun aSelfOnlyConflictIsDecidedWithTheButtons() {
+        val sent = mutableListOf<ResolveConflictRequest>()
+        show(ui(listOf(selfOnly)), ConflictsActions(resolve = { _, r -> sent += r }))
+        compose.onNodeWithText("Keep the earlier save").assertExists()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        compose.key(KeyEvent.KEYCODE_BUTTON_X)
+        compose.key(KeyEvent.KEYCODE_BUTTON_Y)
+        assertEquals(
+            listOf(
+                ResolveConflictRequest(ResolveChoice.KeepVersion, "newest", null),
+                ResolveConflictRequest(ResolveChoice.KeepVersion, "head", null),
+                ResolveConflictRequest(ResolveChoice.KeepBoth, "newest", null),
+            ),
+            sent,
+        )
+    }
+
+    @Test fun bulkPlanSettlesTheHeadDevicesOwnOlderOpenVersions() {
+        // Thor's newest is the head, but an older Thor upload is still open in the conflict, as is Odin's.
+        val r = conflict("i1", "A", sides = listOf(
+            side(THOR, "Thor", false, version = "thor-old", received = "2026-11-17T08:00:00+00:00"),
+            side(THOR, "Thor", true, version = "thor-head", received = "2026-11-19T21:48:00+00:00"),
+            side(ODIN, "Odin 3", false, version = "odin", received = "2026-11-18T10:12:00+00:00"),
+        ))
+        assertEquals(
+            listOf(
+                BulkFirstSyncRequest(THOR, FirstSyncChoice.UseServer, listOf("i1")),
+                BulkFirstSyncRequest(ODIN, FirstSyncChoice.UseServer, listOf("i1")),
+            ),
+            bulkPlan(listOf(r), THOR),
+        )
     }
 
     @Test fun bulkPlanNamesEachDeviceAndItemOnceWhenADeviceHasSeveralVersions() {

@@ -47,9 +47,12 @@ data class ConflictEntry(
     val running: Boolean,
     /** "This Thor" */
     val me: String,
-    /** The first other side's device, "Odin 3". */
+    /** The first other side's device, "Odin 3"; "the earlier save" when every side is this device's. */
     val other: String,
+    /** The other device; null when the conflict is with this device's own earlier save. */
     val otherId: String?,
+    /** The X hint: "Keep Odin 3's", or "Keep the earlier save". */
+    val keepOtherLabel: String,
     val subtitle: String,
     val columns: List<SideColumn>,
     val keepMine: ResolveConflictRequest,
@@ -128,30 +131,33 @@ fun conflictsUi(
     zone: ZoneId = ZoneId.systemDefault(),
 ): ConflictsUi {
     val mine = if (deviceId == null) emptyList() else rows.value.orEmpty().filter { r ->
-        val devices = deviceSides(r.sides)
-        devices.size >= 2 && devices.any { it.deviceId == deviceId }
+        // Also a conflict whose sides are all this device's: its own older upload is the head (it uploaded again on an
+        // old base after a resolve). Hidden, it could never be settled.
+        r.sides.size >= 2 && r.sides.any { it.deviceId == deviceId }
     }
     val entries = mine.map { r ->
         val devices = deviceSides(r.sides)
         val me = devices.first { it.deviceId == deviceId }
         val others = devices.filter { it !== me }
         val meName = "This ${me.deviceName ?: "device"}"
-        val other = others.first()
         val column = { title: String, s: ConflictSide ->
             SideColumn(title, formatWhen(s.receivedUtc, zone), "${formatSize(s.totalSize)} · ${files(s.fileCount)}")
         }
         val emulator = emulatorName(r.emulatorId)
+        if (others.isEmpty()) return@map selfOnly(r, me, meName, emulator, column, running)
+        val other = others.first()
         ConflictEntry(
             itemId = r.itemId,
             emulatorId = r.emulatorId,
             emulator = emulator,
             game = r.displayName ?: r.gameKey,
-            meta = if (r.kind == ItemKind.State) "$emulator · ${"Slot ${r.slot.orEmpty()}".trim()}" else emulator,
+            meta = meta(r, emulator),
             reason = r.reason,
             running = r.emulatorId in running,
             me = meName,
             other = name(other),
             otherId = other.deviceId,
+            keepOtherLabel = "Keep ${name(other)}'s",
             subtitle = when (r.reason) {
                 ConflictReason.FirstSync ->
                     "${join(listOf(meName) + others.map { "the ${name(it)}" })} each had a save before they first synced. " +
@@ -184,6 +190,42 @@ fun conflictsUi(
     return ConflictsUi(signedIn, entries, loaded = v != null, error = rows.error, bulkMine = bulkMine, bulkOther = bulkOther)
 }
 
+private fun meta(r: ConflictRow, emulator: String) =
+    if (r.kind == ItemKind.State) "$emulator · ${"Slot ${r.slot.orEmpty()}".trim()}" else emulator
+
+/**
+ * A conflict between this device's newest upload ([me]) and its own earlier save: the head if that is one of its
+ * uploads, else its latest other open version. X keeps the earlier one; Y keeps both and lets the server name the copy.
+ */
+private fun selfOnly(
+    r: ConflictRow,
+    me: ConflictSide,
+    meName: String,
+    emulator: String,
+    column: (String, ConflictSide) -> SideColumn,
+    running: Set<String>,
+): ConflictEntry {
+    val earlier = r.sides.firstOrNull { it.isHead && it !== me } ?: r.sides.last { it !== me }
+    return ConflictEntry(
+        itemId = r.itemId,
+        emulatorId = r.emulatorId,
+        emulator = emulator,
+        game = r.displayName ?: r.gameKey,
+        meta = meta(r, emulator),
+        reason = r.reason,
+        running = r.emulatorId in running,
+        me = meName,
+        other = "the earlier save",
+        otherId = null,
+        keepOtherLabel = "Keep the earlier save",
+        subtitle = "$meName has two different saves for this game. Both are safe on the server.",
+        columns = listOf(column(meName, me), column("Earlier save", earlier)),
+        keepMine = ResolveConflictRequest(ResolveChoice.KeepVersion, me.versionId, null),
+        keepOther = ResolveConflictRequest(ResolveChoice.KeepVersion, earlier.versionId, null),
+        keepBoth = ResolveConflictRequest(ResolveChoice.KeepBoth, me.versionId, null),
+    )
+}
+
 private fun bulk(label: String, who: String, n: Int, calls: List<BulkFirstSyncRequest>) = BulkChoice(
     label = label,
     question = "Use $who's saves for ${games(n)}?",
@@ -209,6 +251,8 @@ fun bulkPlan(rows: List<ConflictRow>, deviceId: String): List<BulkFirstSyncReque
         // The device's newest version is the one kept; a device with any upload that is not current is set aside.
         val mine = deviceSides(r.sides).firstOrNull { it.deviceId == deviceId } ?: continue
         if (!mine.isHead) add(deviceId, FirstSyncChoice.UseDevice, r.itemId)
+        // Its newest is already current, but an older upload of its own is still open: set that aside too.
+        else if (r.sides.any { it.deviceId == deviceId && !it.isHead }) add(deviceId, FirstSyncChoice.UseServer, r.itemId)
         for (o in r.sides) {
             val id = o.deviceId ?: continue
             if (id != deviceId && !o.isHead) add(id, FirstSyncChoice.UseServer, r.itemId)

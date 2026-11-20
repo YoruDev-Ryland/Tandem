@@ -98,7 +98,7 @@ fun ConflictsScreen(
         open != null -> listOf(Hint(Action.A, open.confirm, ::confirm), Hint(Action.B, "Cancel") { sheet = null })
         focused != null -> listOf(
             Hint(Action.A, "Keep ${focused.me.replaceFirstChar { it.lowercase() }}'s", ::keepMine),
-            Hint(Action.X, "Keep ${focused.other}'s") { decide { it.keepOther } },
+            Hint(Action.X, focused.keepOtherLabel) { decide { it.keepOther } },
             Hint(Action.Y, "Keep both") { decide { it.keepBoth } },
             Hint(Action.B, "Back", actions.back),
         )
