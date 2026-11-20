@@ -193,7 +193,7 @@
       key={(r) => (r.kind === "item" ? r.item.id : "older")} disabled={(r) => r.kind === "older" && loadingOlder}>
       {#snippet row(r: Row)}
         {#if r.kind === "item"}
-          {@const bad = r.item.kind.includes("conflict")}
+          {@const bad = r.item.kind === "conflict_opened"}
           <span class="mono ink3">{time(r.item.utc)}</span>
           <span class="ink2 ellipsis sm-hide">{r.item.deviceName ?? "Server"}</span>
           <span class="ellipsis" class:fault={bad} title={r.item.message}>{r.item.message}</span>

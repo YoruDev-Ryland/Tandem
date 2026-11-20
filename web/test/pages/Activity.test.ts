@@ -107,12 +107,22 @@ describe("Activity", () => {
     expect(await screen.findByText("No activity matches these filters.")).toBeTruthy();
   });
 
-  it("shows Server for deviceless rows, conflicts in fault, and message as text", async () => {
-    pages = () => ({ items: [item(2, { kind: "conflict.opened", deviceName: null, message: "<b>x</b> clash" })], nextBefore: null });
+  it("shows Server for deviceless rows, an opened conflict in fault, and message as text", async () => {
+    pages = () => ({ items: [item(2, { kind: "conflict_opened", deviceName: null, message: "<b>x</b> clash" })], nextBefore: null });
     render(Activity);
     const msg = await screen.findByText("<b>x</b> clash");
     expect(msg.classList.contains("fault")).toBe(true);
     expect(screen.getByText("Server")).toBeTruthy();
+  });
+
+  it("paints only conflict_opened in fault, never a resolved conflict", async () => {
+    pages = () => ({ items: [
+      item(3, { kind: "conflict_opened", message: "Opened" }),
+      item(2, { kind: "conflict_resolved", message: "Resolved" }),
+    ], nextBefore: null });
+    render(Activity);
+    expect((await screen.findByText("Opened")).classList.contains("fault")).toBe(true);
+    expect(screen.getByText("Resolved").classList.contains("fault")).toBe(false);
   });
 
   it("keeps rows and shows an error in place when Load older fails", async () => {
