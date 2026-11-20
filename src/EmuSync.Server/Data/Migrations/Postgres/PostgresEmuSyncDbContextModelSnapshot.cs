@@ -263,6 +263,9 @@ namespace EmuSync.Server.Data.Migrations.Postgres
                     b.Property<DateTimeOffset?>("RevokedUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTimeOffset?>("ShizukuOffNotifiedUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTimeOffset?>("ShizukuOffSinceUtc")
                         .HasColumnType("timestamp with time zone");
 

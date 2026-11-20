@@ -6,6 +6,9 @@ public sealed record SaveHeadChanged(Guid UserId, Guid ItemId, Guid HeadVersionI
 
 public sealed record ConflictOpened(Guid UserId, Guid ItemId, Guid VersionId, EmuSync.Protocol.ConflictReason Reason);
 
+/// <summary>A config upload opened a NEW conflict on a bundle (not raised for a retry of an existing one).</summary>
+public sealed record ConfigConflictOpened(Guid UserId, Guid BundleId, Guid VersionId, string EmulatorId, Guid DeviceId);
+
 public sealed record DeliveryFailed(Guid UserId, Guid DeviceId, Guid DeliveryId, string? Detail);
 
 /// <summary>A config bundle head, conflict, membership or applied version changed for the user.</summary>

@@ -25,6 +25,9 @@ public sealed class ServerOptions
     /// <summary>Runs the daily off-server backup schedule (on in production; the test factory turns it off).</summary>
     public bool EnableBackups { get; set; } = true;
 
+    /// <summary>Runs the 5-minute Shizuku-off check in the background (on in production; the test factory turns it off).</summary>
+    public bool EnableNotifyChecks { get; set; } = true;
+
     public string ServerName
     {
         get => _serverName;

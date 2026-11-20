@@ -10,6 +10,7 @@ using EmuSync.Server.Events;
 using EmuSync.Server.Vault;
 using EmuSync.Server.Web;
 using EmuSync.Server.Http;
+using EmuSync.Server.Notify;
 using EmuSync.Server.Pairing;
 using EmuSync.Server.Saves;
 using EmuSync.Server.Retention;
@@ -51,6 +52,10 @@ public static class ServerSetup
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Pruner>());
         builder.Services.AddSingleton<BackupService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<BackupService>());
+        builder.Services.AddHttpClient(Notifier.ClientName, c => c.Timeout = Notifier.RequestTimeout);
+        builder.Services.AddSingleton<INotifier, Notifier>();
+        builder.Services.AddSingleton<NotifyTriggers>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<NotifyTriggers>());
     }
 
     /// <summary>Builds the pipeline and maps endpoints. Each feature adds one line here.</summary>
@@ -81,6 +86,7 @@ public static class ServerSetup
         app.MapWebEndpoints();
         app.MapRetentionEndpoints();
         app.MapBackupEndpoints();
+        app.MapNotifyEndpoints();
         app.MapWebFallback();
     }
 }

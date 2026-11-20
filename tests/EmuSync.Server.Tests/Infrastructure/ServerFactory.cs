@@ -18,9 +18,13 @@ public sealed class ServerFactory : WebApplicationFactory<Program>
         ["EmuSync:AuthRequestsPerMinute"] = "10000",
         ["EmuSync:EnablePruning"] = "false",
         ["EmuSync:EnableBackups"] = "false",
+        ["EmuSync:EnableNotifyChecks"] = "false",
     };
 
     public FakeTimeProvider Time { get; } = new(DateTimeOffset.Parse("2026-11-19T12:00:00Z"));
+
+    /// <summary>Extra service registrations (e.g. a capturing handler for the "notify" HttpClient); set before calling Client().</summary>
+    public Action<IServiceCollection>? ConfigureExtraServices { get; set; }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -32,6 +36,7 @@ public sealed class ServerFactory : WebApplicationFactory<Program>
         {
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(Time);
+            ConfigureExtraServices?.Invoke(services);
         });
     }
 

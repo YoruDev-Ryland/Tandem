@@ -27,6 +27,8 @@ public class Device
     public DateTimeOffset? LastSeenUtc { get; set; }
     public bool? ShizukuOk { get; set; }
     public DateTimeOffset? ShizukuOffSinceUtc { get; set; }
+    /// <summary>When the Shizuku-off notification for the current off period was sent; cleared with ShizukuOffSinceUtc.</summary>
+    public DateTimeOffset? ShizukuOffNotifiedUtc { get; set; }
     public DateTimeOffset? RevokedUtc { get; set; }
 }
 

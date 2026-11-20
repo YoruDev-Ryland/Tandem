@@ -32,6 +32,7 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
         var roots = await transform.RootsAsync(deviceId, ct);
 
         ConfigUploadResponse response;
+        ConfigConflictOpened? opened = null;
         using (await locks.Acquire(userId, ct))
         {
             // Again under the lock: the pruner (which holds it) may have removed an old unreferenced blob since.
@@ -93,6 +94,7 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
                     version.ConflictReason = request.BaseVersionId is null ? ConflictReason.FirstSync : ConflictReason.Concurrent;
                     bundle.OpenConflict = true;
                     response = new ConfigUploadResponse(SaveUploadStatus.Conflict, bundle.Id, version.Id);
+                    opened = new ConfigConflictOpened(userId, bundle.Id, version.Id, emulatorId, deviceId);
                 }
             }
 
@@ -101,6 +103,7 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
         }
 
         await events.Raise(new ConfigsChanged(userId), ct);
+        if (opened is not null) await events.Raise(opened, ct);
         if (response.Status is SaveUploadStatus.Accepted or SaveUploadStatus.Conflict)
         {
             var device = await DeviceNameAsync(deviceId, ct);

@@ -34,7 +34,10 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         if (!request.ShizukuOk)
             device.ShizukuOffSinceUtc = device.ShizukuOk == false ? device.ShizukuOffSinceUtc ?? now : now;
         else
+        {
             device.ShizukuOffSinceUtc = null;
+            device.ShizukuOffNotifiedUtc = null;
+        }
         device.ShizukuOk = request.ShizukuOk;
         device.LastSeenUtc = now;
 

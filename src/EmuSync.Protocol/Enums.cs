@@ -9,3 +9,5 @@ public enum DeliveryKind { Save, Config, Vault }
 public enum DeliveryResult { Applied, SkippedLocalChanged, Failed }
 
 public enum ConfigSource { Device, WebEdit, Copy, Join }
+
+public enum NotifyKind { Ntfy, Discord, Webhook }
