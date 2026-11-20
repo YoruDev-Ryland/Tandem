@@ -183,6 +183,9 @@ namespace EmuSync.Server.Data.Migrations.Postgres
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<bool>("Superseded")
+                        .HasColumnType("boolean");
+
                     b.Property<Guid>("TargetId")
                         .HasColumnType("uuid");
 

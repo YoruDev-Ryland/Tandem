@@ -73,6 +73,9 @@ public class DeliveryTests
     private static Task<List<Delivery>> AllDeliveries(ServerFactory f) =>
         InDb(f, db => db.Deliveries.AsNoTracking().ToListAsync());
 
+    private static async Task<List<Delivery>> OpenRows(ServerFactory f) =>
+        (await AllDeliveries(f)).Where(d => d.AckedUtc == null).ToList();
+
     private static Task<Guid?> Known(ServerFactory f, Guid deviceId, Guid itemId) =>
         InDb(f, db => db.DeviceItemStates.Where(s => s.DeviceId == deviceId && s.ItemId == itemId)
             .Select(s => (Guid?)s.KnownVersionId).SingleOrDefaultAsync());
@@ -201,7 +204,10 @@ public class DeliveryTests
         Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
 
         Assert.Empty(await Deliveries(c));
-        Assert.Empty(await AllDeliveries(factory));
+        Assert.Empty(await OpenRows(factory));
+        var closed = await AllDeliveries(factory);
+        Assert.NotEmpty(closed);
+        Assert.All(closed, d => Assert.True(d.Superseded));
 
         (await a.PostJsonAsync($"/v1/conflicts/{v1.ItemId}/resolve",
             new ResolveConflictRequest(ResolveChoice.KeepVersion, conflict.VersionId))).EnsureSuccessStatusCode();
@@ -253,6 +259,30 @@ public class DeliveryTests
     }
 
     [Fact]
+    public async Task Resolve_to_historical_version_delivers_to_device_that_moved_on()
+    {
+        using var factory = NewFactory();
+        var (a, aKey) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        var (c, _) = await factory.PairSecondDevice(a, "C");
+        await Install(a, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var v2 = await Upload(b, Req(await Files(b, "v2"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Accepted, v2.Status);
+        (await Ack(a, Assert.Single(await Deliveries(a)).Id, DeliveryResult.Applied)).EnsureSuccessStatusCode();
+        Assert.Equal(v2.VersionId, await Known(factory, aKey.DeviceId, v1.ItemId));
+        var conflict = await Upload(c, Req(await Files(c, "c"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
+
+        (await a.PostJsonAsync($"/v1/conflicts/{v1.ItemId}/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, v1.VersionId))).EnsureSuccessStatusCode();
+
+        // v1 is A's latest upload, but it is history, not an open conflict: A holds v2 and must be sent v1.
+        Assert.Equal(v2.VersionId, await Known(factory, aKey.DeviceId, v1.ItemId));
+        Assert.Equal(v1.VersionId, Assert.Single(await Deliveries(a)).VersionId);
+    }
+
+    [Fact]
     public async Task Bulk_UseDevice_delivers_to_others_not_the_chosen_device()
     {
         using var factory = NewFactory();
@@ -264,7 +294,7 @@ public class DeliveryTests
         Assert.Single(await Deliveries(b));
         var mine = await Upload(b, Req(await Files(b, "device"), null));
         Assert.Equal(SaveUploadStatus.Conflict, mine.Status);
-        Assert.Empty(await AllDeliveries(factory));
+        Assert.Empty(await OpenRows(factory));
 
         (await b.PostJsonAsync("/v1/conflicts/first-sync/resolve",
             new BulkFirstSyncRequest(bKey.DeviceId, FirstSyncChoice.UseDevice, null))).EnsureSuccessStatusCode();
@@ -287,8 +317,56 @@ public class DeliveryTests
 
         var d = Assert.Single(await Deliveries(b));
         Assert.Equal(v2.VersionId, d.VersionId);
-        Assert.Single(await AllDeliveries(factory));
-        await AssertError(await Ack(b, first.Id, DeliveryResult.Applied), HttpStatusCode.NotFound, "delivery_not_found");
+        var old = Assert.Single(await AllDeliveries(factory), r => r.Id == first.Id);
+        Assert.True(old.Superseded);
+        Assert.Null(old.Result);
+        Assert.Equal(factory.Time.GetUtcNow(), old.AckedUtc);
+        Assert.Equal(d.Id, Assert.Single(await OpenRows(factory)).Id);
+    }
+
+    [Fact]
+    public async Task Late_applied_ack_on_superseded_delivery_records_known()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        var (c, _) = await factory.PairSecondDevice(a, "C");
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var first = Assert.Single(await Deliveries(b));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+
+        await AssertError(await Ack(c, first.Id, DeliveryResult.Applied), HttpStatusCode.NotFound, "delivery_not_found");
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, first.Id, DeliveryResult.Applied)).StatusCode);
+
+        Assert.Equal(v1.VersionId, await Known(factory, bKey.DeviceId, v1.ItemId));
+        Assert.Equal(v2.VersionId, Assert.Single(await Deliveries(b)).VersionId);
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, first.Id, DeliveryResult.Failed)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, first.Id, DeliveryResult.Applied)).StatusCode);
+        var old = Assert.Single(await AllDeliveries(factory), r => r.Id == first.Id);
+        Assert.True(old.Superseded);
+        Assert.Null(old.Result);
+        Assert.Equal(v2.VersionId, Assert.Single(await Deliveries(b)).VersionId);
+        // A superseded Failed ack is not a backoff: the live v2 delivery is still there.
+    }
+
+    [Fact]
+    public async Task Late_applied_ack_never_moves_known_backwards()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var first = Assert.Single(await Deliveries(b));
+
+        // B applied v1, edited, and uploaded before its ack got through.
+        var v2 = await Upload(b, Req(await Files(b, "v2"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Accepted, v2.Status);
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, first.Id, DeliveryResult.Applied)).StatusCode);
+
+        Assert.Equal(v2.VersionId, await Known(factory, bKey.DeviceId, v1.ItemId));
+        Assert.Empty(await Deliveries(b));
     }
 
     [Fact]
@@ -320,31 +398,59 @@ public class DeliveryTests
     [Fact]
     public async Task Ack_SkippedLocalChanged_closes_and_recomputes()
     {
-        using var factory = NewFactory();
-        var (a, _) = await factory.Register("a@example.com");
-        var (b, _) = await factory.PairSecondDevice(a, "B");
+        using var root = NewFactory();
+        var hub = new RecordingHub();
+        using var factory = root.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IEventHub>(hub)));
+        var (a, _) = await RegisterOn(factory, "a@example.com");
+        var (b, bKey) = await PairOn(factory, a);
         await Install(b, Sword);
         var v1 = await Upload(a, Req(await Files(a, "v1"), null));
         var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
         var d = Assert.Single(await Deliveries(b));
 
         // B's local copy turned out to equal the head already: the upload is Unchanged and B now knows the head.
-        var same = await Upload(b, Req(await Files(b, "v2"), null));
-        Assert.Equal(SaveUploadStatus.Unchanged, same.Status);
+        Assert.Equal(SaveUploadStatus.Unchanged, (await Upload(b, Req(await Files(b, "v2"), null))).Status);
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, d.Id, DeliveryResult.SkippedLocalChanged)).StatusCode);
-
         Assert.Empty(await Deliveries(b));
-        var row = Assert.Single(await AllDeliveries(factory));
+        var row = Assert.Single(await AllDeliveriesOf(factory), r => r.Id == d.Id);
         Assert.Equal(DeliveryResult.SkippedLocalChanged, row.Result);
-        Assert.NotNull(row.AckedUtc);
+        Assert.False(row.Superseded);
 
-        // Without an upload that settles it, the recompute hands the head out again.
+        // A skip that nothing settles: no immediate re-delivery and no push to the skipping device.
+        root.Time.Advance(DeliveryService.SkippedBackoff);
         var v3 = await Upload(a, Req(await Files(a, "v3"), v2.VersionId));
         var d3 = Assert.Single(await Deliveries(b));
+        var pushes = hub.Devices.Length;
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, d3.Id, DeliveryResult.SkippedLocalChanged)).StatusCode);
+        Assert.Empty(await Deliveries(b));
+        root.Time.Advance(TimeSpan.FromSeconds(119));
+        Assert.Empty(await Deliveries(b));
+
+        root.Time.Advance(TimeSpan.FromSeconds(1));
+
         var again = Assert.Single(await Deliveries(b));
         Assert.NotEqual(d3.Id, again.Id);
         Assert.Equal(v3.VersionId, again.VersionId);
+        Assert.Equal(pushes, hub.Devices.Length);
+        Assert.DoesNotContain(bKey.DeviceId, hub.Devices[pushes..]);
+    }
+
+    [Fact]
+    public async Task Failed_detail_is_truncated_not_rejected()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        var failed = new ConcurrentQueue<DeliveryFailed>();
+        factory.Services.GetRequiredService<IDomainEvents>()
+            .Subscribe<DeliveryFailed>((e, _) => { failed.Enqueue(e); return Task.CompletedTask; });
+        await Install(b, Sword);
+        await Upload(a, Req(await Files(a, "v1"), null));
+        var d = Assert.Single(await Deliveries(b));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, d.Id, DeliveryResult.Failed, new string('x', 5000))).StatusCode);
+
+        Assert.Equal(new string('x', 2000), Assert.Single(failed).Detail);
     }
 
     [Fact]
@@ -545,6 +651,12 @@ public class DeliveryTests
 
         Assert.Equal(restored.VersionId, Assert.Single(await Deliveries(b)).VersionId);
         Assert.Equal(restored.VersionId, Assert.Single(await Deliveries(a)).VersionId); // a knew v2, so it gets the restore too
+    }
+
+    private static async Task<List<Delivery>> AllDeliveriesOf(WebApplicationFactoryOfProgram factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<EmuSyncDbContext>().Deliveries.AsNoTracking().ToListAsync();
     }
 
     private static async Task<(HttpClient, DeviceKeyResponse)> RegisterOn(WebApplicationFactoryOfProgram factory, string email)

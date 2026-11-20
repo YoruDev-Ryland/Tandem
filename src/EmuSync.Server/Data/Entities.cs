@@ -187,6 +187,9 @@ public class Delivery
     public DateTimeOffset CreatedUtc { get; set; }
     public DateTimeOffset? AckedUtc { get; set; }
     public DeliveryResult? Result { get; set; }
+    /// <summary>Closed by the server because a newer target version replaced it (AckedUtc set, Result null). A late
+    /// ack of it is still honoured.</summary>
+    public bool Superseded { get; set; }
     public string? NotesJson { get; set; }
 }
 

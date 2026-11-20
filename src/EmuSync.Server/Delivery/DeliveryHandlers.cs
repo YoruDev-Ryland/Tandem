@@ -11,7 +11,7 @@ public sealed class DeliveryHandlers(IDomainEvents events, IServiceScopeFactory 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         events.Subscribe<SaveHeadChanged>((e, ct) => Run(svc => svc.RecomputeForItemAsync(e.ItemId, ct)));
-        // Recompute holds every un-acked delivery of an item with an open conflict, i.e. deletes them.
+        // With an open conflict the recompute soft-closes (supersedes) every un-acked delivery of the item.
         events.Subscribe<ConflictOpened>((e, ct) => Run(svc => svc.RecomputeForItemAsync(e.ItemId, ct)));
         events.Subscribe<InstallsChanged>((e, ct) => Run(svc => svc.RecomputeForDeviceAsync(e.DeviceId, ct)));
         return Task.CompletedTask;

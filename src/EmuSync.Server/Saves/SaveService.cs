@@ -131,7 +131,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             item.OpenConflict = false;
             // The winning device already holds the head; every other device keeps its old known version and so is
             // sent the head by the delivery recompute.
-            await SetKnownForUploaderAsync(keep, ct);
+            if (open.Any(v => v.Id == keep.Id)) await SetKnownForUploaderAsync(keep, ct);
             await db.SaveChangesAsync(ct);
             if (tx is not null) await tx.CommitAsync(ct);
             evt = new SaveHeadChanged(userId, item.Id, keep.Id);
@@ -347,9 +347,9 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
     }
 
     /// <summary>
-    /// After a resolve, the device that uploaded the winning version already holds it, so it needs no delivery. Only
-    /// when it is that device's latest upload of the item: a device that uploaded something newer since (or a winner
-    /// picked from older history) no longer holds the winner and must be sent it.
+    /// After a resolve, the device that uploaded the winning version already holds it, so it needs no delivery.
+    /// Callers only pass a winner that is one of the open conflict versions being resolved (a winner picked from
+    /// history says nothing about what its uploader holds now), and only when it is that device's latest upload.
     /// </summary>
     private async Task SetKnownForUploaderAsync(SaveVersion winner, CancellationToken ct)
     {

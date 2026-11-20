@@ -176,6 +176,9 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                         .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("Superseded")
+                        .HasColumnType("INTEGER");
+
                     b.Property<Guid>("TargetId")
                         .HasColumnType("TEXT");
 
