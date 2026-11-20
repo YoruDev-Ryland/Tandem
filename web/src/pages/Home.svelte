@@ -71,7 +71,7 @@
   {:else if !games.data}
     <p class="loading" aria-busy="true">— — —</p>
   {:else}
-    <List {rows} columns={COLUMNS} header={HEADER} headerEnd={[5]} phoneColumns="minmax(0,1fr) 96px 72px" phoneHide={[0, 2, 4]} minWidth="0px" bind:index onOpen={open} key={(g) => g.emulatorId + "/" + g.gameKey}>
+    <List {rows} columns={COLUMNS} header={HEADER} headerEnd={[5]} phoneColumns="minmax(0,1fr) 84px 60px" phoneHide={[0, 2, 4]} minWidth="0px" bind:index onOpen={open} key={(g) => g.emulatorId + "/" + g.gameKey}>
       {#snippet row(g: GameRow)}
         {@const bad = g.openConflict}
         <span class="sys ink3 sm-hide">{systemLabel(g.emulatorId, g.gameKey)}</span>

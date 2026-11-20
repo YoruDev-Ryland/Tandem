@@ -184,6 +184,7 @@
     }
     .head,
     .list :global(.row) {
+      column-gap: 12px !important;
       grid-template-columns: var(--cols-phone) !important;
     }
     .list {
