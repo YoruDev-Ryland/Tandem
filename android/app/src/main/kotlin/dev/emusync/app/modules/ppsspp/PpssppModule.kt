@@ -21,6 +21,8 @@ class PpssppModule(
     }
 
     override val emulatorId = "ppsspp"
+
+    override val displayName = "PPSSPP"
     override val packages = listOf("org.ppsspp.ppsspp", "org.ppsspp.ppssppgold")
     override val configRoots = setOf("memstick")
 

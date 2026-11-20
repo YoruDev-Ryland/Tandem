@@ -597,6 +597,20 @@ class SyncEngineTest {
         assertEquals(0, e.queuedCount())
     }
 
+    @Test fun conflicts_carry_display_names() = runBlocking {
+        put("saves/GAME1/a.sav", "hello"); put("config/emu.cfg", "a=1")
+        val named = object : EmulatorModule by module {
+            override val displayName = "Fake Emu"
+            override fun installedGames(fs: Fs, d: Detected, settings: DeviceSettings) = listOf(InstalledGame("GAME1", "The Game"))
+        }
+        api.saveStatus = SaveUploadStatus.Conflict; api.configStatus = SaveUploadStatus.Conflict
+        engine(modules = listOf(named)).fullScan()
+        val item = conflicts.single { it.kind != null }
+        assertEquals("The Game", item.displayName)
+        assertEquals("Fake Emu", item.emulatorName)
+        assertEquals("Fake Emu", conflicts.single { it.kind == null }.emulatorName)
+    }
+
     @Test fun config_conflict_does_not_store() = runBlocking {
         put("config/emu.cfg", "a=1")
         api.configStatus = SaveUploadStatus.Conflict

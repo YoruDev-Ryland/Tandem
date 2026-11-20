@@ -14,6 +14,8 @@ class EdenModule(private val internalRoot: String = "/storage/emulated/0") : Emu
     }
 
     override val emulatorId = "eden"
+
+    override val displayName = "Eden"
     override val packages = listOf("dev.eden.eden_emulator", "dev.eden.eden_emulator.combo", "dev.igawa6.edenduo")
 
     private val hex16 = Regex("[0-9A-Fa-f]{16}")

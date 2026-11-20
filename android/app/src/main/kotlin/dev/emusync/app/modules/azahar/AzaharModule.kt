@@ -24,6 +24,8 @@ class AzaharModule(
     }
 
     override val emulatorId = "azahar"
+
+    override val displayName = "Azahar"
     override val packages = listOf("org.azahar_emu.azahar", "io.github.lime3ds.android")
     override val configRoots = setOf("root")
 

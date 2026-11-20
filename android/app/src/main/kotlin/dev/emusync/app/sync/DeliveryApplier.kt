@@ -166,8 +166,8 @@ class DeliveryApplier(
     private fun waiting(d: DeliveryDto, m: EmulatorModule): Outcome {
         pendingWhileRunning[d.id] = m.emulatorId
         if (notifiedRunning.add(d.id)) notifier(
-            if (d.kind == DeliveryKind.Config) "Close ${m.emulatorId} to receive the newer settings"
-            else "Close ${m.emulatorId} to receive the newer save for ${d.gameKey}")
+            if (d.kind == DeliveryKind.Config) "Close ${m.displayName} to receive the newer settings"
+            else "Close ${m.displayName} to receive the newer save for ${d.gameKey?.let { title(m, it) }}")
         return Outcome.Waiting
     }
 
@@ -181,7 +181,7 @@ class DeliveryApplier(
         if (store.applyMarker(key) != null) throw NoAck("an earlier write for $key awaits restore")
         val local = moduleCall { engine.currentItems(m, det) }
             .firstOrNull { storeKey(m.emulatorId, it) == key }?.takeIf { it.files.isNotEmpty() }
-        val name = local?.displayName ?: gameKey
+        val name = local?.displayName?.takeIf { it.isNotBlank() } ?: title(m, gameKey)
         val dir = local?.baseDir ?: moduleCall { m.targetDirFor(fs, det, kind, gameKey, d.slotOrEmpty, d.coreOrEmpty) }
         val localFiles = local?.files?.associateWith { "$dir/$it" } ?: emptyMap()
         val byLower = localFiles.keys.associateBy { lower(it) }
@@ -241,9 +241,9 @@ class DeliveryApplier(
         val written = Manifests.hash(planned.map { ManifestEntry(it.rel, it.entry.hash, it.entry.size) })
         val known = store.configState(id)
         val state = id to ConfigState(d.targetId, d.versionId, written, known?.lastUploadedHash)
-        val name = "$id settings"
+        val name = "${m.displayName} settings"
         fun done(): Outcome {
-            if (!d.missingLocalKeys.isNullOrEmpty()) notifier("Set your ROM folders in $id on this device")
+            if (!d.missingLocalKeys.isNullOrEmpty()) notifier("Set your ROM folders in ${m.displayName} on this device")
             return Outcome.Applied
         }
         var guardHash: String? = null
@@ -592,6 +592,9 @@ class DeliveryApplier(
     } catch (e: IOException) {
         throw NoAck("module read failed: ${e.message}")
     }
+
+    /** The game's title for notifications: from the engine's last scan, else the game key. */
+    private fun title(m: EmulatorModule, gameKey: String) = engine.gameTitle(m.emulatorId, gameKey) ?: gameKey
 
     private fun storeKey(emulatorId: String, item: LocalItem) =
         ItemKey.of(emulatorId, item.kind.name, item.gameKey, item.slot, if (item.kind == ItemKind.Save) "" else item.core)

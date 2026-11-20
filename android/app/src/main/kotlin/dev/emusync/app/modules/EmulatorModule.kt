@@ -45,6 +45,8 @@ fun Fs.isEmulatorRunning(m: EmulatorModule, d: Detected?): Boolean = isAnyProces
 
 interface EmulatorModule {
     val emulatorId: String
+    /** Shown to the user (notifications); defaults to [emulatorId]. */
+    val displayName: String get() = emulatorId
     /** Known packages in preferred order: detection uses the first installed one; every one counts as running. */
     val packages: List<String>
     /** First segments a delivered config bundle path may start with: "data" maps to dataRoot, others to extraRoots. */

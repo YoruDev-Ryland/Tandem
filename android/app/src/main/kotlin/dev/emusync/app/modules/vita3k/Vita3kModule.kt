@@ -14,6 +14,8 @@ class Vita3kModule(private val internalRoot: String = "/storage/emulated/0") : E
     }
 
     override val emulatorId = "vita3k"
+
+    override val displayName = "Vita3K"
     override val packages = listOf("org.vita3k.emulator")
 
     private val titleRe = Regex("^[A-Z0-9]{9}$")

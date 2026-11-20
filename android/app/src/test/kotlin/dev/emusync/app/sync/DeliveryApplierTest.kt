@@ -1042,6 +1042,20 @@ class DeliveryApplierTest {
         assertTrue(store.applyMarkers().isEmpty())
     }
 
+    @Test fun notifications_use_emulator_and_game_display_names() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        val named = object : EmulatorModule by module { override val displayName = "Fake Emu" }
+        val fs = fs()
+        val a = applier(fs, listOf(named))
+        engine.fullScan()                                 // learns the title "Game G1"
+        fs.alive.add("com.fake.emu")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"),
+            configDelivery("c1", "data/main.cfg" to "x"))
+        a.applyAll()
+        assertEquals(listOf("Close Fake Emu to receive the newer save for Game G1",
+            "Close Fake Emu to receive the newer settings"), notes)
+    }
+
     // ---- final review C1: any variant or sub-process counts as running ----
 
     @Test fun undetected_variant_running_blocks_delivery() = runBlocking {

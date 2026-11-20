@@ -20,6 +20,8 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
     }
 
     override val emulatorId = "retroarch"
+
+    override val displayName = "RetroArch"
     override val packages = listOf("com.retroarch.aarch64", "com.retroarch", "com.retroarch.ra32")
     override val configRoots = setOf("data", "config")
 

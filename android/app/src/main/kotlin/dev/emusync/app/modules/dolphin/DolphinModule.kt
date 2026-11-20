@@ -14,6 +14,8 @@ class DolphinModule(private val internalRoot: String = "/storage/emulated/0") : 
     }
 
     override val emulatorId = "dolphin"
+
+    override val displayName = "Dolphin"
     override val packages = listOf("org.dolphinemu.dolphinemu")
 
     private val regions = listOf("USA", "EUR", "JAP")

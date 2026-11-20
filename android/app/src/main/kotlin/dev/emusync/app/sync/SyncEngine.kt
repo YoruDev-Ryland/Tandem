@@ -19,7 +19,8 @@ data class SyncConflict(
     val gameKey: String?,
     val slot: String,
     val core: String,
-    val displayName: String?,
+    val displayName: String?,          // the game's title when known
+    val emulatorName: String = emulatorId,
 )
 
 /**
@@ -78,6 +79,7 @@ class SyncEngine(
     private var eventSeq = 0L
     private val shadowLogged = HashSet<String>()
     private val queued = HashSet<String>()                   // store keys whose last upload attempt failed
+    private val titles = HashMap<String, String>()            // "<emulatorId>|<gameKey>" -> game title (items, installs)
 
     // Touched only under [mutex].
     private val lastInstalls = HashMap<String, List<InstalledGame>>()
@@ -208,6 +210,9 @@ class SyncEngine(
     suspend fun uploadConfig(module: EmulatorModule, detected: Detected): SaveUploadStatus? =
         mutex.withLock { uploadConfigBundle(module, detected) }
 
+    /** The game's title from the last scan's items or installed games, or null when unknown. Lock-free. */
+    fun gameTitle(emulatorId: String, gameKey: String): String? = synchronized(ev) { titles["$emulatorId|$gameKey"] }
+
     /** Every watch dir of the modules detected by the last scan, deduped and sorted. */
     fun allWatchDirs(): List<String> = synchronized(ev) { watchDirs.values.flatten().distinct().sorted() }
 
@@ -283,7 +288,8 @@ class SyncEngine(
                 SaveUploadStatus.Conflict -> {
                     log("$name: conflict (head ${r.headVersionId})")
                     if (notified.add("$key|$hash"))
-                        onConflict(SyncConflict(id, item.kind, item.gameKey, item.slot, item.core, item.displayName))
+                        onConflict(SyncConflict(id, item.kind, item.gameKey, item.slot, item.core,
+                            item.displayName ?: gameTitle(id, item.gameKey), m.displayName))
                 }
             }
             r.status
@@ -324,7 +330,7 @@ class SyncEngine(
                 }
                 SaveUploadStatus.Conflict -> {
                     log("$name: conflict")
-                    if (notified.add("config:$id|$hash")) onConflict(SyncConflict(id, null, null, "", "", null))
+                    if (notified.add("config:$id|$hash")) onConflict(SyncConflict(id, null, null, "", "", null, m.displayName))
                 }
             }
             r.status
@@ -451,6 +457,7 @@ class SyncEngine(
         synchronized(ev) {
             tracked.entries.removeIf { it.value.module.emulatorId == m.emulatorId && it.key !in byKey }
             for ((k, item) in byKey) tracked[k] = Tracked(m, d, item)
+            for (item in items) item.displayName?.takeIf { it.isNotBlank() }?.let { titles["${m.emulatorId}|${item.gameKey}"] = it }
             dirty.keys.retainAll(tracked.keys)
             marks.keys.retainAll(tracked.keys)
         }
@@ -495,6 +502,9 @@ class SyncEngine(
 
     private suspend fun reportInstalls(m: EmulatorModule, d: Detected) {
         val games = moduleCall(m, "installedGames") { m.installedGames(fs, d, settings) } ?: return
+        synchronized(ev) {
+            for (g in games) g.displayName?.takeIf { it.isNotBlank() }?.let { titles.putIfAbsent("${m.emulatorId}|${g.gameKey}", it) }
+        }
         if (lastInstalls[m.emulatorId] == games) return
         apiCall("${m.emulatorId}/installs") {
             api.putInstalls(m.emulatorId, games)

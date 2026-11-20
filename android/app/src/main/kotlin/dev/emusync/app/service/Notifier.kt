@@ -69,8 +69,8 @@ class Notifier(context: Context) {
 
     fun conflict(c: SyncConflict) {
         val what = when {
-            c.kind == null -> "${c.emulatorId} settings"
-            else -> "${c.emulatorId} ${c.kind.name.lowercase()} for ${c.displayName ?: c.gameKey}" +
+            c.kind == null -> "${c.emulatorName} settings"
+            else -> "${c.emulatorName} ${c.kind.name.lowercase()} for ${c.displayName ?: c.gameKey}" +
                 (if (c.slot.isNotEmpty()) " (slot ${c.slot})" else "")
         }
         post(ID_CONFLICT, "Sync conflict", "$what changed on another device too. Both versions are kept on the server.")

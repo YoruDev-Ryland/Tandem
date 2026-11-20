@@ -17,6 +17,8 @@ class MelonDsModule(
     }
 
     override val emulatorId = "melonds"
+
+    override val displayName = "melonDS"
     override val packages = listOf("me.magnum.melonds")
     override val configRoots = setOf("export")
 
