@@ -17,6 +17,10 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.click
+import androidx.compose.ui.geometry.Offset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -147,5 +151,27 @@ class CursorListTest {
         val shown = (0..6).filter { i -> runCatching { compose.onNodeWithText("Game $i").assertIsDisplayed() }.isSuccess }
         val tops = shown.map { i -> with(compose.density) { compose.onNodeWithText("Game $i").fetchSemanticsNode().positionInRoot.y.toDp() } }
         assertTrue("every row shown starts at or below the list top: $tops vs $listTop", tops.all { it >= listTop - 0.5.dp })
+    }
+
+    @Test fun tappingACutBottomRowTwiceOpensThatRow() {
+        // The fourth row is cut by the bottom edge. Tapping it twice at the same spot must open it, so the first tap
+        // may not scroll the list under the finger.
+        items = List(30) { "Game $it" }
+        compose.host {
+            Column {
+                BasicText("HEADER", Modifier.height(20.dp))
+                CursorList(items, key = { it }, selected = selected, onSelect = { selected = it }, onOpen = { opened += it }, modifier = Modifier.height(150.dp)) { item, _ ->
+                    BasicText(item)
+                }
+            }
+        }
+        val spot = with(compose.density) {
+            val top = compose.onNodeWithText("HEADER").getUnclippedBoundsInRoot().bottom
+            Offset(40.dp.toPx(), (top + 135.dp).toPx())   // inside Game 3, which spans 120-160 dp of a 150 dp list
+        }
+        compose.onRoot().performTouchInput { click(spot) }
+        assertEquals(3, selected)
+        compose.onRoot().performTouchInput { click(spot) }
+        assertEquals(listOf("Game 3"), opened)
     }
 }

@@ -95,6 +95,8 @@ class SetupFlowTest {
     private var done = 0
     private var diagnostics = 0
     private var patience = 120_000L
+    /** The flow's clock, in ms; tests move it by hand. */
+    private var clock = 10_000L
 
     // The fake server.
     private var info = ServerInfo("Home server", 1, registrationOpen = false)
@@ -155,7 +157,7 @@ class SetupFlowTest {
         val status = TopStatus("Thor", ServerConn.Connected, ShizukuState.Ready, signedIn = true)
         compose.setContent {
             EmuTheme(ThemeMode.Dark) {
-                key(holder.value) { SetupFlow(holder.value, status, openShizuku = null, onDone = { done++ }, diagnostics = { diagnostics++ }, now = { 10_000L }) }
+                key(holder.value) { SetupFlow(holder.value, status, openShizuku = null, onDone = { done++ }, diagnostics = { diagnostics++ }, now = { clock }) }
             }
         }
     }
@@ -284,7 +286,7 @@ class SetupFlowTest {
         compose.onNodeWithText("Only back up this device's settings").assertIsDisplayed()
         compose.onNodeWithText("Copy Me's settings once").assertDoesNotExist()   // this device's own
         compose.onNodeWithText("Copy New's settings once").assertDoesNotExist()
-        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.key(KeyEvent.KEYCODE_DPAD_UP)    // from "Only back up", where the cursor starts
         compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Copy Odin 3's
         assertEquals(listOf(ApplyConfigRequest(ME, "eden", "ov1", ApplyMode.Copy)), applied)
         assertTrue(SyncService.ACTION_APPLY in services)
@@ -294,10 +296,36 @@ class SetupFlowTest {
         compose.onNodeWithText("Join \"Handhelds\" with Odin 3").assertDoesNotExist()
         compose.onNodeWithText("Keep following \"Handhelds\"").assertIsDisplayed()
         compose.onNodeWithText("Copy Thor's settings once").assertDoesNotExist()
-        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.key(KeyEvent.KEYCODE_DPAD_UP)
+        clock += 1_000                           // the next emulator's screen has been read
         compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Join "Living room"
         assertEquals(listOf("g4" to ME), joined)
         assertEquals(SetupStep.FirstSync, vm.step.value)
+    }
+
+    @Test fun step4StartsOnOnlyBackUpSoAChangesNothing() {
+        signedIn()
+        configs()
+        show(vm(handleAt(SetupStep.SyncChoice)))
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(listOf(ME to "eden"), kept)
+        assertTrue(applied.isEmpty())
+        assertTrue(joined.isEmpty())
+    }
+
+    @Test fun aQuickSecondANeverChoosesForTheNextEmulator() {
+        signedIn()
+        configs()
+        show(vm(handleAt(SetupStep.SyncChoice)))
+        compose.key(KeyEvent.KEYCODE_DPAD_UP)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Eden: copy Odin 3's
+        compose.onNodeWithText("RetroArch settings").assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // at once: RetroArch's screen has not been read yet
+        assertTrue(kept.isEmpty())
+        assertTrue(joined.isEmpty())
+        clock += 1_000
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // now: "Only back up", where the cursor starts
+        assertEquals(listOf(ME to "retroarch"), kept)
     }
 
     @Test fun aConfigErrorIsShownOnItsRowInConfigWords() {
@@ -306,6 +334,8 @@ class SetupFlowTest {
         joinFails = ApiException(409, "already_in_group", "in a group")
         val vm = vm(handleAt(SetupStep.SyncChoice))
         show(vm)
+        compose.key(KeyEvent.KEYCODE_DPAD_UP)
+        compose.key(KeyEvent.KEYCODE_DPAD_UP)
         compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Join "AYN handhelds"
         compose.onNodeWithText("That device already follows a group. Take it out of the group first.").assertIsDisplayed()
         compose.onNodeWithText("Eden settings").assertIsDisplayed()
@@ -322,6 +352,8 @@ class SetupFlowTest {
         val handle = handleAt(SetupStep.SyncChoice)
         val first = vm(handle)
         show(first)
+        compose.key(KeyEvent.KEYCODE_DPAD_UP)
+        compose.key(KeyEvent.KEYCODE_DPAD_UP)
         compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Eden: join "AYN handhelds"
         compose.onNodeWithText("RetroArch settings").assertIsDisplayed()
 

@@ -57,6 +57,8 @@ class SettingsScreenTest {
     @get:Rule val tmp = TemporaryFolder()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    /** The sheets' clock, in ms; tests move it by hand. */
+    private var clock = 10_000L
     private var reloads = 0
     private var refreshed = 0
     private var stops = 0
@@ -89,7 +91,7 @@ class SettingsScreenTest {
                 colors(LocalEmu.current)
                 val ui by vm.ui.collectAsState()
                 val status by app.top.collectAsState()
-                SettingsScreen(ui, top = { TopBar(listOf("Settings"), 0, {}, status, null) }, actions = vm.actions({}, {}, {}))
+                SettingsScreen(ui, top = { TopBar(listOf("Settings"), 0, {}, status, null) }, actions = vm.actions({}, {}, {}), now = { clock })
             }
         }
     }
@@ -123,6 +125,8 @@ class SettingsScreenTest {
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         compose.onNodeWithText("This device stops syncing until you sign in again. Nothing on it is deleted.").assertIsDisplayed()
         assertEquals("secret-key", st.deviceKey)   // only the confirm signs out
+        compose.key(KeyEvent.KEYCODE_DPAD_LEFT)    // the cursor starts on Cancel
+        clock += 1_000
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertNull(st.deviceKey)
         assertNull(st.deviceId)
@@ -155,6 +159,31 @@ class SettingsScreenTest {
         compose.onAllNodesWithText("Set up this device")[0].assertIsDisplayed()
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertEquals(2, setUps)
+    }
+
+    @Test fun aDoubleAOnSignOutCancelsAndKeepsTheKey() {
+        val st = store()
+        show(st, vm(st))
+        r2(3)   // › Account
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // the sheet opened on Cancel
+        compose.onNodeWithText("This device stops syncing until you sign in again. Nothing on it is deleted.").assertDoesNotExist()
+        assertEquals("secret-key", st.deviceKey)
+        assertEquals(0, stops)
+    }
+
+    @Test fun signOutConfirmsOnlyFromItsButtonAfterAMomentOnScreen() {
+        val st = store()
+        show(st, vm(st))
+        r2(3)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        compose.key(KeyEvent.KEYCODE_DPAD_LEFT)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // too soon after the sheet appeared: nothing
+        assertEquals("secret-key", st.deviceKey)
+        compose.onNodeWithText("Sign out?").assertIsDisplayed()
+        clock += 1_000
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertNull(st.deviceKey)
     }
 
     @Test fun cancellingTheSignOutSheetKeepsTheDeviceSignedIn() {
@@ -237,6 +266,8 @@ class SettingsScreenTest {
         compose.onNodeWithText("Remove /sdcard/Roms?").assertDoesNotExist()
         assertEquals(listOf("/sdcard/Roms"), st.settings.romDirs)
         compose.key(KeyEvent.KEYCODE_BUTTON_X)
+        compose.key(KeyEvent.KEYCODE_DPAD_LEFT)
+        clock += 1_000
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertEquals(emptyList<String>(), st.settings.romDirs)
         assertEquals(1, reloads)

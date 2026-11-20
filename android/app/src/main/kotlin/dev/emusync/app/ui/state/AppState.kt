@@ -23,6 +23,8 @@ sealed interface EmuRowState {
     data class Saves(val n: Int) : EmuRowState
     data class ConfigGroup(val name: String) : EmuRowState
     data object NotSetUp : EmuRowState
+    /** The service has not finished its first scan: nothing is known about this emulator yet. */
+    data object Looking : EmuRowState
     data object Ok : EmuRowState
 }
 
@@ -72,6 +74,8 @@ class AppState(
                 val n = waits.count { it.emulatorId == m.emulatorId }
                 val state = when {
                     n > 0 || m.emulatorId in run -> EmuRowState.Open(n)
+                    // Until the service's first scan, an emulator it has not reported is not known to be missing.
+                    !snap.live -> EmuRowState.Looking
                     info == null -> EmuRowState.NotSetUp
                     groups[m.emulatorId] != null -> EmuRowState.ConfigGroup(groups.getValue(m.emulatorId))
                     info.itemCount > 0 -> EmuRowState.Saves(info.itemCount)

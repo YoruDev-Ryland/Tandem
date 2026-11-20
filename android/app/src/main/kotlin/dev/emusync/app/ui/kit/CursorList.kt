@@ -31,6 +31,8 @@ internal fun reconcileCursor(prevKeys: List<Any>?, focusKey: Any?, keys: List<An
 private class CursorMemory {
     var keys: List<Any>? = null
     var focusKey: Any? = null
+    /** The last move was a tap: the row is where the finger is, so the list must not scroll it away. */
+    var tapped = false
 }
 
 /**
@@ -57,7 +59,8 @@ fun <T> CursorList(
     val keys = items.map(key)
     val cursor = reconcileCursor(memory.keys, memory.focusKey, keys, selected)
 
-    fun moveTo(i: Int) {
+    fun moveTo(i: Int, tap: Boolean = false) {
+        memory.tapped = tap
         memory.focusKey = keys[i]
         if (i != selected) onSelect(i)
     }
@@ -66,7 +69,7 @@ fun <T> CursorList(
         memory.keys = keys
         if (keys.isNotEmpty()) {
             memory.focusKey = keys[cursor]
-            if (cursor != selected) onSelect(cursor)
+            if (cursor != selected) { memory.tapped = false; onSelect(cursor) }   // the rows moved it: not a tap
         }
     }
 
@@ -85,14 +88,16 @@ fun <T> CursorList(
     }
 
     val state = rememberLazyListState()
-    if (active && items.isNotEmpty()) LaunchedEffect(cursor) { state.bringIntoView(cursor) }
+    // A key move scrolls the cursor row into view; a tap leaves the list where it is, so a second tap at the same
+    // spot lands on the same row even when it is cut by an edge.
+    if (active && items.isNotEmpty()) LaunchedEffect(cursor) { if (!memory.tapped) state.bringIntoView(cursor) }
 
     LazyColumn(modifier, state = state) {
         itemsIndexed(items, key = { i, _ -> keys[i] }) { i, item ->
             val focused = active && i == cursor
             CursorRow(
                 focused = focused,
-                onClick = { if (i == cursor) onOpen(item) else moveTo(i) },
+                onClick = { if (i == cursor) onOpen(item) else moveTo(i, tap = true) },
                 ruleAbove = !(active && i == cursor + 1),
             ) { row(item, focused) }
         }

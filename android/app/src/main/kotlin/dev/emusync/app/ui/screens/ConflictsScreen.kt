@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.emusync.app.model.BulkFirstSyncRequest
@@ -40,6 +41,9 @@ import dev.emusync.app.ui.kit.ConsoleScaffold
 import dev.emusync.app.ui.kit.CursorList
 import dev.emusync.app.ui.kit.EmptyLine
 import dev.emusync.app.ui.kit.EmuButton
+import dev.emusync.app.ui.kit.SheetButtons
+import dev.emusync.app.ui.kit.SheetChoice
+import dev.emusync.app.ui.kit.rememberSheetChoice
 import dev.emusync.app.ui.kit.ErrorLine
 import dev.emusync.app.ui.kit.Fact
 import dev.emusync.app.ui.kit.Facts
@@ -94,8 +98,10 @@ fun ConflictsScreen(
     fun confirm() { sheet?.let { actions.bulk(it.calls) }; sheet = null }
 
     val open = sheet
+    // A choice for every game opens on Cancel and confirms only after a moment on screen (SheetChoice).
+    val choice = rememberSheetChoice(open, now)
     val hints = when {
-        open != null -> listOf(Hint(Action.A, open.confirm, ::confirm), Hint(Action.B, "Cancel") { sheet = null })
+        open != null -> listOf(choice.hint(open.confirm, "Cancel", ::confirm) { sheet = null }, Hint(Action.B, "Cancel") { sheet = null })
         focused != null -> listOf(
             Hint(Action.A, "Keep ${focused.me.replaceFirstChar { it.lowercase() }}'s", ::keepMine),
             Hint(Action.X, focused.keepOtherLabel) { decide { it.keepOther } },
@@ -125,6 +131,7 @@ fun ConflictsScreen(
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val portrait = maxWidth < 600.dp
+            val listWidth = conflictsListWidth(maxWidth)
             val list: @Composable (Modifier) -> Unit = { m ->
                 Column(m) {
                     ListPane(ui, at, ::select, ui.bulkMine, bulkOther) { sheet = it }
@@ -140,11 +147,11 @@ fun ConflictsScreen(
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                    list(Modifier.width(300.dp).fillMaxHeight())
+                    list(Modifier.width(listWidth).fillMaxHeight())
                     detail(Modifier.weight(1f).fillMaxHeight())
                 }
             }
-            if (open != null) ConfirmSheet(open, ::confirm) { sheet = null }
+            if (open != null) ConfirmSheet(open, choice, ::confirm) { sheet = null }
         }
         // A keeps this device's save rather than "opening" the row: the list's own A does nothing, so a tap on a row
         // never decides. In a layer of its own so it comes before the list however late the list (re)enters the
@@ -240,7 +247,7 @@ private fun DetailPane(e: ConflictEntry, failure: Throwable?, portrait: Boolean)
                 Column(Modifier.weight(1f)) {
                     BasicText(col.title, Modifier.padding(top = 4.dp, bottom = 10.dp),
                         style = EmuType.section.copy(color = c.ink, fontSize = 17.sp))
-                    Facts(listOf(Fact("Received", col.received), Fact("Size", col.size, mono = true)), Modifier.padding(bottom = 14.dp))
+                    Facts(listOf(Fact("Received", col.received), Fact("Size", col.size, mono = true)), Modifier.padding(bottom = 14.dp), labelWidth = FACT_LABEL_W)
                 }
             }
         }
@@ -250,21 +257,15 @@ private fun DetailPane(e: ConflictEntry, failure: Throwable?, portrait: Boolean)
 }
 
 /**
- * Confirms a bulk choice. It sits in its own input layer and takes every button while open (A confirms, B cancels),
+ * Confirms a bulk choice. It sits in its own input layer and takes every button while open (A does what the cursor's
+ * button says, starting on Cancel; Left/Right move it; B cancels),
  * and it covers the screen to touch, so nothing underneath can be chosen around it.
  */
 @Composable
-internal fun ConfirmSheet(choice: BulkChoice, confirm: () -> Unit, cancel: () -> Unit) {
+internal fun ConfirmSheet(choice: BulkChoice, cursor: SheetChoice, confirm: () -> Unit, cancel: () -> Unit) {
     val c = LocalEmu.current
     ActionLayer {
-        OnAction { a ->
-            when (a) {
-                Action.A -> confirm()
-                Action.B -> cancel()
-                else -> {}
-            }
-            true
-        }
+        OnAction { a -> cursor.onAction(a, confirm, cancel) }
         Box(Modifier.fillMaxSize().pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } }) {
             Column(
                 Modifier
@@ -277,11 +278,20 @@ internal fun ConfirmSheet(choice: BulkChoice, confirm: () -> Unit, cancel: () ->
                 BasicText(choice.question, style = EmuType.section.copy(color = c.ink, fontSize = 20.sp))
                 BasicText(choice.detail, Modifier.padding(top = 6.dp, bottom = 12.dp).widthIn(max = 620.dp),
                     style = EmuType.body.copy(color = c.ink2))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    EmuButton(choice.confirm, primary = true, glyph = Action.A, onClick = confirm)
-                    EmuButton("Cancel", glyph = Action.B, onClick = cancel)
-                }
+                SheetButtons(cursor, choice.confirm, "Cancel", confirm, cancel)
             }
         }
     }
 }
+
+/** The facts' label column in the decide view: "Received" and "Size" with room to spare. */
+private val FACT_LABEL_W = 84.dp
+
+/** What the two sides need to keep their facts on one line: the divider padding, the gap and two 230 dp columns. */
+private val DETAIL_MIN = 24.dp + 24.dp + 230.dp * 2
+
+/**
+ * The list takes what the decide view leaves, from 240 dp up to the mockup's 300 dp. The Thor and the Odin 3 are
+ * 832 dp wide, where a fixed 300 dp wrapped each side's received time and size onto two lines.
+ */
+internal fun conflictsListWidth(content: Dp): Dp = (content - 28.dp - DETAIL_MIN).coerceIn(240.dp, 300.dp)

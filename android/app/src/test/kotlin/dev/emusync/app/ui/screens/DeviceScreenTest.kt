@@ -112,6 +112,11 @@ class DeviceScreenTest {
         assertEquals("two saves · choose in Conflicts" to Tone.Fault, here["Differs"])
     }
 
+    @Test fun beforeTheFirstScanAnEmulatorIsLookingInInk3() {
+        val pane = deviceUi(listOf(EmulatorRowUi("azahar", "Azahar", EmuRowState.Looking, 0)), Loaded(), emptyList(), HERE, true).panes.single()
+        assertEquals("looking…" to Tone.Ink3, pane.state to pane.tone)
+    }
+
     @Test fun aGameWithNoNewestDeviceShowsADashLikeTheWeb() {
         val line = ui(listOf(game("k", "K", DeviceGameState.HasIt, newestOn = null))).panes.first { it.id == "eden" }.games.single()
         assertEquals("—", line.newestOn)

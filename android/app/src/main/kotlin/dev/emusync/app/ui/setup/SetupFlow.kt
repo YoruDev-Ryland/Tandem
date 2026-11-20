@@ -88,7 +88,7 @@ fun SetupFlow(
         SetupStep.Server -> ServerStep(vm, status, diagnostics)
         SetupStep.Shizuku -> ShizukuStep(vm, status, openShizuku, later)
         SetupStep.Emulators -> EmulatorsStep(vm, status, later)
-        SetupStep.SyncChoice -> SyncChoiceStep(vm, status, later)
+        SetupStep.SyncChoice -> SyncChoiceStep(vm, status, later, now)
         SetupStep.FirstSync -> FirstSyncStep(vm, status, onDone, later, now)
     }
 }

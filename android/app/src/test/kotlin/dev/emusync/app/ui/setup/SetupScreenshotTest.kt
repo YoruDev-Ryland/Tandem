@@ -36,6 +36,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
+import dev.emusync.app.ui.screens.DEVICE_SIZE
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -120,6 +121,13 @@ class SetupScreenshotTest {
 
     @Test fun firstSyncDark() = shoot(ThemeMode.Dark, vm(at(SetupStep.FirstSync), true), "setup-first-dark.png", "Super Metroid")
     @Test fun firstSyncLight() = shoot(ThemeMode.Light, vm(at(SetupStep.FirstSync), true), "setup-first-light.png", "Super Metroid")
+
+    // The devices' real size, for design/screens/app/robo-*.png.
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceSignInDark() = shoot(ThemeMode.Dark, vm(signIn(), false), "robo-setup-signin-dark.png", "Sign in to Home server", signedIn = false)
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceSignInLight() = shoot(ThemeMode.Light, vm(signIn(), false), "robo-setup-signin-light.png", "Sign in to Home server", signedIn = false)
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceSyncChoiceDark() = shoot(ThemeMode.Dark, sync(), "robo-setup-sync-dark.png", "RetroArch settings")
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceFirstSyncDark() = shoot(ThemeMode.Dark, vm(at(SetupStep.FirstSync), true), "robo-setup-first-dark.png", "Super Metroid")
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceFirstSyncLight() = shoot(ThemeMode.Light, vm(at(SetupStep.FirstSync), true), "robo-setup-first-light.png", "Super Metroid")
 
     private fun shoot(mode: ThemeMode, vm: SetupViewModel, name: String, expect: String, signedIn: Boolean = true) {
         val status = TopStatus(if (signedIn) "Odin 3" else null, if (signedIn) ServerConn.Connected else ServerConn.SignedOut, ShizukuState.Ready, signedIn)

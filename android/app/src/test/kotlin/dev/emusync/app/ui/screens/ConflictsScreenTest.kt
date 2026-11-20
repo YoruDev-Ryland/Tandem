@@ -356,6 +356,8 @@ class ConflictsScreenTest {
         compose.key(KeyEvent.KEYCODE_BUTTON_L2)
         assertTrue(calls.firstSync.isEmpty())
         compose.onNodeWithText("Use this Thor's saves for 2 games?").assertExists()
+        compose.key(KeyEvent.KEYCODE_DPAD_LEFT)   // the sheet opens on Cancel
+        clock += 1_000
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertEquals(
             listOf(BulkFirstSyncRequest(THOR, FirstSyncChoice.UseDevice, listOf("i1", "i2"))),
@@ -363,6 +365,16 @@ class ConflictsScreenTest {
         )
         assertTrue(calls.resolved.isEmpty())
         assertEquals(1, applied)
+    }
+
+    @Test fun l2ThenADoubleTapCancelsTheBulkSheet() {
+        showLive(listOf(conflict("i1", "A"), conflict("i2", "B")))
+        compose.key(KeyEvent.KEYCODE_BUTTON_L2)
+        clock += 1_000
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // the sheet opened on Cancel
+        compose.onNodeWithText("Use this Thor's saves for 2 games?").assertDoesNotExist()
+        assertTrue(calls.firstSync.isEmpty())
+        assertTrue(calls.resolved.isEmpty())
     }
 
     @Test fun bOnTheSheetCancelsAndTheSheetTakesEveryButton() {
@@ -380,6 +392,8 @@ class ConflictsScreenTest {
         showLive(listOf(conflict("i1", "A"), conflict("i2", "B", thorHead = true)))
         compose.onNodeWithText("Use Odin 3's for all").performClick()
         compose.onNodeWithText("Use Odin 3's saves for 2 games?").assertExists()
+        compose.key(KeyEvent.KEYCODE_DPAD_LEFT)   // the sheet opens on Cancel
+        clock += 1_000
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertEquals(
             listOf(
@@ -394,11 +408,13 @@ class ConflictsScreenTest {
         val sent = mutableListOf<List<BulkFirstSyncRequest>>()
         var current by mutableStateOf(ui(listOf(conflict("i1", "A"), conflict("i2", "B"))))
         compose.setContent {
-            EmuTheme(ThemeMode.Dark) { ConflictsScreen(current, top = {}, actions = ConflictsActions(bulk = { sent += it })) }
+            EmuTheme(ThemeMode.Dark) { ConflictsScreen(current, top = {}, actions = ConflictsActions(bulk = { sent += it }), now = { clock }) }
         }
         compose.key(KeyEvent.KEYCODE_BUTTON_L2)
         current = ui(listOf(conflict("i1", "A"), conflict("i2", "B"), conflict("i3", "C")))
         compose.waitForIdle()
+        compose.key(KeyEvent.KEYCODE_DPAD_LEFT)
+        clock += 1_000
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertEquals(1, sent.size)
         assertEquals(listOf("i1", "i2"), sent.single().first().itemIds.orEmpty())

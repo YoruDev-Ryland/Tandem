@@ -78,6 +78,7 @@ fun deviceUi(
                 is EmuRowState.Saves -> plural(s.n, "save") to Tone.Ink2
                 is EmuRowState.ConfigGroup -> "config group" to Tone.Ink2
                 EmuRowState.NotSetUp -> "not set up" to Tone.Ink3
+                EmuRowState.Looking -> "looking…" to Tone.Ink3
                 EmuRowState.Ok -> "no saves yet" to Tone.Ink2
             }
         }

@@ -2,6 +2,8 @@ package dev.emusync.app.ui.setup.steps
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -23,6 +25,9 @@ import dev.emusync.app.ui.setup.SetupViewModel
 import dev.emusync.app.ui.setup.StepSub
 import dev.emusync.app.ui.setup.StepTitle
 import dev.emusync.app.ui.setup.configOptions
+import dev.emusync.app.ui.setup.ConfigChoice
+import dev.emusync.app.ui.setup.ConfigOption
+import dev.emusync.app.ui.screens.Seen
 import dev.emusync.app.ui.state.TopStatus
 
 const val SYNC_CHOICE_SUB =
@@ -34,7 +39,7 @@ const val SYNC_CHOICE_SUB =
  * refusal is shown under the option, in config words.
  */
 @Composable
-internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus, later: (() -> Unit)?) {
+internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus, later: (() -> Unit)?, now: () -> Long) {
     val emus by vm.syncEmulators.collectAsState()
     val at by vm.emulatorAt.collectAsState()
     val overview by vm.overview.collectAsState()
@@ -42,6 +47,9 @@ internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus, later: (() ->
     val choosing by vm.choosing.collectAsState()
     val failed by vm.choiceError.collectAsState()
     val list = emus
+    // Each emulator's screen after the first is on screen for a moment before A chooses on it, so presses meant for
+    // one emulator never choose for the next (the settle rule of the first-sync review).
+    val seen = remember { Seen() }
 
     when {
         list == null -> SetupFrame(status, SetupStep.SyncChoice, emptyList(), vm::back, later = later) {
@@ -72,15 +80,19 @@ internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus, later: (() ->
             val me = vm.deviceId.orEmpty()
             val options = configOptions(data.emulators.firstOrNull { it.emulatorId == emu }, me)
             val chosen = choices[emu]
-            // The cursor starts on the earlier choice, per emulator.
-            var cursor by rememberSaveable(emu) { mutableIntStateOf(options.indexOfFirst { it.key == chosen }.coerceAtLeast(0)) }
+            // The cursor starts on the earlier choice, per emulator, else on "Only back up", which changes nothing here.
+            var cursor by rememberSaveable(emu) {
+                mutableIntStateOf(options.indexOfFirst { it.key == chosen }.takeIf { it >= 0 } ?: options.indexOfFirst { it.choice == ConfigChoice.Own }.coerceAtLeast(0))
+            }
+            SideEffect { seen.show(emu, now) }
+            fun choose(o: ConfigOption) { if (seen.settled(emu, now)) vm.choose(emu, o) }
             val pick = options.getOrNull(cursor.coerceIn(0, options.lastIndex))
-            val hints = if (choosing == null && pick != null) listOf(Hint(Action.A, "Choose") { vm.choose(emu, pick) }) else emptyList()
+            val hints = if (choosing == null && pick != null) listOf(Hint(Action.A, "Choose") { choose(pick) }) else emptyList()
             SetupFrame(status, SetupStep.SyncChoice, hints, vm::back, note, side, later) {
                 StepTitle("$name settings")
                 StepSub(SYNC_CHOICE_SUB)
                 Options(
-                    options, cursor, { cursor = it }, { vm.choose(emu, it) },
+                    options, cursor, { cursor = it }, ::choose,
                     text = { OptionText(it.title, it.detail, if (it.key == chosen) "Your choice" else null) },
                     enabled = choosing == null,
                     below = { o ->

@@ -19,6 +19,7 @@ import dev.emusync.app.fs.ShizukuState
 import dev.emusync.app.model.ResolveConflictRequest
 import dev.emusync.app.ui.input.Action
 import dev.emusync.app.ui.input.ActionLayer
+import dev.emusync.app.ui.kit.rememberSheetChoice
 import dev.emusync.app.ui.input.OnAction
 import dev.emusync.app.ui.kit.Cell
 import dev.emusync.app.ui.kit.CursorList
@@ -120,8 +121,9 @@ private fun Review(vm: SetupViewModel, status: TopStatus, done: () -> Unit, now:
     fun confirm() { sheet?.let { vm.review.bulk(it.calls) }; sheet = null }
 
     val open = sheet
+    val choice = rememberSheetChoice(open, now)   // opens on Cancel, as on the Conflicts tab
     val hints = when {
-        open != null -> listOf(Hint(Action.A, open.confirm, ::confirm), Hint(Action.B, "Cancel") { sheet = null })
+        open != null -> listOf(choice.hint(open.confirm, "Cancel", ::confirm) { sheet = null }, Hint(Action.B, "Cancel") { sheet = null })
         focused != null -> listOf(
             Hint(Action.A, "Use this device's", ::mine),
             Hint(Action.X, useOther(focused)) { decide { it.keepOther } },
@@ -172,7 +174,7 @@ private fun Review(vm: SetupViewModel, status: TopStatus, done: () -> Unit, now:
                 (ui.failure ?: error)?.let { ErrorLine(it, Modifier.padding(top = 12.dp)) }
                 StepNote("Whatever you choose, the other copy stays in history. Games left here wait in the Conflicts tab.")
             }
-            if (open != null) ConfirmSheet(open, ::confirm) { sheet = null }
+            if (open != null) ConfirmSheet(open, choice, ::confirm) { sheet = null }
         }
         // A uses this device's save rather than "opening" the row; in its own layer so it comes before the list.
         ActionLayer { OnAction(enabled = open == null) { a -> if (a == Action.A && focused != null) { mine(); true } else false } }

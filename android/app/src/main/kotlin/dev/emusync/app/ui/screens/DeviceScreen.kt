@@ -224,13 +224,13 @@ private fun ColumnScope.GamesPane(
 }
 
 private val NEWEST_W = 96.dp
-private val HERE_W = 172.dp   // the longest copy, "two saves · choose in Conflicts", whole
+private val HERE_W = 192.dp   // the longest copy, "two saves · choose in Conflicts", whole even in SemiBold on the cursor row
 
 /** What the games table needs to stay readable: row padding, column gaps, NEWEST ON, HERE and a 200 dp GAME. */
 private val GAMES_MIN = 24.dp + 28.dp + NEWEST_W + HERE_W + 200.dp
 
 /**
- * The emulators pane takes what the games table leaves, from 240 dp (the longest name and state) up to the mockup's
+ * The emulators pane takes what the games table leaves, from 220 dp (the longest name and state) up to the mockup's
  * 380 dp. The Thor and the Odin 3 are 832 dp wide, not the mockup's 960, so a fixed 380 starved the GAME column.
  */
-internal fun emulatorsWidth(content: Dp): Dp = (content - 28.dp - GAMES_MIN).coerceIn(240.dp, 380.dp)
+internal fun emulatorsWidth(content: Dp): Dp = (content - 28.dp - GAMES_MIN).coerceIn(220.dp, 380.dp)

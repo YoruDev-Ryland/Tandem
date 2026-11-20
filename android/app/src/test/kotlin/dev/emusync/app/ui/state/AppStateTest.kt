@@ -71,7 +71,7 @@ class AppStateTest {
         val groups = MutableStateFlow(emptyMap<String, String>())
         val s = state(store(), FakeServer(configGroups = groups))
         fun det(id: String) = Detected(id, "pkg", "1", "/d")
-        AppGraph.snapshot.value = ServiceSnapshot(emulators = listOf(
+        AppGraph.snapshot.value = ServiceSnapshot(live = true, emulators = listOf(
             EmulatorInfo(det("eden"), 3), EmulatorInfo(det("dolphin"), 2), EmulatorInfo(det("retroarch"), 0),
             EmulatorInfo(det("melonds"), 5)))
         groups.value = mapOf("dolphin" to "Handhelds")
@@ -88,9 +88,20 @@ class AppStateTest {
         assertEquals(EmuRowState.NotSetUp, rows.getValue("azahar").state)
     }
 
+    @Test fun before_the_first_scan_rows_are_looking_not_not_set_up() = runTest {
+        val s = state(store())
+        AppGraph.snapshot.value = ServiceSnapshot(running = true, live = false)
+        AppGraph.sessionFlows.publishRunning(token, setOf("eden"))
+        val rows = s.emulators.value.associateBy { it.id }
+        assertEquals(EmuRowState.Looking, rows.getValue("azahar").state)
+        assertEquals(EmuRowState.Looking, rows.getValue("dolphin").state)
+        assertEquals(EmuRowState.Open(0), rows.getValue("eden").state)   // what the service already knows still shows
+        AppGraph.sessionFlows.publishRunning(token, emptySet())
+    }
+
     @Test fun waiting_row_disappears_when_delivery_clears() = runTest {
         val s = state(store())
-        AppGraph.snapshot.value = ServiceSnapshot(emulators = listOf(EmulatorInfo(Detected("eden", "p", "1", "/d"), 1)))
+        AppGraph.snapshot.value = ServiceSnapshot(live = true, emulators = listOf(EmulatorInfo(Detected("eden", "p", "1", "/d"), 1)))
         AppGraph.sessionFlows.publishWaiting(token, listOf(WaitingDelivery("1", "eden", "Eden", "g", "G", "P")))
         AppGraph.sessionFlows.publishRunning(token, setOf("eden"))
         assertEquals(EmuRowState.Open(1), s.emulators.value.first { it.id == "eden" }.state)
@@ -103,7 +114,7 @@ class AppStateTest {
 
     @Test fun running_emulator_with_nothing_waiting_is_open_zero() = runTest {
         val s = state(store())
-        AppGraph.snapshot.value = ServiceSnapshot(emulators = listOf(EmulatorInfo(Detected("eden", "p", "1", "/d"), 4)))
+        AppGraph.snapshot.value = ServiceSnapshot(live = true, emulators = listOf(EmulatorInfo(Detected("eden", "p", "1", "/d"), 4)))
         assertEquals(EmuRowState.Saves(4), s.emulators.value.first { it.id == "eden" }.state)
         AppGraph.sessionFlows.publishRunning(token, setOf("eden"))
         assertEquals(EmuRowState.Open(0), s.emulators.value.first { it.id == "eden" }.state)

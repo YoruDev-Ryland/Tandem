@@ -31,6 +31,9 @@ import org.robolectric.annotation.GraphicsMode
  * three first-sync conflicts and the bulk choices; dark with the bulk confirm sheet open. With EMUSYNC_SHOT_DIR set
  * it writes conflicts-dark.png, conflicts-light.png and conflicts-sheet-dark.png there.
  */
+/** The devices' size in dp: 1920x1080 px at 369 dpi. */
+internal const val DEVICE_SIZE = "w832dp-h468dp-land-xhdpi"
+
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(qualifiers = "w960dp-h540dp-land-xhdpi")
@@ -49,6 +52,12 @@ class ConflictsScreenshotTest {
     @Test fun light() = shoot(ThemeMode.Light, "conflicts-light.png", three)
 
     @Test fun sheetDark() = shoot(ThemeMode.Dark, "conflicts-sheet-dark.png", three, sheet = true)
+
+    // The Thor's and the Odin 3's real size (1920x1080 px at 369 dpi), for design/screens/app/robo-*.png.
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceDark() = shoot(ThemeMode.Dark, "robo-conflicts-decide-dark.png", one, running = setOf("eden"))
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceLight() = shoot(ThemeMode.Light, "robo-conflicts-decide-light.png", three)
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceSheetDark() = shoot(ThemeMode.Dark, "robo-conflicts-sheet-dark.png", three, sheet = true)
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceSheetLight() = shoot(ThemeMode.Light, "robo-conflicts-sheet-light.png", three, sheet = true)
 
     private fun shoot(mode: ThemeMode, name: String, rows: List<ConflictRow>, running: Set<String> = emptySet(), sheet: Boolean = false) {
         val names = mapOf("eden" to "Eden", "azahar" to "Azahar")

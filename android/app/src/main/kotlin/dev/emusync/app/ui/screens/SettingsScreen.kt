@@ -1,5 +1,7 @@
 package dev.emusync.app.ui.screens
 
+import android.os.SystemClock
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +53,9 @@ import dev.emusync.app.ui.kit.Cell
 import dev.emusync.app.ui.kit.ConsoleScaffold
 import dev.emusync.app.ui.kit.CursorList
 import dev.emusync.app.ui.kit.EmuButton
+import dev.emusync.app.ui.kit.SheetButtons
+import dev.emusync.app.ui.kit.SheetChoice
+import dev.emusync.app.ui.kit.rememberSheetChoice
 import dev.emusync.app.ui.kit.EmuRadius
 import dev.emusync.app.ui.kit.Fact
 import dev.emusync.app.ui.kit.Facts
@@ -125,7 +130,12 @@ private val THEMES = listOf(
  * hint bar; editing a folder and signing out open a sheet over the section.
  */
 @Composable
-fun SettingsScreen(ui: SettingsUi, top: @Composable RowScope.() -> Unit, actions: SettingsActions) {
+fun SettingsScreen(
+    ui: SettingsUi,
+    top: @Composable RowScope.() -> Unit,
+    actions: SettingsActions,
+    now: () -> Long = { SystemClock.uptimeMillis() },
+) {
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var syncAt by remember { mutableIntStateOf(0) }
     var emuAt by remember { mutableIntStateOf(0) }
@@ -178,10 +188,12 @@ fun SettingsScreen(ui: SettingsUi, top: @Composable RowScope.() -> Unit, actions
 
     val back = Hint(Action.B, "Back", actions.back)
     val open = sheet
+    // Sign out and Remove open on their safe button and confirm only after a moment on screen (SheetChoice).
+    val choice = rememberSheetChoice(open, now)
     val hints = when (open) {
-        Sheet.SignOut -> listOf(Hint(Action.A, "Sign out", ::confirmSignOut), cancel)
+        Sheet.SignOut -> listOf(choice.hint("Sign out", "Cancel", ::confirmSignOut, cancel.onClick), cancel)
         is Sheet.Path -> listOf(Hint(Action.A, open.confirm, ::submitPath), cancel)
-        is Sheet.RemoveRomDir -> listOf(Hint(Action.A, "Remove") { confirmRemove(open.path) }, keep)
+        is Sheet.RemoveRomDir -> listOf(choice.hint("Remove", "Keep", { confirmRemove(open.path) }, keep.onClick), keep)
         null -> when (ui.section) {
             SettingsSection.Sync -> when (syncRow) {
                 is SyncRow.AutoApply -> listOf(Hint(Action.A, if (syncRow.on) "Turn off" else "Turn on") { openSync(syncRow) }, back)
@@ -243,11 +255,11 @@ fun SettingsScreen(ui: SettingsUi, top: @Composable RowScope.() -> Unit, actions
                 }
             }
             when (open) {
-                Sheet.SignOut -> SheetFrame("Sign out?", SIGN_OUT_COPY, "Sign out", ::confirmSignOut, cancel.onClick) {}
+                Sheet.SignOut -> SheetFrame("Sign out?", SIGN_OUT_COPY, "Sign out", ::confirmSignOut, cancel.onClick, choice = choice) {}
                 is Sheet.Path -> PathSheet(open.title, open.detail, open.confirm, pathText, pathError, ::submitPath, cancel.onClick)
                 is Sheet.RemoveRomDir -> SheetFrame(
                     "Remove ${open.path}?", REMOVE_ROM_COPY, "Remove", { confirmRemove(open.path) }, keep.onClick,
-                    cancelLabel = "Keep",
+                    cancelLabel = "Keep", choice = choice,
                 ) {}
                 null -> {}
             }
@@ -378,11 +390,13 @@ private fun SheetFrame(
     confirm: () -> Unit,
     cancel: () -> Unit,
     cancelLabel: String = "Cancel",
+    choice: SheetChoice? = null,
     content: @Composable () -> Unit,
 ) {
     val c = LocalEmu.current
     ActionLayer {
         OnAction { a ->
+            if (choice != null) return@OnAction choice.onAction(a, confirm, cancel)
             when (a) {
                 Action.A -> confirm()
                 Action.B -> cancel()
@@ -402,9 +416,13 @@ private fun SheetFrame(
                 BasicText(title, style = EmuType.section.copy(color = c.ink, fontSize = 20.sp))
                 BasicText(detail, Modifier.padding(top = 6.dp, bottom = 12.dp).widthIn(max = 620.dp), style = EmuType.body.copy(color = c.ink2))
                 content()
-                Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    EmuButton(confirmLabel, primary = true, glyph = Action.A, onClick = confirm)
-                    EmuButton(cancelLabel, glyph = Action.B, onClick = cancel)
+                if (choice != null) {
+                    SheetButtons(choice, confirmLabel, cancelLabel, confirm, cancel, Modifier.padding(top = 12.dp))
+                } else {
+                    Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        EmuButton(confirmLabel, primary = true, glyph = Action.A, onClick = confirm)
+                        EmuButton(cancelLabel, glyph = Action.B, onClick = cancel)
+                    }
                 }
             }
         }
