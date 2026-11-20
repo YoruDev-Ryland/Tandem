@@ -44,6 +44,10 @@ public sealed class AccountService(EmuSyncDbContext db, IOptions<ServerOptions> 
         return row is not null ? row.Value == "true" : options.Value.AllowRegistration;
     }
 
+    /// <summary>True when the first account can still register, or when registration is allowed.</summary>
+    public async Task<bool> IsRegistrationOpen(CancellationToken ct = default) =>
+        !await db.Users.AnyAsync(ct) || await GetAllowRegistration(ct);
+
     public async Task SetAllowRegistration(bool value, CancellationToken ct = default)
     {
         var row = await db.ServerSettings.FirstOrDefaultAsync(s => s.Key == AllowRegistrationKey, ct);

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using EmuSync.Protocol;
 using EmuSync.Server.Tests.Infrastructure;
 
@@ -47,5 +48,34 @@ public class ServerInfoTests
         var info = await (await factory.Client().GetAsync("/v1/server-info")).ReadAsync<ServerInfo>();
 
         Assert.Equal(60, info.Name.Length);
+    }
+
+    private static async Task<bool> RegistrationOpen(ServerFactory f) =>
+        (await (await f.Client().GetAsync("/v1/server-info")).ReadAsync<ServerInfo>()).RegistrationOpen;
+
+    [Fact]
+    public async Task RegistrationOpen_true_on_empty_server_even_when_env_closed()
+    {
+        using var factory = new ServerFactory();
+        Assert.True(await RegistrationOpen(factory));
+    }
+
+    [Fact]
+    public async Task RegistrationOpen_false_after_first_user_when_closed()
+    {
+        using var factory = new ServerFactory();
+        await factory.Register("a@example.com");
+        Assert.False(await RegistrationOpen(factory));
+    }
+
+    [Fact]
+    public async Task RegistrationOpen_follows_admin_setting()
+    {
+        using var factory = new ServerFactory();
+        var (admin, _) = await factory.Register("a@example.com");
+        await admin.PutAsJsonAsync("/v1/admin/settings", new AdminSettings(true));
+        Assert.True(await RegistrationOpen(factory));
+        await admin.PutAsJsonAsync("/v1/admin/settings", new AdminSettings(false));
+        Assert.False(await RegistrationOpen(factory));
     }
 }
