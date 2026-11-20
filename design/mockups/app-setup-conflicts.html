@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EmuSync · app flows</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#2a2a2a;color:#eee;font:14px/1.5 Barlow,sans-serif;padding:28px 32px 80px}
+.intro{max-width:1150px;margin:0 0 22px}
+.intro h2{font:600 22px Barlow;margin:0 0 6px}
+.intro p{margin:0;color:#bbb}
+.cap{color:#ccc;margin:26px 0 10px}
+.dev{width:1200px;height:675px;overflow:hidden}
+.s{width:960px;height:540px;transform:scale(1.25);transform-origin:0 0}
+.k{--bg:#121212;--ink:#F2F2F0;--ink2:#A3A3A0;--ink3:#6E6E6B;--rule:rgba(255,255,255,.07);--rule2:rgba(255,255,255,.14);--focus-bg:#F2F2F0;--focus-ink:#121212;--wait:#F0A030;--fault:#FF6B55;--glyph:#2A2A2A;
+  background:var(--bg);color:var(--ink);font:400 14px/1.35 Barlow,sans-serif;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased}
+.top{display:flex;align-items:center;gap:20px;padding:0 28px;height:52px;flex:none}
+.word{font:700 16px 'Barlow Semi Condensed';margin-right:8px}
+.tabs{display:flex;align-items:center;gap:20px;font:600 15px 'Barlow Semi Condensed'}
+.tabs span{color:var(--ink3)}.tabs .on{color:var(--ink)}
+.bump{font:700 10px Barlow;color:var(--ink2);border:1.5px solid var(--ink3);border-radius:4px 4px 2px 2px;padding:0 5px}
+.status{margin-left:auto;display:flex;gap:18px;font:500 13px Barlow;color:var(--ink2)}
+.status b{color:var(--ink);font-weight:600}
+.body{flex:1;display:grid;column-gap:28px;padding:4px 28px 0;min-height:0}
+h1{margin:4px 0 6px;font:600 26px/1.05 'Barlow Semi Condensed'}
+h2{margin:4px 0 10px;font:600 15px 'Barlow Semi Condensed';color:var(--ink2)}
+.sub{color:var(--ink2);margin:0 0 14px;max-width:560px}
+.r{display:grid;align-items:center;column-gap:14px;min-height:40px;padding:0 12px;border-top:1px solid var(--rule)}
+.r.f{background:var(--focus-bg);color:var(--focus-ink);border-radius:3px;border-top-color:transparent}
+.r.f+.r{border-top-color:transparent}
+.r .m{color:var(--ink2);font-size:13px}
+.r.f .m{color:color-mix(in srgb,var(--focus-ink) 65%,var(--focus-bg))}
+.opt{padding:10px 12px;display:block;min-height:0}
+.opt b{font-size:16px;display:block}
+.opt span{font-size:13px;color:var(--ink2)}
+.r.f.opt span{color:color-mix(in srgb,var(--focus-ink) 65%,var(--focus-bg))}
+.steps{border-right:1px solid var(--rule2);padding-right:20px}
+.st{display:flex;gap:10px;align-items:center;height:34px;color:var(--ink3);font:500 14px Barlow}
+.st.on{color:var(--ink);font-weight:600}
+.st.done{color:var(--ink2)}
+.st .n{width:20px;font:600 13px 'Barlow Semi Condensed';text-align:right}
+.facts{display:grid;grid-template-columns:120px 1fr;row-gap:6px;margin:8px 0 14px;font-size:14px}
+.facts dt{color:var(--ink3)}.facts dd{margin:0}
+.mono{font:400 12px 'JetBrains Mono'}
+.x{color:var(--fault)}
+.hints{flex:none;display:flex;justify-content:flex-end;gap:20px;align-items:center;height:44px;padding:0 28px;border-top:1px solid var(--rule);font:500 13px Barlow;color:var(--ink2)}
+.hints span{display:flex;align-items:center;gap:7px}
+.hints i{font:700 11px Barlow;font-style:normal;width:20px;height:20px;border-radius:50%;background:var(--glyph);color:var(--ink);display:inline-flex;align-items:center;justify-content:center}
+.hints .left{margin-right:auto;color:var(--ink3)}
+</style>
+</head>
+<body>
+<div class="intro">
+  <h2>App · first-run setup and conflicts</h2>
+  <p>Same system. Setup is one question per screen with the steps listed down the left; conflicts are decided with the face buttons, no pointing needed.</p>
+</div>
+
+<p class="cap"><b>Setup, step 4</b> · how RetroArch settings sync on this device (Odin 3)</p>
+<div class="dev"><div class="s k">
+  <div class="top"><span class="word">EmuSync</span><span style="color:var(--ink2);font:600 15px 'Barlow Semi Condensed'">Set up this device</span><div class="status"><span><b>Odin 3</b></span><span>Server connected</span><span>Shizuku on</span></div></div>
+  <div class="body" style="grid-template-columns:200px 1fr">
+    <div class="steps">
+      <div class="st done"><span class="n">1</span>Server and sign-in</div>
+      <div class="st done"><span class="n">2</span>Shizuku</div>
+      <div class="st done"><span class="n">3</span>Emulators found</div>
+      <div class="st on"><span class="n">4</span>How each one syncs</div>
+      <div class="st"><span class="n">5</span>First sync</div>
+      <div style="margin-top:24px;color:var(--ink3);font-size:13px">RetroArch · 2 of 5<br>Next: Eden</div>
+    </div>
+    <div>
+      <h1>RetroArch settings</h1>
+      <p class="sub">Saves always sync. This is about settings, controls and shaders only. Folder paths stay as they are on each device.</p>
+      <div class="r f opt"><b>Join "AYN handhelds" with Thor</b><span>Use the group's settings and keep them the same from now on. This device's current settings are backed up first.</span></div>
+      <div class="r opt"><b>Copy Thor's settings once</b><span>Start from Thor's, then change them freely here.</span></div>
+      <div class="r opt"><b>Only back up this device's settings</b><span>Nothing changes here. You can join a group later.</span></div>
+    </div>
+  </div>
+  <div class="hints"><span class="left">Change any of this later in Settings</span><span><i>A</i>Choose</span><span><i>B</i>Back</span></div>
+</div></div>
+
+<p class="cap"><b>Conflicts tab</b> · on the Thor, deciding Pokémon Brilliant Diamond</p>
+<div class="dev"><div class="s k">
+  <div class="top"><span class="word">EmuSync</span>
+    <div class="tabs"><span class="bump">L1</span><span>This device</span><span>Activity</span><span class="on">Conflicts 1</span><span>Settings</span><span class="bump">R1</span></div>
+    <div class="status"><span><b>Thor</b></span><span>Server connected</span><span>Shizuku on</span></div></div>
+  <div class="body" style="grid-template-columns:300px 1fr">
+    <div>
+      <h1>Conflicts</h1>
+      <div class="r f" style="grid-template-columns:1fr auto;margin-top:10px"><span style="font-weight:600;font-size:15px">Pokémon Brilliant Diamond</span><span class="m">Eden</span></div>
+      <p style="color:var(--ink3);font-size:13px;margin:14px 12px 0">Only this game differs. Every other save matched or synced on its own.</p>
+    </div>
+    <div style="border-left:1px solid var(--rule2);padding-left:24px">
+      <h1 class="x">Two different saves</h1>
+      <p class="sub">This Thor and the Odin 3 each had a save before they first synced. Both are safe on the server.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;column-gap:24px">
+        <div><h2 style="color:var(--ink);font-size:17px">This Thor</h2>
+          <dl class="facts"><dt>Changed</dt><dd>Nov 19, 21:48</dd><dt>Size</dt><dd class="mono">1.0 MB · 3 files</dd></dl></div>
+        <div><h2 style="color:var(--ink);font-size:17px">Odin 3</h2>
+          <dl class="facts"><dt>Changed</dt><dd>Nov 17, 10:12</dd><dt>Size</dt><dd class="mono">1.0 MB · 3 files</dd></dl></div>
+      </div>
+      <p style="color:var(--ink3);font-size:13px;margin:0">Change times are a hint only. Whatever you choose, the other copy stays in history.</p>
+    </div>
+  </div>
+  <div class="hints"><span class="left">Eden is open: your choice is applied when it closes</span><span><i>A</i>Keep this Thor's</span><span><i>X</i>Keep Odin 3's</span><span><i>Y</i>Keep both</span><span><i>B</i>Back</span></div>
+</div></div>
+</body>
+</html>
