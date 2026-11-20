@@ -15,6 +15,7 @@
   import Device from "./pages/Device.svelte";
   import Pair from "./pages/Pair.svelte";
   import Setup from "./pages/Setup.svelte";
+  import Vault from "./pages/Vault.svelte";
   import AppTopBar from "./lib/ui/AppTopBar.svelte";
 
   const titles: Record<string, string> = {
@@ -77,6 +78,8 @@
       <Pair />
     {:else if route.name === "device-setup"}
       <Setup />
+    {:else if route.name === "vault"}
+      <Vault />
     {:else}
     <main>
       {#if route.name === "not-found"}
