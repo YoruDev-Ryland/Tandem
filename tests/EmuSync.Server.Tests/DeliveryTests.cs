@@ -279,7 +279,50 @@ public class DeliveryTests
 
         // v1 is A's latest upload, but it is history, not an open conflict: A holds v2 and must be sent v1.
         Assert.Equal(v2.VersionId, await Known(factory, aKey.DeviceId, v1.ItemId));
-        Assert.Equal(v1.VersionId, Assert.Single(await Deliveries(a)).VersionId);
+        var d = Assert.Single(await Deliveries(a));
+        Assert.Equal(v1.VersionId, d.VersionId);
+
+        // Applying it settles A, even though v1 is older (lower Seq) than what A knew.
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(a, d.Id, DeliveryResult.Applied)).StatusCode);
+        Assert.Equal(v1.VersionId, await Known(factory, aKey.DeviceId, v1.ItemId));
+        Assert.Empty(await Deliveries(a));
+        Assert.Empty(await OpenRows(factory));
+    }
+
+    [Fact]
+    public async Task Applied_ack_after_historical_resolve_settles()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        var (c, _) = await factory.PairSecondDevice(a, "C");
+        var (d, _) = await factory.PairSecondDevice(a, "D");
+        var devices = new[] { a, b, c, d };
+        foreach (var device in devices) await Install(device, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        foreach (var device in new[] { b, c, d })
+            (await Ack(device, Assert.Single(await Deliveries(device)).Id, DeliveryResult.Applied)).EnsureSuccessStatusCode();
+        await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        foreach (var device in new[] { b, c })
+            (await Ack(device, Assert.Single(await Deliveries(device)).Id, DeliveryResult.Applied)).EnsureSuccessStatusCode();
+        var conflict = await Upload(d, Req(await Files(d, "d"), v1.VersionId)); // D never took v2
+        Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
+
+        (await a.PostJsonAsync($"/v1/conflicts/{v1.ItemId}/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, v1.VersionId))).EnsureSuccessStatusCode();
+
+        foreach (var device in devices)
+            foreach (var delivery in await Deliveries(device))
+            {
+                Assert.Equal(v1.VersionId, delivery.VersionId);
+                Assert.Equal(HttpStatusCode.NoContent, (await Ack(device, delivery.Id, DeliveryResult.Applied)).StatusCode);
+            }
+
+        foreach (var device in devices) Assert.Empty(await Deliveries(device));
+        Assert.Empty(await OpenRows(factory));
+        var known = await InDb(factory, db => db.DeviceItemStates.Where(s => s.ItemId == v1.ItemId).Select(s => s.KnownVersionId).ToListAsync());
+        Assert.Equal(4, known.Count);
+        Assert.All(known, k => Assert.Equal(v1.VersionId, k));
     }
 
     [Fact]

@@ -102,7 +102,7 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
                 // A late ack of a delivery a newer version replaced. Applied is still true (the device holds that
                 // version), so record it; anything else changes nothing. Either way the device is told 204.
                 if (request.Result != DeliveryResult.Applied) return;
-                await MarkAppliedAsync(delivery, ct);
+                await MarkAppliedAsync(delivery, lateAck: true, ct);
                 await db.SaveChangesAsync(ct);
             }
             else
@@ -112,7 +112,7 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
                 delivery.AckedUtc = time.GetUtcNow();
                 delivery.Result = request.Result;
                 if (request.Result == DeliveryResult.Applied)
-                    await MarkAppliedAsync(delivery, ct);
+                    await MarkAppliedAsync(delivery, lateAck: false, ct);
                 await db.SaveChangesAsync(ct);
             }
 
@@ -129,7 +129,10 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
         }
     }
 
-    private async Task MarkAppliedAsync(DeliveryRow delivery, CancellationToken ct)
+    /// <param name="lateAck">The delivery was superseded before this ack. A live delivery is the current head, so
+    /// applying it always sets known (even when the head is historical, with a lower Seq than what the device knew);
+    /// only a late ack is checked against moving known backwards.</param>
+    private async Task MarkAppliedAsync(DeliveryRow delivery, bool lateAck, CancellationToken ct)
     {
         switch (delivery.Kind)
         {
@@ -139,6 +142,10 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
                 if (state is null)
                 {
                     db.DeviceItemStates.Add(new DeviceItemState { DeviceId = delivery.DeviceId, ItemId = delivery.TargetId, KnownVersionId = delivery.VersionId });
+                }
+                else if (!lateAck)
+                {
+                    state.KnownVersionId = delivery.VersionId;
                 }
                 else if (state.KnownVersionId != delivery.VersionId)
                 {
