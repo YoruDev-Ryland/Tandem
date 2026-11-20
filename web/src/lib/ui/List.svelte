@@ -23,6 +23,8 @@
     key?: (row: T, i: number) => unknown;
     /** Rows that read as unavailable (aria-disabled). */
     disabled?: (row: T) => boolean;
+    /** Narrowest width the table keeps on a phone before it scrolls sideways. */
+    minWidth?: string;
   }
   let {
     rows,
@@ -36,6 +38,7 @@
     active = true,
     key = (_r: T, i: number) => i,
     disabled = () => false,
+    minWidth = "1040px",
   }: Props = $props();
 
   const c = cursor(() => rows.length);
@@ -118,7 +121,7 @@
   }
 </script>
 
-<div class="list" bind:this={list}>
+<div class="list" style:--list-min={minWidth} bind:this={list}>
   {#if header}
     <div class="head {size}" style:grid-template-columns={columns} aria-hidden="true">
       {#each header as h, i (i)}<span class:end={headerEnd.includes(i)}>{h}</span>{/each}
@@ -166,5 +169,14 @@
     padding: 0 14px;
     column-gap: 18px;
     align-items: center;
+  }
+  /* On a phone the table keeps its columns and scrolls sideways inside its own box. */
+  @media (max-width: 640px) {
+    .list {
+      overflow-x: auto;
+    }
+    .list > :global(*) {
+      min-width: var(--list-min);
+    }
   }
 </style>

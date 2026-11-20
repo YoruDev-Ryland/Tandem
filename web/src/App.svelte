@@ -101,7 +101,7 @@
 
 <style>
   main {
-    padding: 0 40px;
+    padding: 0 var(--gutter);
   }
   h1 {
     margin: 0;

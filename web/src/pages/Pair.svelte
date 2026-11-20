@@ -100,7 +100,7 @@
   }
   section {
     flex: 1;
-    padding: 8px 40px 24px;
+    padding: 8px var(--gutter) 24px;
   }
   h1 {
     margin: 0 0 28px;
@@ -157,5 +157,20 @@
   }
   .retry {
     margin-top: 14px;
+  }
+  @media (max-width: 640px) {
+    .pair {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 24px;
+    }
+    .qr {
+      width: min(280px, 100%);
+      height: auto;
+      aspect-ratio: 1;
+    }
+    .code {
+      font-size: 24px;
+    }
   }
 </style>

@@ -336,7 +336,7 @@
   }
   section {
     flex: 1;
-    padding: 8px 40px 24px;
+    padding: 8px var(--gutter) 24px;
   }
   h1 {
     margin: 0 0 8px;
@@ -442,5 +442,16 @@
   .mono {
     font: 400 13px "JetBrains Mono", ui-monospace, monospace;
     font-variant-numeric: tabular-nums;
+  }
+  @media (max-width: 900px) {
+    .split {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 24px;
+    }
+    aside {
+      padding: 24px 0 0;
+      border-left: 0;
+      border-top: 1px solid var(--rule);
+    }
   }
 </style>

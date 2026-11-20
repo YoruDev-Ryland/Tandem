@@ -189,7 +189,7 @@
   {:else if items.length === 0}
     <Empty text="No activity matches these filters." />
   {:else}
-    <List {rows} columns="140px 160px minmax(0,1fr)" header={["Time", "Device", "What happened"]} bind:index onOpen={open}
+    <List {rows} columns="140px 160px minmax(0,1fr)" header={["Time", "Device", "What happened"]} bind:index onOpen={open} minWidth="720px"
       key={(r) => (r.kind === "item" ? r.item.id : "older")} disabled={(r) => r.kind === "older" && loadingOlder}>
       {#snippet row(r: Row)}
         {#if r.kind === "item"}
@@ -222,7 +222,7 @@
   }
   section {
     flex: 1;
-    padding: 8px 40px 0;
+    padding: 8px var(--gutter) 0;
   }
   h1 {
     margin: 0 0 18px;

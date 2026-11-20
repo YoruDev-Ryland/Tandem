@@ -40,7 +40,7 @@
     align-items: center;
     gap: 28px;
     height: 72px;
-    padding: 0 40px;
+    padding: 0 var(--gutter);
   }
   .word {
     flex: none;

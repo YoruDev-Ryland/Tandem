@@ -121,9 +121,9 @@
           {:else}
             <ul class="rows">
               {#each device.data.emulators as e (e.emulatorId)}
-                <li style:grid-template-columns="140px minmax(0,1fr) 90px minmax(0,1fr)">
+                <li class="em">
                   <span class="name">{emulatorName(e.emulatorId)}</span>
-                  <span class="ink2 mono ellipsis" title={e.package}>{e.package}</span>
+                  <span class="pkg ink2 mono ellipsis" title={e.package}>{e.package}</span>
                   <span class="ink3 mono">{e.version ?? "—"}</span>
                   <span class="ink2 ellipsis">{e.cores?.length ? e.cores.join(", ") : ""}</span>
                 </li>
@@ -137,7 +137,7 @@
           {:else}
             <ul class="rows">
               {#each device.data.configs as c (c.bundleId)}
-                <li style:grid-template-columns="140px minmax(0,1fr) 140px">
+                <li class="cf">
                   <span class="name">{emulatorName(c.emulatorId)}</span>
                   <span class="ink2 ellipsis">{c.groupName ?? "on its own"}</span>
                   {#if c.openConflict}
@@ -198,7 +198,7 @@
   }
   section {
     flex: 1;
-    padding: 8px 40px 24px;
+    padding: 8px var(--gutter) 24px;
   }
   h1 {
     margin: 0 0 8px;
@@ -248,6 +248,23 @@
     padding: 0 16px;
     border-top: 1px solid var(--rule);
   }
+  .rows li.em {
+    grid-template-columns: 140px minmax(0, 1fr) 140px minmax(0, 1fr);
+  }
+  .rows li.cf {
+    grid-template-columns: 140px minmax(0, 1fr) 140px;
+  }
+  @media (max-width: 640px) {
+    .rows li.em {
+      grid-template-columns: 110px 100px minmax(0, 1fr);
+    }
+    .rows li.em .pkg {
+      display: none;
+    }
+    .rows li.cf {
+      grid-template-columns: 110px minmax(0, 1fr) auto;
+    }
+  }
   .name {
     font: 600 17px "Barlow", system-ui, sans-serif;
   }
@@ -292,5 +309,16 @@
     display: flex;
     gap: 10px;
     margin-top: 22px;
+  }
+  @media (max-width: 900px) {
+    .split {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 24px;
+    }
+    aside {
+      padding: 24px 0 0;
+      border-left: 0;
+      border-top: 1px solid var(--rule);
+    }
   }
 </style>

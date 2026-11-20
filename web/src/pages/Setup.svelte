@@ -248,7 +248,7 @@
   }
   .page > section {
     flex: 1;
-    padding: 8px 40px 24px;
+    padding: 8px var(--gutter) 24px;
   }
   .head {
     display: flex;
@@ -338,5 +338,23 @@
     margin: 0;
     padding: 12px 16px;
     color: var(--ink3);
+  }
+  @media (max-width: 900px) {
+    .split {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 24px;
+    }
+    .col + .col {
+      padding: 24px 0 0;
+      border-left: 0;
+      border-top: 1px solid var(--rule);
+    }
+  }
+  @media (max-width: 640px) {
+    .acts {
+      grid-column: 2 / -1;
+      flex-wrap: wrap;
+      padding-bottom: 10px;
+    }
   }
 </style>

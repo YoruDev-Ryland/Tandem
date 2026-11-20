@@ -85,7 +85,7 @@
 
 <style>
   main {
-    padding: 0 40px 40px;
+    padding: 0 var(--gutter) 40px;
   }
   h1 {
     margin: 0;

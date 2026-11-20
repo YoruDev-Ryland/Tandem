@@ -160,7 +160,7 @@
   }
   section {
     flex: 1;
-    padding: 8px 40px 24px;
+    padding: 8px var(--gutter) 24px;
   }
   h1 {
     margin: 0 0 18px;

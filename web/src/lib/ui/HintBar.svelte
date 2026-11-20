@@ -30,7 +30,7 @@
     align-items: center;
     gap: 26px;
     height: 56px;
-    padding: 0 40px;
+    padding: 0 var(--gutter);
     border-top: 1px solid var(--rule);
     font: 500 14px "Barlow", system-ui, sans-serif;
     color: var(--ink2);

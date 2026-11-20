@@ -223,7 +223,6 @@
   </Dialog>
 
   <HintBar
-    status="Nothing has been overwritten"
     hints={[
       { glyph: "a", label: "Keep this one" },
       { glyph: "x", label: "Keep both" },
@@ -241,7 +240,7 @@
   }
   section {
     flex: 1;
-    padding: 8px 40px 24px;
+    padding: 8px var(--gutter) 24px;
   }
   .crumb {
     margin: 0 0 6px;
@@ -349,5 +348,16 @@
   .link {
     display: inline-block;
     margin-top: 6px;
+  }
+  @media (max-width: 900px) {
+    .sides {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 24px 0;
+    }
+    .side + .side {
+      padding: 24px 0 0;
+      border-left: 0;
+      border-top: 1px solid var(--rule);
+    }
   }
 </style>

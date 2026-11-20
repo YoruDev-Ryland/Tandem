@@ -431,6 +431,7 @@
             rows={lines}
             columns={COLUMNS}
             size="detail"
+            minWidth="0px"
             bind:index
             active={pane === "left"}
             onOpen={activate}
@@ -564,7 +565,7 @@
   }
   section {
     flex: 1;
-    padding: 2px 40px 24px;
+    padding: 2px var(--gutter) 24px;
   }
   .tabs {
     margin: 0 0 18px;
@@ -682,5 +683,16 @@
   .loading {
     margin: 0;
     color: var(--ink3);
+  }
+  @media (max-width: 900px) {
+    .split {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 24px;
+    }
+    .right {
+      padding: 24px 0 0;
+      border-left: 0;
+      border-top: 1px solid var(--rule);
+    }
   }
 </style>

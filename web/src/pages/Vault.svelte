@@ -250,7 +250,7 @@
 
   <HintBar
     hints={[
-      { glyph: "a", label: "Send to a device…" },
+      ...(rows.length > 0 ? [{ glyph: "a" as const, label: "Send to a device…" }] : []),
       { glyph: "x", label: "Upload…" },
       { glyph: "b", label: "Back" },
     ]}
@@ -265,7 +265,7 @@
   }
   section {
     flex: 1;
-    padding: 8px 40px 24px;
+    padding: 8px var(--gutter) 24px;
   }
   h1 {
     margin: 0 0 18px;
