@@ -11,6 +11,10 @@
   import Conflict from "./pages/Conflict.svelte";
   import Conflicts from "./pages/Conflicts.svelte";
   import Configs from "./pages/Configs.svelte";
+  import Devices from "./pages/Devices.svelte";
+  import Device from "./pages/Device.svelte";
+  import Pair from "./pages/Pair.svelte";
+  import Setup from "./pages/Setup.svelte";
   import AppTopBar from "./lib/ui/AppTopBar.svelte";
 
   const titles: Record<string, string> = {
@@ -65,6 +69,14 @@
       <Conflicts />
     {:else if route.name === "configs" || route.name === "config-emulator"}
       <Configs />
+    {:else if route.name === "devices"}
+      <Devices />
+    {:else if route.name === "device"}
+      <Device />
+    {:else if route.name === "device-pair"}
+      <Pair />
+    {:else if route.name === "device-setup"}
+      <Setup />
     {:else}
     <main>
       {#if route.name === "not-found"}
