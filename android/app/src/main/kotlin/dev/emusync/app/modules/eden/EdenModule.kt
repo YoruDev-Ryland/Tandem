@@ -81,7 +81,7 @@ class EdenModule(private val internalRoot: String = "/storage/emulated/0") : Emu
     override fun installedGames(fs: Fs, d: Detected, settings: DeviceSettings): List<InstalledGame> {
         val found = LinkedHashMap<String, String?>()
         fun add(id: String, name: String?) {
-            val k = id.uppercase()
+            val k = normalizeTitleId(id)
             if (found[k] == null) found[k] = name
         }
         val cfg = readConfig(fs, d.dataRoot)
@@ -103,6 +103,18 @@ class EdenModule(private val internalRoot: String = "/storage/emulated/0") : Emu
         }
         saveItems(fs, d).forEach { add(it.gameKey, null) }
         return found.map { (k, v) -> InstalledGame(k, v) }.sortedBy { it.gameKey }
+    }
+
+    /** Maps update (low 12 bits 0x800) and DLC (non-zero low bits) title ids to the base application id. */
+    internal fun normalizeTitleId(id: String): String {
+        val v = id.toULongOrNull(16) ?: return id.uppercase()
+        val low = v and 0xFFFUL
+        val base = when {
+            low == 0x800UL -> v - 0x800UL
+            low != 0UL -> (v and 0xFFFUL.inv()) - 0x1000UL
+            else -> v
+        }
+        return base.toString(16).uppercase().padStart(16, '0')
     }
 
     /** Reads only the PFS0 header; returns base TitleID from the first .tik entry name. */

@@ -113,7 +113,7 @@ class EdenModuleTest {
         put("$sr/0000000000000000/$thorProfile/01002C9022770000/x")
         put("$sr/0000000000000000/$thorProfile/010056F00C7B4000/x")
         val g = m.installedGames(LocalFs(), detected(sr), DeviceSettings(listOf(roms), emptyMap()))
-        assertEquals(listOf("0100ABCD00000800", "01002C9022770000", "010056F00C7B4000").sorted(), g.map { it.gameKey })
+        assertEquals(listOf("0100ABCD00000000", "01002C9022770000", "010056F00C7B4000").sorted(), g.map { it.gameKey })
         assertEquals("BRAVELY DEFAULT", g.first { it.gameKey == "010056F00C7B4000" }.displayName)
         assertNull(g.first { it.gameKey == "01002C9022770000" }.displayName)
     }
@@ -167,6 +167,19 @@ class EdenModuleTest {
         offs.forEach { u32(0); u32(0); u32(0); u32(0); u32(it); u32(0) }   // offset u64, size u64, strOff u32, pad u32
         out.write(strs.toByteArray()); out.write(ByteArray(64) { 7 })
         return out.toByteArray()
+    }
+
+    @Test fun normalizes_update_and_dlc_ids_to_base() {
+        assertEquals("0100ABF008968000", m.normalizeTitleId("0100ABF008968800"))
+        assertEquals("0100ABF008968000", m.normalizeTitleId("0100ABF008969001"))
+        assertEquals("0100ABF008968000", m.normalizeTitleId("0100ABF008969002"))
+        assertEquals("0100ABF008968000", m.normalizeTitleId("0100ABF008968000"))
+        val roms = "${tmp.root}/roms"
+        put("$roms/Sword [0100ABF008968800].nsp")
+        put("$roms/DLC1 [0100ABF008969001].nsp")
+        put("$roms/DLC2 [0100ABF008969002].nsp")
+        val g = m.installedGames(LocalFs(), detected("${tmp.root}/save"), DeviceSettings(listOf(roms), emptyMap()))
+        assertEquals(listOf("0100ABF008968000"), g.map { it.gameKey })
     }
 
     @Test fun eden_nsp_pfs0_ticket_titleid() {
