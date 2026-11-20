@@ -228,10 +228,26 @@ describe("Settings", () => {
     expect(screen.queryByText("Gen-Pass-1234")).toBeNull();
   });
 
-  it("explains cannot_delete_self", async () => {
-    await openWith("Users", { "DELETE /v1/admin/users/u1": () => reply(400, { code: "cannot_delete_self", message: "x" }) });
-    const row = (await screen.findByText("me@x.test")).closest("li") as HTMLElement;
-    await fireEvent.click(within(row).getByRole("button", { name: "Delete me@x.test" }));
+  it("offers no Delete on the signed-in admin's own row", async () => {
+    await open("Users");
+    const own = (await screen.findByText("me@x.test")).closest("li") as HTMLElement;
+    expect(within(own).queryByRole("button", { name: /Delete/ })).toBeNull();
+    const other = screen.getByText("kid@x.test").closest("li") as HTMLElement;
+    expect(within(other).getByRole("button", { name: "Delete kid@x.test" })).toBeTruthy();
+  });
+
+  it("focuses Cancel, not Delete user, when the delete confirm opens", async () => {
+    await open("Users");
+    const row = (await screen.findByText("kid@x.test")).closest("li") as HTMLElement;
+    await fireEvent.click(within(row).getByRole("button", { name: "Delete kid@x.test" }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })));
+  });
+
+  it("explains a failed delete in place", async () => {
+    await openWith("Users", { "DELETE /v1/admin/users/u2": () => reply(400, { code: "cannot_delete_self", message: "x" }) });
+    const row = (await screen.findByText("kid@x.test")).closest("li") as HTMLElement;
+    await fireEvent.click(within(row).getByRole("button", { name: "Delete kid@x.test" }));
     await fireEvent.click(await screen.findByRole("button", { name: "Delete user" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/can't delete your own account/i);
   });

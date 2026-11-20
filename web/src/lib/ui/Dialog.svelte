@@ -24,10 +24,14 @@
     opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Modal: B closes it, and nothing reaches the page underneath while it is open.
     offAction = onAction((a) => {
-      if (a === "b" && !locked) open = false;
-      // Gamepad A presses the focused control (keyboard Enter does this natively).
-      if (a === "a" && document.activeElement instanceof HTMLElement && document.activeElement !== el && el.contains(document.activeElement)) {
-        document.activeElement.click();
+      if (a === "b") {
+        if (!locked) open = false;
+      } else if (a === "up" || a === "down") {
+        step(a === "down" ? 1 : -1);
+      } else if (a === "left" || a === "right") {
+        sideways(a === "right" ? 1 : -1);
+      } else if (a === "a") {
+        press();
       }
       return true;
     });
@@ -35,8 +39,93 @@
     shown = true;
     // The contents render after showModal, so move focus into them once they exist.
     void tick().then(() => {
-      if (shown) el.querySelector<HTMLElement>("[autofocus], input, select, textarea, button")?.focus();
+      if (shown) (el.querySelector<HTMLElement>("[autofocus]") ?? stops()[0])?.focus();
     });
+  }
+
+  /** The focused control inside the dialog, if any. */
+  function current(): HTMLElement | null {
+    const f = document.activeElement;
+    return f instanceof HTMLElement && f !== el && el.contains(f) ? f : null;
+  }
+
+  /** The dialog's controls in DOM order; a radio group is one stop, its checked radio. */
+  function stops(): HTMLElement[] {
+    const all = el.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href]");
+    return [...all].filter((c) => {
+      if ((c as HTMLButtonElement).disabled || c.closest("[hidden]") || (c instanceof HTMLInputElement && c.type === "hidden")) return false;
+      if (c instanceof HTMLInputElement && c.type === "radio" && c.name) {
+        const group = radios(c);
+        const stop = group.find((r) => r.checked) ?? group[0];
+        return c === stop;
+      }
+      return true;
+    });
+  }
+
+  function radios(r: HTMLInputElement): HTMLInputElement[] {
+    return [...el.querySelectorAll<HTMLInputElement>('input[type="radio"]')].filter((o) => o.name === r.name && o.form === r.form && !o.disabled);
+  }
+
+  /** Up and down move through the controls, stopping at either end. */
+  function step(by: 1 | -1) {
+    const list = stops();
+    if (list.length === 0) return;
+    const f = current();
+    const at = f ? list.indexOf(f) : -1;
+    const next = at < 0 ? 0 : Math.min(Math.max(at + by, 0), list.length - 1);
+    list[next]!.focus();
+  }
+
+  function changed(c: HTMLElement) {
+    c.dispatchEvent(new Event("input", { bubbles: true }));
+    c.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  /** Left and right step a select or radio group; on anything else they move like up and down. */
+  function sideways(by: 1 | -1) {
+    const f = current();
+    if (f instanceof HTMLSelectElement) {
+      const i = Math.min(Math.max(f.selectedIndex + by, 0), f.options.length - 1);
+      if (i !== f.selectedIndex) {
+        f.selectedIndex = i;
+        changed(f);
+      }
+    } else if (f instanceof HTMLInputElement && f.type === "radio") {
+      const group = radios(f);
+      const i = Math.min(Math.max(group.indexOf(f) + by, 0), group.length - 1);
+      const r = group[i]!;
+      if (r !== f) {
+        r.checked = true;
+        r.focus();
+        changed(r);
+      }
+    } else {
+      step(by);
+    }
+  }
+
+  /**
+   * Gamepad A (keyboard Enter does this natively): a button or checkbox is pressed;
+   * a field submits its form, as Enter would, or presses the dialog's primary button.
+   */
+  function press() {
+    const f = current();
+    if (!f) return;
+    if (f instanceof HTMLButtonElement || f instanceof HTMLAnchorElement || (f instanceof HTMLInputElement && f.type === "checkbox")) {
+      f.click();
+      return;
+    }
+    if (f instanceof HTMLTextAreaElement) return;
+    const form = (f as HTMLInputElement | HTMLSelectElement).form;
+    if (form) {
+      const submit = form.querySelector<HTMLButtonElement>('button[type="submit"], input[type="submit"]');
+      if (submit?.disabled) return;
+      form.requestSubmit(submit ?? undefined);
+      return;
+    }
+    const primary = el.querySelector<HTMLButtonElement>("button.primary");
+    if (primary && !primary.disabled) primary.click();
   }
 
   function hide() {

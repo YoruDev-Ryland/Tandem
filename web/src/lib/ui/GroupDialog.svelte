@@ -104,7 +104,7 @@
       <p>Members keep their current files and go back to being on their own.</p>
       <div class="actions">
         <Button variant="primary" onclick={destroy} disabled={busy}>Delete {group.name}</Button>
-        <Button onclick={() => (confirming = false)}>Keep the group</Button>
+        <Button onclick={() => (confirming = false)} autofocus>Keep the group</Button>
       </div>
     {:else}
       <p>{group.members.length > 0 ? `${nameList(group.members.map((m) => m.name))} share these settings.` : "No device follows this group."} Folder paths stay per device.</p>

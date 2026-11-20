@@ -110,6 +110,7 @@ describe("Device", () => {
     dispatch("y");
     await screen.findByText("Odin 3 stops syncing immediately. Its saves stay on the server.");
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    await waitFor(() => expect(document.activeElement).toBe(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" })));
     await fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(calls).toContainEqual({ method: "DELETE", url: `/v1/devices/${ODIN_ID}`, body: undefined }));
     await waitFor(() => expect(router.path).toBe("/devices"));

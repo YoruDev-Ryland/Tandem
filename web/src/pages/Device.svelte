@@ -181,7 +181,7 @@
     {#if failure}<div class="err"><ErrorLine error={failure} /></div>{/if}
     <div class="actions">
       <Button variant="primary" disabled={busy} onclick={revoke}>Revoke</Button>
-      <Button onclick={() => (revoking = false)}>Cancel</Button>
+      <Button onclick={() => (revoking = false)} autofocus>Cancel</Button>
     </div>
   </Dialog>
 

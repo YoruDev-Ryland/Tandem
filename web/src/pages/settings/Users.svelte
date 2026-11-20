@@ -7,6 +7,7 @@
   import Dialog from "../../lib/ui/Dialog.svelte";
   import ErrorLine from "../../lib/ui/ErrorLine.svelte";
   import Field from "../../lib/ui/Field.svelte";
+  import { session } from "../../lib/session.svelte";
   import { settingsError } from "./settings-util";
 
   let users = $state<UserInfo[] | null>(null);
@@ -126,7 +127,12 @@
           <span class="who">{u.email}{#if u.isAdmin}<span class="ink2"> · admin</span>{/if}</span>
           <span class="ink3">{u.deviceCount} {u.deviceCount === 1 ? "device" : "devices"}</span>
           <span class="ink3 when">Since {formatWhen(u.createdUtc)}</span>
-          <Button onclick={() => askDelete(u)} aria-label="Delete {u.email}">Delete</Button>
+          <!-- The server refuses to delete the signed-in account, so it isn't offered. -->
+          {#if u.id !== session.account?.id}
+            <Button onclick={() => askDelete(u)} aria-label="Delete {u.email}">Delete</Button>
+          {:else}
+            <span class="ink3 self">You</span>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -164,7 +170,7 @@
     {#if deleteError}<p class="fault" role="alert">{deleteError}</p>{/if}
     <div class="actions">
       <Button variant="primary" onclick={confirmDelete} disabled={deleting}>Delete user</Button>
-      <Button onclick={() => (deleteOpen = false)}>Cancel</Button>
+      <Button onclick={() => (deleteOpen = false)} autofocus>Cancel</Button>
     </div>
   </div>
 </Dialog>
@@ -179,6 +185,11 @@
   }
   .when {
     min-width: 170px;
+  }
+  /* As wide as the Delete button on the other rows, so the columns line up. */
+  .self {
+    width: 76px;
+    text-align: center;
   }
   .secret {
     margin: 0;
