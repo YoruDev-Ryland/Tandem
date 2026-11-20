@@ -1,6 +1,8 @@
 package dev.emusync.app.shell
 
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class ProbeException(msg: String, cause: Throwable? = null) : Exception(msg, cause)
@@ -36,8 +38,34 @@ object ProcessProbe {
         }
     }
 
-    /** pidof exits 1 with empty output when nothing matches; anything else is a probe failure. */
-    fun isProcessAlive(pkg: String): Boolean = ProbeParse.parsePidof(run(setOf(0, 1), "pidof", pkg))
+    /**
+     * The process names (first `cmdline` argument) of every process visible under [procRoot]. Fails closed with
+     * [ProbeException] when /proc can't be listed, when pid 1 isn't visible (hidepid would hide other apps'
+     * processes, so an empty answer couldn't be trusted), or when a still-existing process's cmdline can't be read.
+     * A process that exits mid-scan is skipped.
+     */
+    fun processNames(procRoot: File = File("/proc")): List<String> {
+        val dirs = try { procRoot.listFiles() } catch (e: SecurityException) { null }
+            ?: throw ProbeException("cannot list $procRoot")
+        val pids = dirs.filter { d -> d.name.isNotEmpty() && d.name.all { it in '0'..'9' } }
+        if (pids.none { it.name == "1" }) throw ProbeException("pid 1 not visible in $procRoot; process list incomplete")
+        val out = ArrayList<String>(pids.size)
+        for (d in pids) {
+            val bytes = try {
+                File(d, "cmdline").readBytes()
+            } catch (e: Exception) {
+                if (e !is IOException && e !is SecurityException) throw e
+                if (d.exists()) throw ProbeException("cannot read ${d.path}/cmdline: ${e.message}", e)
+                continue   // exited during the scan
+            }
+            ProbeParse.processName(bytes).takeIf { it.isNotEmpty() }?.let { out += it }
+        }
+        return out
+    }
+
+    /** True when a process of any of [pkgs] (or a `<pkg>:<sub>` process of one) is alive. Fails closed. */
+    fun isAnyProcessAlive(pkgs: Collection<String>, procRoot: File = File("/proc")): Boolean =
+        ProbeParse.anyRunning(processNames(procRoot), pkgs)
 
     fun installedPackages(): Set<String> = ProbeParse.parsePmList(run(setOf(0), "pm", "list", "packages"))
 }

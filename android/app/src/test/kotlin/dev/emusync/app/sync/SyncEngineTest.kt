@@ -65,7 +65,7 @@ class SyncEngineTest {
 
     /** Each dir under <root>/saves is one Save item; files in <root>/config form the config bundle. */
     class FakeModule(val root: String, override val emulatorId: String = "fake") : EmulatorModule {
-        override val packages = listOf("com.fake.emu")
+        override val packages = listOf("com.fake.emu", "com.fake.emu.duo")   // the variant is never detected
         var throwOnItems = false
         override fun detect(fs: Fs, settings: DeviceSettings): Detected? =
             if ("com.fake.emu" in fs.installedPackages()) Detected(emulatorId, "com.fake.emu", "", root) else null
@@ -519,6 +519,16 @@ class SyncEngineTest {
         assertEquals("bundle-fake", cs.bundleId)
         e.onEmulatorExited("fake")
         assertEquals(before + 1, api.configs.size)  // unchanged
+    }
+
+    @Test fun full_scan_skips_config_while_undetected_variant_runs() = runBlocking {
+        put("config/emu.cfg", "a=1")
+        val fs = fs().apply { alive.add("com.fake.emu.duo:sub") }
+        engine(fs).fullScan()
+        assertTrue(api.configs.isEmpty())
+        fs.alive.clear()
+        engine(fs).fullScan()
+        assertEquals(1, api.configs.size)
     }
 
     @Test fun config_conflict_does_not_store() = runBlocking {

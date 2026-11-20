@@ -1,11 +1,13 @@
 package dev.emusync.app.fs
 
+import dev.emusync.app.shell.ProbeParse
 import dev.emusync.app.shell.ShellFsCore
 import java.io.File
 import java.io.InputStream
 
 /** Fs over ShellFsCore directly, for JVM tests. Process/package probes are settable fakes. */
 open class LocalFs : Fs {
+    /** Fake running process names ("pkg" or "pkg:sub"). */
     var alive: MutableSet<String> = mutableSetOf()
     var packages: MutableSet<String> = mutableSetOf()
 
@@ -17,6 +19,6 @@ open class LocalFs : Fs {
     override fun writeAtomic(path: String, data: InputStream) = ShellFsCore.writeAtomic(path, data)
     override fun delete(path: String) = ShellFsCore.delete(path)
     override fun copy(src: String, dst: String) = ShellFsCore.copy(src, dst)
-    override fun isProcessAlive(pkg: String) = pkg in alive
+    override fun isAnyProcessAlive(pkgs: Collection<String>) = ProbeParse.anyRunning(alive.toList(), pkgs)
     override fun installedPackages(): Set<String> = packages.toSet()
 }

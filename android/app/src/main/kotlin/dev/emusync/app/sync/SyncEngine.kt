@@ -109,7 +109,7 @@ class SyncEngine(
                 uploadItem(m, d, item)
             }
         }
-        for ((m, d) in found.values) if (!fs.isProcessAlive(d.pkg)) uploadConfigBundle(m, d)
+        for ((m, d) in found.values) if (!fs.isEmulatorRunning(m, d)) uploadConfigBundle(m, d)
     }
 
     /** Drops cached hashes for [paths] (files the applier wrote, deleted or restored). Lock-free. */

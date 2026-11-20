@@ -62,7 +62,7 @@ class ShellService() : IShellService.Stub() {
 
     override fun copy(src: String, dst: String) = guard { ShellFsCore.copy(src, dst) }
 
-    override fun isProcessAlive(pkg: String): Boolean = guard { ProcessProbe.isProcessAlive(pkg) }
+    override fun isAnyProcessAlive(pkgs: Array<String>): Boolean = guard { ProcessProbe.isAnyProcessAlive(pkgs.toList()) }
 
     override fun installedPackagesCsv(): String = guard { ProcessProbe.installedPackages().joinToString(",") }
 

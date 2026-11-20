@@ -78,7 +78,7 @@ class DeliveryApplierTest {
     /** Each dir under <root>/saves is one Save item; files in <root>/config and <root>/cfg2 form the bundle. */
     class FakeModule(val root: String) : EmulatorModule {
         override val emulatorId = "fake"
-        override val packages = listOf("com.fake.emu")
+        override val packages = listOf("com.fake.emu", "com.fake.emu.duo")   // the variant is never detected
         override val configRoots = setOf("data", "config")
         val hidden = mutableSetOf<String>()   // game dirs saveItems doesn't report (untracked files)
         var failTarget: RuntimeException? = null
@@ -470,7 +470,7 @@ class DeliveryApplierTest {
         put("saves/G1/a.sav", "old"); markSynced("G1")
         api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
         val fs = object : LocalFs() {
-            override fun isProcessAlive(pkg: String): Boolean = throw FsUnavailableException("probe down")
+            override fun isAnyProcessAlive(pkgs: Collection<String>): Boolean = throw FsUnavailableException("probe down")
         }.apply { packages.add("com.fake.emu") }
         try {
             applier(fs).applyAll(); fail("expected FsUnavailableException")
@@ -907,9 +907,9 @@ class DeliveryApplierTest {
         crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
         val locked = mutableListOf<Boolean>()
         val fs = object : LocalFs() {
-            override fun isProcessAlive(pkg: String): Boolean {
+            override fun isAnyProcessAlive(pkgs: Collection<String>): Boolean {
                 locked += runBlocking { withTimeoutOrNull(100) { engine.withLock { } } } == null
-                return super.isProcessAlive(pkg)
+                return super.isAnyProcessAlive(pkgs)
             }
         }.apply { packages.add("com.fake.emu") }
         applier(fs).applyAll()
@@ -980,6 +980,59 @@ class DeliveryApplierTest {
         a.onEmulatorExited("fake")
         assertEquals("old", read("saves/G1/a.sav"))
         assertTrue(store.applyMarkers().isEmpty())
+    }
+
+    // ---- final review C1: any variant or sub-process counts as running ----
+
+    @Test fun undetected_variant_running_blocks_delivery() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        val fs = fs().apply { alive.add("com.fake.emu.duo") }   // detected package is com.fake.emu
+        val a = applier(fs)
+        assertEquals(1, a.applyAll().waitingForEmulator)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("old", read("saves/G1/a.sav"))
+        fs.alive.clear()
+        assertEquals(1, a.onEmulatorExited("fake").applied)
+        assertEquals("new", read("saves/G1/a.sav"))
+    }
+
+    @Test fun subprocess_running_blocks_delivery() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        val fs = fs().apply { alive.add("com.fake.emu:emu") }
+        assertEquals(1, applier(fs).applyAll().waitingForEmulator)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("old", read("saves/G1/a.sav"))
+    }
+
+    @Test fun variant_started_during_download_waits() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new"))
+        val fs = fs()
+        api.onGetBlob = { fs.alive.add("com.fake.emu.duo:sub") }
+        assertEquals(1, applier(fs).applyAll().waitingForEmulator)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("old", read("saves/G1/a.sav"))
+        assertTrue(backupDirs("G1").isEmpty())
+    }
+
+    @Test fun config_delivery_waits_while_variant_runs() = runBlocking {
+        put("data/emu.cfg", "a=1")
+        api.standing = listOf(configDelivery("c1", "data/emu.cfg" to "a=2"))
+        val fs = fs().apply { alive.add("com.fake.emu.duo") }
+        assertEquals(1, applier(fs).applyAll().waitingForEmulator)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("a=1", read("data/emu.cfg"))
+    }
+
+    @Test fun marker_recovery_waits_while_variant_runs() = runBlocking {
+        put("saves/G1/a.sav", "new"); backupFile("a.sav", "old")
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
+        val fs = fs().apply { alive.add("com.fake.emu.duo") }
+        applier(fs).applyAll()
+        assertEquals("new", read("saves/G1/a.sav"))
+        assertEquals(1, store.applyMarkers().size)
     }
 
     @Test fun failed_restore_keeps_marker() = runBlocking {

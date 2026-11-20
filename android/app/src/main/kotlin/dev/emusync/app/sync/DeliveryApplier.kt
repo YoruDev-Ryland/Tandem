@@ -66,7 +66,7 @@ class DeliveryApplier(
         val markerKey: String,
         val backupId: String,
         val safeKey: String,
-        val pkg: String?,                     // re-probed before writing; null for vault files
+        val procs: List<String>?,             // packages re-probed before writing; null for vault files
         val targetDir: String,
         val files: List<Planned>,
         val local: Map<String, String>,       // current local files: rel -> absolute
@@ -154,7 +154,7 @@ class DeliveryApplier(
     private suspend fun applyEmulator(d: DeliveryDto): Outcome {
         val m = registry.byId(d.emulatorId) ?: throw Reject("emulator not found")
         val det = moduleCall { m.detect(fs, settings) } ?: throw Reject("emulator not found")
-        if (fs.isProcessAlive(det.pkg)) return waiting(d, m)
+        if (fs.isEmulatorRunning(m, det)) return waiting(d, m)
         pendingWhileRunning.remove(d.id)
         return try {
             if (d.kind == DeliveryKind.Config) applyConfig(d, m, det) else applySave(d, m, det)
@@ -214,7 +214,7 @@ class DeliveryApplier(
             return Outcome.Applied
         }
         install(d, Target(
-            name = name, markerKey = key, backupId = m.emulatorId, safeKey = ItemKey.safe(key), pkg = det.pkg,
+            name = name, markerKey = key, backupId = m.emulatorId, safeKey = ItemKey.safe(key), procs = m.processPackages(det),
             targetDir = dir, files = planned, local = localFiles, deletable = localFiles.keys,
             guardHash = guardHash, untrackedOk = untrackedOk, checkUntracked = true, item = state,
         ))
@@ -268,7 +268,7 @@ class DeliveryApplier(
             return done()
         }
         install(d, Target(
-            name = name, markerKey = key, backupId = id, safeKey = ItemKey.safe(key), pkg = det.pkg,
+            name = name, markerKey = key, backupId = id, safeKey = ItemKey.safe(key), procs = m.processPackages(det),
             targetDir = det.dataRoot, files = planned, local = bundle,
             deletable = bundle.keys.filter { lower(it.substringBefore('/')) in roots }.toSet(),
             guardHash = guardHash, untrackedOk = untrackedOk, checkUntracked = true, config = state,
@@ -284,7 +284,7 @@ class DeliveryApplier(
         if (store.applyMarker(key) != null) throw NoAck("an earlier vault write awaits restore")
         val dir = "$vaultRoot/${d.targetId}"
         install(d, Target(
-            name = "vault ${d.targetId}", markerKey = key, backupId = "vault", safeKey = ItemKey.safe(key), pkg = null,
+            name = "vault ${d.targetId}", markerKey = key, backupId = "vault", safeKey = ItemKey.safe(key), procs = null,
             targetDir = dir, files = d.manifest.map { Planned(it, it.path, "$dir/${it.path}", false) },
             local = emptyMap(), deletable = emptySet(), guardHash = null, untrackedOk = emptySet(),
             checkUntracked = false,
@@ -321,7 +321,7 @@ class DeliveryApplier(
     }
 
     private fun writePhase(d: DeliveryDto, t: Target, dl: File) {
-        if (t.pkg != null && fs.isProcessAlive(t.pkg)) throw StartedRunning()
+        if (t.procs != null && fs.isAnyProcessAlive(t.procs)) throw StartedRunning()
         val existed = t.files.filter { fs.exists(it.abs) }.map { it.abs }.toSet()
         if (t.checkUntracked && t.files.any { !it.matched && it.abs in existed && it.abs !in t.untrackedOk })
             throw NoAck("a file appeared at the target during the download")
@@ -393,12 +393,13 @@ class DeliveryApplier(
      */
     private suspend fun recoverMarkers() {
         for (mk in store.applyMarkers().values) {
-            var pkg: String? = null
+            var procs: List<String>? = null
             if (mk.emulatorId != "vault") {
-                pkg = registry.byId(mk.emulatorId)?.let { m ->
-                    try { m.detect(fs, settings)?.pkg } catch (e: ModuleException) { null } catch (e: IOException) { null }
+                procs = registry.byId(mk.emulatorId)?.let { m ->
+                    val det = try { m.detect(fs, settings) } catch (e: ModuleException) { null } catch (e: IOException) { null }
+                    det?.let { m.processPackages(it) }
                 }
-                if (pkg == null) {
+                if (procs == null) {
                     log("${mk.storeKey}: ${mk.emulatorId} not detected; recovery of interrupted write postponed")
                     if (notifiedUndetected.add(mk.storeKey))
                         notifier("EmuSync couldn't finish restoring ${mk.name}; backup at ${mk.backupDir ?: "none"}")
@@ -407,7 +408,7 @@ class DeliveryApplier(
                 notifiedUndetected.remove(mk.storeKey)
             }
             val ok = engine.withLock {
-                if (pkg != null && fs.isProcessAlive(pkg)) return@withLock null   // probed right before the undo
+                if (procs != null && fs.isAnyProcessAlive(procs)) return@withLock null   // probed right before the undo
                 val ok = undo(mk)
                 if (ok) store.clearApplyMarker(mk.storeKey)
                 ok

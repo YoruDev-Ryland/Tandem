@@ -21,9 +21,11 @@ class LocalFsTest {
 
     @Test fun fake_process_and_packages() {
         val fs = LocalFs()
-        assertFalse(fs.isProcessAlive("a.b"))
+        assertFalse(fs.isAnyProcessAlive(listOf("a.b")))
         fs.alive.add("a.b"); fs.packages.add("c.d")
-        assertTrue(fs.isProcessAlive("a.b"))
+        assertTrue(fs.isAnyProcessAlive(listOf("x.y", "a.b")))
+        fs.alive.clear(); fs.alive.add("a.b:remote")
+        assertTrue(fs.isAnyProcessAlive(listOf("a.b")))
         assertEquals(setOf("c.d"), fs.installedPackages())
     }
 }

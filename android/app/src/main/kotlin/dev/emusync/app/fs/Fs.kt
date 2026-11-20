@@ -16,6 +16,7 @@ interface Fs {
     fun writeAtomic(path: String, data: java.io.InputStream)
     fun delete(path: String): Boolean
     fun copy(src: String, dst: String)
-    fun isProcessAlive(pkg: String): Boolean
+    /** True when any process of [pkgs] is alive: a name exactly `pkg`, or a sub-process `pkg:<name>`. Fails closed (throws). */
+    fun isAnyProcessAlive(pkgs: Collection<String>): Boolean
     fun installedPackages(): Set<String>
 }

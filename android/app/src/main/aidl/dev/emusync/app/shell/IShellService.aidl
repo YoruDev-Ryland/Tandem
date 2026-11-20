@@ -17,8 +17,11 @@ interface IShellService {
     void writeAtomic(String path, in ParcelFileDescriptor src) = 5;
     boolean delete(String path) = 6;
     void copy(String src, String dst) = 7;
-    boolean isProcessAlive(String pkg) = 8;
+    // 8 was isProcessAlive(String pkg): retired, do not reuse.
     String installedPackagesCsv() = 9;
     void watch(in String[] dirs, IWatchListener l) = 10;
     void unwatchAll() = 11;
+    // True when a process named exactly one of pkgs, or "<pkg>:<sub>", is alive. Throws a PROBE error when the
+    // process list can't be trusted (fail closed).
+    boolean isAnyProcessAlive(in String[] pkgs) = 12;
 }

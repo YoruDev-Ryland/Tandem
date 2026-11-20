@@ -103,7 +103,7 @@ class RemoteFs(private val service: () -> IShellService) : Fs {
 
     override fun delete(path: String) = call { it.delete(path) }
     override fun copy(src: String, dst: String) = call { it.copy(src, dst) }
-    override fun isProcessAlive(pkg: String) = call { it.isProcessAlive(pkg) }
+    override fun isAnyProcessAlive(pkgs: Collection<String>) = call { it.isAnyProcessAlive(pkgs.toTypedArray()) }
 
     override fun installedPackages(): Set<String> = call {
         it.installedPackagesCsv().split(',').filter(String::isNotBlank).toSet()

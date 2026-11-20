@@ -18,6 +18,7 @@ import dev.emusync.app.fs.ShizukuState
 import dev.emusync.app.model.DeviceStatusRequest
 import dev.emusync.app.modules.DeviceSettings
 import dev.emusync.app.modules.ModuleRegistry
+import dev.emusync.app.modules.isEmulatorRunning
 import dev.emusync.app.sync.DeliveryApplier
 import dev.emusync.app.sync.StateStore
 import dev.emusync.app.sync.SyncConfig
@@ -279,7 +280,8 @@ class SyncService : Service() {
         val found = s.engine.detectedEmulators()
         s.exits.retain(found.map { it.emulatorId }.toSet())
         for (d in found) {
-            val alive = s.fs.isProcessAlive(d.pkg)
+            val m = registry.byId(d.emulatorId) ?: continue
+            val alive = s.fs.isEmulatorRunning(m, d)   // any variant or sub-process; throws (ends the session) on probe failure
             if (!s.exits.observe(d.emulatorId, alive)) continue
             log("${d.emulatorId} exited")
             s.engine.onEmulatorExited(d.emulatorId)

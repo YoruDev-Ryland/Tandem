@@ -34,9 +34,19 @@ object Paths {
     }
 }
 
+/**
+ * Every package whose processes mean this emulator is running: all known variants (installed or not, since
+ * detection picks only the first installed one and variants can share a data folder) plus the detected package.
+ */
+fun EmulatorModule.processPackages(d: Detected?): List<String> = (packages + listOfNotNull(d?.pkg)).distinct()
+
+/** True when any process of any of the module's packages is alive (see [processPackages]). Fails closed (throws). */
+fun Fs.isEmulatorRunning(m: EmulatorModule, d: Detected?): Boolean = isAnyProcessAlive(m.processPackages(d))
+
 interface EmulatorModule {
     val emulatorId: String
-    val packages: List<String>                                     // preferred order
+    /** Known packages in preferred order: detection uses the first installed one; every one counts as running. */
+    val packages: List<String>
     /** First segments a delivered config bundle path may start with: "data" maps to dataRoot, others to extraRoots. */
     val configRoots: Set<String> get() = setOf("data")
     fun detect(fs: Fs, settings: DeviceSettings): Detected?
