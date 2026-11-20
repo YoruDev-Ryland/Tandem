@@ -33,6 +33,7 @@ class SyncEngineTest {
         var configStatus = SaveUploadStatus.Accepted
         var failSaveFor: String? = null
         var unparseableSaveFor: String? = null
+        var blobRetries = 0                     // the next N blob PUTs answer 503 blob_retry
         private var n = 0
 
         override suspend fun register(email: String, password: String, deviceName: String) = error("unused")
@@ -46,7 +47,9 @@ class SyncEngineTest {
             missingQueries += hashes; return hashes.filter { it !in serverBlobs }
         }
         override suspend fun putBlob(hash: String, size: Long, source: () -> InputStream) {
-            source().use { it.readBytes() }; putBlobs += hash; serverBlobs += hash
+            source().use { it.readBytes() }
+            if (blobRetries > 0) { blobRetries--; throw ApiException(503, "blob_retry", "send it again") }
+            putBlobs += hash; serverBlobs += hash
         }
         override suspend fun getBlob(hash: String): InputStream = error("unused")
         override suspend fun uploadSave(req: SaveUploadRequest): SaveUploadResponse {
@@ -102,6 +105,8 @@ class SyncEngineTest {
 
     private fun fs() = LocalFs().apply { packages.add("com.fake.emu") }
 
+    private val delays = mutableListOf<Long>()
+
     private fun engine(
         fs: Fs = fs(),
         modules: List<EmulatorModule> = listOf(module),
@@ -113,6 +118,7 @@ class SyncEngineTest {
         appVersion = "0.1.0", shizukuOk = { true },
         onConflict = { conflicts += it },
         storageRoot = storage,
+        retryDelay = { delays += it },
     )
 
     private fun put(rel: String, text: String, mtime: Long = 5_000) {
@@ -564,6 +570,31 @@ class SyncEngineTest {
             override fun saveItems(fs: Fs, d: Detected): List<LocalItem> = throw FsUnavailableException("shell died")
         }
         try { engine(modules = listOf(m)).fullScan(); fail("expected FsUnavailableException") } catch (e: FsUnavailableException) {}
+    }
+
+    @Test fun blob_retry_is_retried_with_backoff_within_the_upload() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.blobRetries = 3
+        val e = engine()
+        e.fullScan()
+        assertEquals(listOf(1_000L, 2_000L, 4_000L), delays)
+        assertEquals(1, api.putBlobs.size)
+        assertEquals(1, api.saves.size)
+        assertEquals(0, e.queuedCount())
+    }
+
+    @Test fun blob_retry_beyond_three_falls_back_to_next_scan() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.blobRetries = 4
+        val e = engine()
+        e.fullScan()
+        assertEquals(listOf(1_000L, 2_000L, 4_000L), delays)
+        assertTrue(api.saves.isEmpty())
+        assertEquals(1, e.queuedCount())
+        assertNull(store.get(saveKey("GAME1")))
+        e.fullScan()                                  // next scan: the server takes it now
+        assertEquals(1, api.saves.size)
+        assertEquals(0, e.queuedCount())
     }
 
     @Test fun config_conflict_does_not_store() = runBlocking {

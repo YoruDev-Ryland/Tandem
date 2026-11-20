@@ -47,6 +47,7 @@ class SyncEngine(
     private val onConflict: (SyncConflict) -> Unit,
     private val storageRoot: String = "/storage",
     private val quietMillis: Long = SyncConfig.quietMillis,
+    private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
 ) {
     private class Tracked(val module: EmulatorModule, val detected: Detected, val item: LocalItem)
 
@@ -342,7 +343,25 @@ class SyncEngine(
         val sizes = b.entries.associate { it.hash to it.size }
         for (h in missing) {
             val abs = b.sources[h] ?: continue
-            api.putBlob(h, sizes.getValue(h)) { fs.openRead(abs) }
+            putBlobRetrying(h, sizes.getValue(h)) { fs.openRead(abs) }
+        }
+    }
+
+    /**
+     * One blob PUT. 503 `blob_retry` (the server pruned an old copy while this one streamed) is retried up to
+     * [BLOB_RETRY_DELAYS].size times after 1 s, 2 s and 4 s; after that it throws, and the item is retried next scan.
+     */
+    private suspend fun putBlobRetrying(hash: String, size: Long, source: () -> java.io.InputStream) {
+        var attempt = 0
+        while (true) {
+            try {
+                api.putBlob(hash, size, source)
+                return
+            } catch (e: ApiException) {
+                if (e.status != 503 || e.code != "blob_retry" || attempt >= BLOB_RETRY_DELAYS.size) throw e
+                log("blob $hash: server asked to resend, retrying in ${BLOB_RETRY_DELAYS[attempt] / 1000} s")
+                retryDelay(BLOB_RETRY_DELAYS[attempt++])
+            }
         }
     }
 
@@ -517,6 +536,7 @@ class SyncEngine(
 
     private companion object {
         const val UNKNOWN_VERSION = "unknown"
+        val BLOB_RETRY_DELAYS = longArrayOf(1_000L, 2_000L, 4_000L)
         val sdName = Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")
     }
 }
