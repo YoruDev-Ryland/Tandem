@@ -37,21 +37,23 @@ import dev.emusync.app.ui.state.TopStatus
  * password. A device that is already signed in shows where, and moves on.
  */
 @Composable
-internal fun ServerStep(vm: SetupViewModel, status: TopStatus) {
+internal fun ServerStep(vm: SetupViewModel, status: TopStatus, diagnostics: () -> Unit) {
     val signedIn by vm.signedIn.collectAsState()
     val part by vm.part.collectAsState()
     val exitable by vm.exitable.collectAsState()
     val error by vm.error.collectAsState()
     val busy by vm.busy.collectAsState()
     // On the first screen B leaves only when the flow was opened from somewhere.
-    val first = signedIn || part == SignInPart.Server
-    val back: (() -> Unit)? = if (!first || exitable) vm::back else null
+    // Signed in, B leaves for the tabs.
+    val back: (() -> Unit)? = if (signedIn || part != SignInPart.Server || exitable) vm::back else null
+    // Y: the diagnostics screen, so a connection that won't work can be looked into before signing in.
+    val diag = Hint(Action.Y, "Diagnostics", diagnostics)
     val note = if (busy) "Talking to the server" else null
 
     when {
         signedIn -> {
             val url by vm.url.collectAsState()
-            SetupFrame(status, SetupStep.Server, listOf(Hint(Action.A, "Continue", vm::continueSignedIn)), back) {
+            SetupFrame(status, SetupStep.Server, listOf(Hint(Action.A, "Continue", vm::continueSignedIn), diag), back) {
                 StepTitle("Signed in")
                 StepSub("This device is signed in. To use another account or server, sign out in Settings first.")
                 Facts(listOf(Fact("Server", url, mono = true), Fact("This device", status.deviceName ?: "Signed in")))
@@ -60,7 +62,7 @@ internal fun ServerStep(vm: SetupViewModel, status: TopStatus) {
         part == SignInPart.Server -> {
             val url by vm.url.collectAsState()
             val focus = remember { FocusRequester() }
-            SetupFrame(status, SetupStep.Server, listOf(Hint(Action.A, "Connect", vm::connect)), back, note) {
+            SetupFrame(status, SetupStep.Server, listOf(Hint(Action.A, "Connect", vm::connect), diag), back, note) {
                 StepTitle("Which server?")
                 StepSub("The address of your EmuSync server, as you open it in a browser.")
                 SetupField(
@@ -77,24 +79,24 @@ internal fun ServerStep(vm: SetupViewModel, status: TopStatus) {
             val methods by vm.methods.collectAsState()
             val at by vm.methodAt.collectAsState()
             val m = methods.getOrNull(at.coerceIn(0, methods.lastIndex))
-            SetupFrame(status, SetupStep.Server, listOfNotNull(m?.let { Hint(Action.A, "Choose") { vm.chooseMethod(it) } }), back) {
+            SetupFrame(status, SetupStep.Server, listOfNotNull(m?.let { Hint(Action.A, "Choose") { vm.chooseMethod(it) } }, diag), back) {
                 StepTitle("Sign in to ${name ?: "the server"}")
                 StepSub("This device gets its own key. Your password is never kept on it.")
                 Options(methods, at, vm::pointMethod, vm::chooseMethod, { OptionText(it.label, it.detail) })
             }
         }
-        else -> Entry(vm, status, back, note)
+        else -> Entry(vm, status, back, note, diag)
     }
 }
 
 @Composable
-private fun Entry(vm: SetupViewModel, status: TopStatus, back: (() -> Unit)?, note: String?) {
+private fun Entry(vm: SetupViewModel, status: TopStatus, back: (() -> Unit)?, note: String?, diag: Hint) {
     val method by vm.method.collectAsState()
     val error by vm.error.collectAsState()
     val name by vm.deviceName.collectAsState()
     val focus = remember { FocusRequester() }
     val confirm = if (method == SignInMethod.Register) "Create account" else "Sign in"
-    SetupFrame(status, SetupStep.Server, listOf(Hint(Action.A, confirm, vm::signIn)), back, note) {
+    SetupFrame(status, SetupStep.Server, listOf(Hint(Action.A, confirm, vm::signIn), diag), back, note) {
         StepTitle(method.label)
         when (method) {
             SignInMethod.Code -> {

@@ -146,7 +146,7 @@ class SyncService : Service() {
         log("service stopped")
         destroyed = true
         scope.cancel()
-        AppGraph.snapshot.value = ServiceSnapshot(running = false, status = "Not running", scans = AppGraph.fullScans.get())
+        AppGraph.snapshot.value = ServiceSnapshot(running = false, status = "Not running", scans = AppGraph.fullScans.get(), failedScans = AppGraph.failedScans.get())
         AppGraph.sessionFlows.end(null)   // drops the live session's late writes too
         super.onDestroy()
     }
@@ -284,6 +284,7 @@ class SyncService : Service() {
 
     /** Runs one work item. Everything but [FsUnavailableException] and cancellation is logged and swallowed. */
     private suspend fun handle(s: Session, w: SyncWork) {
+        var error: Throwable? = null
         try {
             when (w) {
                 SyncWork.FullScan -> {
@@ -299,14 +300,17 @@ class SyncService : Service() {
                 SyncWork.Monitor -> monitor(s)
             }
         } catch (e: CancellationException) {
+            error = e
             throw e
         } catch (e: FsUnavailableException) {
+            error = e
             throw e
         } catch (e: Throwable) {
+            error = e
             log("$w failed: ${e.javaClass.simpleName}: ${e.message}")
         } finally {
-            // Finished or failed, it is over: whoever waits for a scan must not wait for ever.
-            if (w == SyncWork.FullScan) AppGraph.fullScans.incrementAndGet()
+            // Whoever waits for a scan hears how it ended: only one that got every upload through is a success.
+            if (w == SyncWork.FullScan) countScan(scanSucceeded(error, s.engine.queuedCount()))
             if (w != SyncWork.Tick && w != SyncWork.Monitor) publish()
         }
     }
@@ -404,6 +408,7 @@ class SyncService : Service() {
             watchDirs = session?.watched?.size ?: 0,
             live = session != null,
             scans = AppGraph.fullScans.get(),
+            failedScans = AppGraph.failedScans.get(),
         )
         val prev = AppGraph.snapshot.value
         AppGraph.snapshot.value = next

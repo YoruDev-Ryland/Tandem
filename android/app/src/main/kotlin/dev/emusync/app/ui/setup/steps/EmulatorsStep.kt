@@ -81,7 +81,7 @@ private data class Ask(val title: String, val detail: String, val confirm: Strin
  * same way). Azahar's folder and the ROM folders are asked for here when they are missing. X moves on.
  */
 @Composable
-internal fun EmulatorsStep(vm: SetupViewModel, status: TopStatus) {
+internal fun EmulatorsStep(vm: SetupViewModel, status: TopStatus, later: (() -> Unit)?) {
     val ui by vm.settings.ui.collectAsState()
     val snap by vm.snapshot.collectAsState()
     LaunchedEffect(Unit) { vm.settings.show() }   // an emulator may have been installed while away
@@ -132,7 +132,7 @@ internal fun EmulatorsStep(vm: SetupViewModel, status: TopStatus) {
     }
     val note = if (open == null && row is EmuRow.Variant && row.several) "Changing the variant restarts sync" else null
 
-    SetupFrame(status, SetupStep.Emulators, hints, if (open == null) vm::back else null, note) {
+    SetupFrame(status, SetupStep.Emulators, hints, if (open == null) vm::back else null, note, later = if (open == null) later else null) {
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
                 StepTitle("Emulators found")

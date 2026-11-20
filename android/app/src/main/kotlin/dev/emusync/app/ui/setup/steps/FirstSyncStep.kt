@@ -32,6 +32,10 @@ import dev.emusync.app.ui.screens.ConflictEntry
 import dev.emusync.app.ui.screens.Seen
 import dev.emusync.app.ui.setup.FirstSyncPhase
 import dev.emusync.app.ui.setup.Loading
+import dev.emusync.app.ui.setup.STILL_SCANNING
+import dev.emusync.app.ui.setup.describeSetupError
+import androidx.compose.foundation.text.BasicText
+import dev.emusync.app.ui.theme.LocalEmu
 import dev.emusync.app.ui.setup.SetupFrame
 import dev.emusync.app.ui.setup.SetupStep
 import dev.emusync.app.ui.setup.SetupViewModel
@@ -52,30 +56,39 @@ private fun useOther(e: ConflictEntry) = if (e.otherId == null) "Use ${e.other}"
  * with the Conflicts tab's model, bulk plans and settle guard. Y leaves the rest for the Conflicts tab.
  */
 @Composable
-internal fun FirstSyncStep(vm: SetupViewModel, status: TopStatus, onDone: () -> Unit, now: () -> Long) {
+internal fun FirstSyncStep(vm: SetupViewModel, status: TopStatus, onDone: () -> Unit, later: (() -> Unit)?, now: () -> Long) {
     val phase by vm.phase.collectAsState()
     val error by vm.firstSyncError.collectAsState()
     val shizuku by vm.shizuku.collectAsState()
+    val slow by vm.scanSlow.collectAsState()
     fun done() { vm.finish(); onDone() }
 
     when (phase) {
         FirstSyncPhase.Scanning -> SetupFrame(
             status, SetupStep.FirstSync, emptyList(), vm::back,
             note = if (shizuku != ShizukuState.Ready) "Shizuku is off: the scan waits for it" else "Scanning this device",
+            later = later,
         ) {
             StepTitle("First sync")
             StepSub("Checking every save on this device against your other devices.")
-            Loading()
+            if (slow) {
+                BasicText(STILL_SCANNING, Modifier.padding(vertical = 12.dp), style = EmuType.body.copy(color = LocalEmu.current.ink))
+                StepNote("A first scan of many games can take a while. Finish later, and the Conflicts tab will list anything to decide.")
+            } else {
+                Loading()
+            }
         }
-        FirstSyncPhase.Failed -> SetupFrame(status, SetupStep.FirstSync, listOf(Hint(Action.A, "Try again", vm::fetchFirstSync)), vm::back) {
+        FirstSyncPhase.Failed -> SetupFrame(
+            status, SetupStep.FirstSync, listOf(Hint(Action.A, "Try again", vm::retryFirstSync)), vm::back, later = later,
+        ) {
             StepTitle("First sync")
-            error?.let { ErrorLine(it, Modifier.padding(horizontal = 12.dp)) }
+            error?.let { ErrorLine(it, text = ::describeSetupError) }
         }
         FirstSyncPhase.Done -> SetupFrame(status, SetupStep.FirstSync, listOf(Hint(Action.A, "Go to This device", ::done)), vm::back) {
             StepTitle(ALL_SET)
             StepSub("Every save on this device matched or synced on its own. EmuSync keeps them in sync from here.")
         }
-        FirstSyncPhase.Review -> Review(vm, status, ::done, now)
+        FirstSyncPhase.Review -> Review(vm, status, later ?: ::done, now)
     }
 }
 
@@ -112,9 +125,9 @@ private fun Review(vm: SetupViewModel, status: TopStatus, done: () -> Unit, now:
         focused != null -> listOf(
             Hint(Action.A, "Use this device's", ::mine),
             Hint(Action.X, useOther(focused)) { decide { it.keepOther } },
-            Hint(Action.Y, "Decide later", done),
+            Hint(Action.Y, "Finish later", done),
         )
-        else -> listOf(Hint(Action.Y, "Decide later", done))
+        else -> listOf(Hint(Action.Y, "Finish later", done))
     }
     val note = when {
         focused == null -> null

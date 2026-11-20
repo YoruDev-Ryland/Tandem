@@ -109,7 +109,9 @@ private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
     if (setupActive) {
         // The system back (gesture or key outside the scaffold) is B too: it never leaves the app mid-setup.
         BackHandler { vm.setup.back() }
-        SetupFlow(vm.setup, status, openShizuku = shizuku?.let { i -> { activity.startActivity(i) } }, onDone = { tab = TAB_DEVICE })
+        SetupFlow(vm.setup, status, openShizuku = shizuku?.let { i -> { activity.startActivity(i) } }, onDone = { tab = TAB_DEVICE },
+            diagnostics = { activity.startActivity(Intent(activity, DebugActivity::class.java)) },
+        )
         return
     }
 

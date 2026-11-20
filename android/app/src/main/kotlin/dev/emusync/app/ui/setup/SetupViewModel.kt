@@ -23,6 +23,7 @@ import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -109,6 +110,10 @@ enum class FirstSyncPhase { Scanning, Review, Done, Failed }
 /** A refusal made before anything is sent, worded for the screen. */
 class InputError(message: String) : Exception(message)
 
+const val SCAN_FAILED =
+    "The scan of this device didn't finish, so some saves may not be on the server yet. Check the connection and Shizuku, then try again."
+const val STILL_SCANNING = "Still scanning…"
+
 const val URL_HELP = "Enter the full address, starting with http:// or https://."
 
 /** The address as the app stores it: trimmed, without a trailing slash; null unless it is http(s) with a host. */
@@ -168,6 +173,8 @@ class SetupViewModel(
     running: StateFlow<Set<String>>,
     val emulatorName: (String) -> String,
     private val defaultDeviceName: String,
+    /** How long step 5 waits for its scan before it says it is still scanning. */
+    private val scanPatienceMillis: Long = 120_000L,
 ) {
     /** A value kept in the saved state, readable as a flow. */
     private inner class Saved<T>(private val key: String, initial: T) {
@@ -257,6 +264,9 @@ class SetupViewModel(
     val phase: StateFlow<FirstSyncPhase> = phaseFlow
     private val firstErrorFlow = MutableStateFlow<Throwable?>(null)
     val firstSyncError: StateFlow<Throwable?> = firstErrorFlow
+    private val slowFlow = MutableStateFlow(false)
+    /** Step 5's scan has taken longer than the setup waits quietly. */
+    val scanSlow: StateFlow<Boolean> = slowFlow
     private var firstSyncJob: Job? = null
 
     /** The first-sync review: the Conflicts tab's model over this device's FirstSync conflicts, with its bulk plans. */
@@ -323,7 +333,9 @@ class SetupViewModel(
         errorFlow.value = null
         when (stepFlow.value) {
             SetupStep.Server -> when {
-                store.deviceKey != null || partFlow.value == SignInPart.Server -> if (exitableS.value) finish()
+                // Signed in, setup can always be left (Settings › Set up again resumes it).
+                store.deviceKey != null -> finish()
+                partFlow.value == SignInPart.Server -> if (exitableS.value) finish()
                 partFlow.value == SignInPart.Entry -> setPart(SignInPart.Method)
                 else -> setPart(SignInPart.Server)
             }
@@ -452,6 +464,9 @@ class SetupViewModel(
     fun requestShizuku() = askShizuku()
     fun continueShizuku() { if (shizuku.value == ShizukuState.Ready) goTo(SetupStep.Emulators) }
 
+    /** On without Shizuku: sync waits until it is ready, and This device says so. */
+    fun skipShizuku() = goTo(SetupStep.Emulators)
+
     // ---- step 3 ----
 
     /** The Settings path: the same write and the same forget of the emulator's sync state. */
@@ -519,18 +534,34 @@ class SetupViewModel(
 
     // ---- step 5 ----
 
-    /** Asks the service for a scan and waits for it, then reads this device's first-sync conflicts. */
+    /**
+     * Asks the service for a scan and waits for it to end. Only a scan that got every upload through moves on to this
+     * device's first-sync conflicts; a failed or cancelled one is [FirstSyncPhase.Failed], never "All set.". A long
+     * wait says so ([scanSlow]) and keeps waiting.
+     */
     private fun startFirstSync() {
         firstSyncJob?.cancel()
         phaseFlow.value = FirstSyncPhase.Scanning
         firstErrorFlow.value = null
-        val base = snapshot.value.scans
+        slowFlow.value = false
+        val base = snapshot.value
         service(SyncService.ACTION_SCAN)
         firstSyncJob = scope.launch {
-            snapshot.first { it.scans > base }
-            fetchFirstSync()
+            val patience = launch { delay(scanPatienceMillis); slowFlow.value = true }
+            val end = snapshot.first { it.scans > base.scans || it.failedScans > base.failedScans }
+            patience.cancel()
+            slowFlow.value = false
+            if (end.scans > base.scans) {
+                fetchFirstSync()
+            } else {
+                firstErrorFlow.value = InputError(SCAN_FAILED)
+                phaseFlow.value = FirstSyncPhase.Failed
+            }
         }
     }
+
+    /** Try again after a failure: scan again, then read the conflicts. */
+    fun retryFirstSync() = startFirstSync()
 
     /** Reads the conflicts again (Try again, and after each choice). */
     fun fetchFirstSync() {

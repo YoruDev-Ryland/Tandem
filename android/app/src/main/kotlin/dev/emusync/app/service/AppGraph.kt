@@ -21,9 +21,19 @@ data class ServiceSnapshot(
     val watchDirs: Int = 0,
     /** A signed-in session finished its first scan and runs: [emulators] is what it detected. */
     val live: Boolean = false,
-    /** Full scans finished in this process (monotonic), so a screen can wait for the scan it asked for. */
+    /** Full scans that finished with every upload through, in this process (monotonic): see [scanSucceeded]. */
     val scans: Long = 0,
+    /** Full scans that failed, were cancelled or left uploads queued (monotonic). */
+    val failedScans: Long = 0,
 )
+
+/** Whether a full scan counts as done for whoever waits on it: it returned, and no upload is left queued. */
+fun scanSucceeded(error: Throwable?, queued: Int): Boolean = error == null && queued == 0
+
+/** Records a finished full scan in [AppGraph.fullScans] or [AppGraph.failedScans]. */
+internal fun countScan(succeeded: Boolean) {
+    (if (succeeded) AppGraph.fullScans else AppGraph.failedScans).incrementAndGet()
+}
 
 /**
  * Process-wide singletons. The [StateStore] caches its file in memory and rewrites it whole, so the service and the
@@ -38,8 +48,11 @@ object AppGraph {
 
     val snapshot = MutableStateFlow(ServiceSnapshot())
 
-    /** Counts finished full scans across service instances; published as [ServiceSnapshot.scans]. */
+    /** Successful full scans across service instances; published as [ServiceSnapshot.scans]. */
     internal val fullScans = java.util.concurrent.atomic.AtomicLong()
+
+    /** Failed full scans; published as [ServiceSnapshot.failedScans]. */
+    internal val failedScans = java.util.concurrent.atomic.AtomicLong()
     val snapshots: StateFlow<ServiceSnapshot> get() = snapshot
 
     /** Written only by the live [SyncService] session (see [SessionFlows]). */

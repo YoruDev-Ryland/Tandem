@@ -77,15 +77,19 @@ fun SetupFlow(
     status: TopStatus,
     openShizuku: (() -> Unit)?,
     onDone: () -> Unit,
+    diagnostics: () -> Unit,
     now: () -> Long = { SystemClock.uptimeMillis() },
 ) {
     val step by vm.step.collectAsState()
+    val signedIn by vm.signedIn.collectAsState()
+    // Signed in, every step after the first can be left for the tabs; Settings › Set up again comes back.
+    val later: (() -> Unit)? = if (signedIn) ({ vm.finish(); onDone() }) else null
     when (step) {
-        SetupStep.Server -> ServerStep(vm, status)
-        SetupStep.Shizuku -> ShizukuStep(vm, status, openShizuku)
-        SetupStep.Emulators -> EmulatorsStep(vm, status)
-        SetupStep.SyncChoice -> SyncChoiceStep(vm, status)
-        SetupStep.FirstSync -> FirstSyncStep(vm, status, onDone, now)
+        SetupStep.Server -> ServerStep(vm, status, diagnostics)
+        SetupStep.Shizuku -> ShizukuStep(vm, status, openShizuku, later)
+        SetupStep.Emulators -> EmulatorsStep(vm, status, later)
+        SetupStep.SyncChoice -> SyncChoiceStep(vm, status, later)
+        SetupStep.FirstSync -> FirstSyncStep(vm, status, onDone, later, now)
     }
 }
 
@@ -102,13 +106,15 @@ internal fun SetupFrame(
     back: (() -> Unit)?,
     note: String? = null,
     side: String? = null,
+    /** Signed in, Y leaves setup for the tabs ("Finish later"). */
+    later: (() -> Unit)? = null,
     onAction: (Action) -> Boolean = { false },
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = LocalEmu.current
     ConsoleScaffold(
         top = { SetupTop(status) },
-        hints = if (back != null) hints + Hint(Action.B, "Back", back) else hints,
+        hints = hints + listOfNotNull(later?.let { Hint(Action.Y, "Finish later", it) }, back?.let { Hint(Action.B, "Back", it) }),
         status = note,
         onAction = { a -> onAction(a) || a == Action.B },
     ) {

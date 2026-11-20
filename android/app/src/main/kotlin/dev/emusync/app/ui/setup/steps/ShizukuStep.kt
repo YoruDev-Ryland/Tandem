@@ -28,13 +28,14 @@ import dev.emusync.app.ui.theme.LocalEmu
 
 const val SHIZUKU_START = "Open Shizuku and start it (Wireless debugging or root)."
 const val SHIZUKU_ALLOW = "Allow EmuSync when Shizuku asks."
+const val CONTINUE_WITHOUT_SHIZUKU = "Continue without Shizuku"
 
 /**
  * Step 2, Shizuku: its state and what to do about it, numbered. Without permission A asks for it; once Shizuku is
  * ready the flow moves on by itself (unless the user came back here to look).
  */
 @Composable
-internal fun ShizukuStep(vm: SetupViewModel, status: TopStatus, openShizuku: (() -> Unit)?) {
+internal fun ShizukuStep(vm: SetupViewModel, status: TopStatus, openShizuku: (() -> Unit)?, later: (() -> Unit)?) {
     val state by vm.shizuku.collectAsState()
     val (title, steps, hint) = when (state) {
         ShizukuState.NotRunning -> Triple(
@@ -49,7 +50,9 @@ internal fun ShizukuStep(vm: SetupViewModel, status: TopStatus, openShizuku: (()
         )
         ShizukuState.Ready -> Triple("Shizuku is on", emptyList(), Hint(Action.A, "Continue", vm::continueShizuku))
     }
-    SetupFrame(status, SetupStep.Shizuku, listOfNotNull(hint), vm::back) {
+    // Without Shizuku setup still goes on: sync waits until it is ready, and This device says so.
+    val skip = if (state != ShizukuState.Ready) Hint(Action.X, CONTINUE_WITHOUT_SHIZUKU, vm::skipShizuku) else null
+    SetupFrame(status, SetupStep.Shizuku, listOfNotNull(hint, skip), vm::back, later = later) {
         StepTitle(title)
         StepSub("EmuSync reads and writes saves in each emulator's own folders through Shizuku.")
         Numbered(steps)

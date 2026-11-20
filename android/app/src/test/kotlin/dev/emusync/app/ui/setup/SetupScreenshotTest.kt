@@ -123,7 +123,7 @@ class SetupScreenshotTest {
 
     private fun shoot(mode: ThemeMode, vm: SetupViewModel, name: String, expect: String, signedIn: Boolean = true) {
         val status = TopStatus(if (signedIn) "Odin 3" else null, if (signedIn) ServerConn.Connected else ServerConn.SignedOut, ShizukuState.Ready, signedIn)
-        compose.setContent { EmuTheme(mode) { SetupFlow(vm, status, openShizuku = null, onDone = {}) } }
+        compose.setContent { EmuTheme(mode) { SetupFlow(vm, status, openShizuku = null, onDone = {}, diagnostics = {}) } }
         compose.onNodeWithText(expect).assertExists()
         val dir = System.getenv("EMUSYNC_SHOT_DIR") ?: return
         val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()

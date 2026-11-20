@@ -93,6 +93,8 @@ class SetupFlowTest {
     private var asked = 0
     private var reloads = 0
     private var done = 0
+    private var diagnostics = 0
+    private var patience = 120_000L
 
     // The fake server.
     private var info = ServerInfo("Home server", 1, registrationOpen = false)
@@ -141,7 +143,7 @@ class SetupFlowTest {
         handle = handle, store = store, modules = modules, anon = { server }, api = { server },
         shizuku = shizuku, askShizuku = { asked++ }, snapshot = snapshot, settings = settings,
         service = { services += it }, afterSignIn = {}, scope = scope, running = MutableStateFlow(emptySet()),
-        emulatorName = { id -> modules.first { it.emulatorId == id }.displayName }, defaultDeviceName = "Thor",
+        emulatorName = { id -> modules.first { it.emulatorId == id }.displayName }, defaultDeviceName = "Thor", scanPatienceMillis = patience,
     )
 
     private var shown: MutableState<SetupViewModel>? = null
@@ -153,7 +155,7 @@ class SetupFlowTest {
         val status = TopStatus("Thor", ServerConn.Connected, ShizukuState.Ready, signedIn = true)
         compose.setContent {
             EmuTheme(ThemeMode.Dark) {
-                key(holder.value) { SetupFlow(holder.value, status, openShizuku = null, onDone = { done++ }, now = { 10_000L }) }
+                key(holder.value) { SetupFlow(holder.value, status, openShizuku = null, onDone = { done++ }, diagnostics = { diagnostics++ }, now = { 10_000L }) }
             }
         }
     }
@@ -335,6 +337,71 @@ class SetupFlowTest {
     }
 
     // ---- step 5 ----
+
+    @Test fun aFailedScanIsNeverAllSetAndRetriesTheScan() {
+        signedIn()
+        val vm = vm(handleAt(SetupStep.FirstSync))
+        show(vm)
+        assertEquals(1, services.count { it == SyncService.ACTION_SCAN })
+        snapshot.value = snapshot.value.copy(failedScans = snapshot.value.failedScans + 1)
+        compose.waitForIdle()
+        compose.onNodeWithText("All set.").assertDoesNotExist()
+        compose.onNodeWithText(SCAN_FAILED).assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Try again: a new scan
+        assertEquals(2, services.count { it == SyncService.ACTION_SCAN })
+        compose.onNodeWithText(SCAN_FAILED).assertDoesNotExist()
+        snapshot.value = snapshot.value.copy(scans = snapshot.value.scans + 1)
+        compose.waitForIdle()
+        compose.onNodeWithText("All set.").assertIsDisplayed()
+    }
+
+    @Test fun aLongScanSaysSoAndCanBeFinishedLater() {
+        signedIn()
+        patience = 0
+        val vm = vm(handleAt(SetupStep.FirstSync))
+        show(vm)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(STILL_SCANNING).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("All set.").assertDoesNotExist()
+        compose.key(KeyEvent.KEYCODE_BUTTON_Y)
+        assertEquals(1, done)
+        assertFalse(vm.active.value)
+    }
+
+    // ---- leaving early (signed in) ----
+
+    @Test fun signedInWithoutShizukuYFinishesLater() {
+        signedIn()
+        shizuku.value = ShizukuState.NotRunning
+        val vm = vm(handleAt(SetupStep.Shizuku))   // opened at launch: not exitable
+        show(vm)
+        compose.key(KeyEvent.KEYCODE_BUTTON_Y)
+        assertEquals(1, done)
+        assertFalse(vm.active.value)
+    }
+
+    @Test fun continueWithoutShizukuMovesToEmulators() {
+        signedIn()
+        shizuku.value = ShizukuState.NotRunning
+        val vm = vm(handleAt(SetupStep.Shizuku))
+        show(vm)
+        compose.key(KeyEvent.KEYCODE_BUTTON_X)
+        assertEquals(SetupStep.Emulators, vm.step.value)
+    }
+
+    @Test fun signedInBOnTheSignInSummaryLeavesEvenAtLaunch() {
+        signedIn()
+        val vm = vm(handleAt(SetupStep.Server))
+        show(vm)
+        compose.key(KeyEvent.KEYCODE_BUTTON_B)
+        assertFalse(vm.active.value)
+    }
+
+    @Test fun diagnosticsOpensFromStep1() {
+        val vm = vm()
+        show(vm)
+        compose.onNodeWithText("Diagnostics").performClick()
+        assertEquals(1, diagnostics)
+    }
 
     @Test fun firstSyncWithNothingToDecideIsAllSet() {
         signedIn()

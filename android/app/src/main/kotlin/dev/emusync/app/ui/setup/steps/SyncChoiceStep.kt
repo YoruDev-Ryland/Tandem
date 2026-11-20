@@ -34,7 +34,7 @@ const val SYNC_CHOICE_SUB =
  * refusal is shown under the option, in config words.
  */
 @Composable
-internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus) {
+internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus, later: (() -> Unit)?) {
     val emus by vm.syncEmulators.collectAsState()
     val at by vm.emulatorAt.collectAsState()
     val overview by vm.overview.collectAsState()
@@ -44,11 +44,11 @@ internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus) {
     val list = emus
 
     when {
-        list == null -> SetupFrame(status, SetupStep.SyncChoice, emptyList(), vm::back) {
+        list == null -> SetupFrame(status, SetupStep.SyncChoice, emptyList(), vm::back, later = later) {
             StepTitle("How each one syncs")
             EmptyLine("Looking for emulators on this device…")
         }
-        list.isEmpty() -> SetupFrame(status, SetupStep.SyncChoice, listOf(Hint(Action.A, "Continue", vm::syncChoicesDone)), vm::back) {
+        list.isEmpty() -> SetupFrame(status, SetupStep.SyncChoice, listOf(Hint(Action.A, "Continue", vm::syncChoicesDone)), vm::back, later = later) {
             StepTitle("How each one syncs")
             EmptyLine("No emulators were found here, so there are no settings to choose.")
         }
@@ -62,7 +62,7 @@ internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus) {
             if (data == null) {
                 val err = overview.error
                 val hints = if (err != null) listOf(Hint(Action.A, "Try again", vm::loadConfigs)) else emptyList()
-                SetupFrame(status, SetupStep.SyncChoice, hints, vm::back, note, side) {
+                SetupFrame(status, SetupStep.SyncChoice, hints, vm::back, note, side, later) {
                     StepTitle("$name settings")
                     StepSub(SYNC_CHOICE_SUB)
                     if (err != null) ErrorLine(err, Modifier.padding(horizontal = 12.dp)) else Loading()
@@ -76,7 +76,7 @@ internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus) {
             var cursor by rememberSaveable(emu) { mutableIntStateOf(options.indexOfFirst { it.key == chosen }.coerceAtLeast(0)) }
             val pick = options.getOrNull(cursor.coerceIn(0, options.lastIndex))
             val hints = if (choosing == null && pick != null) listOf(Hint(Action.A, "Choose") { vm.choose(emu, pick) }) else emptyList()
-            SetupFrame(status, SetupStep.SyncChoice, hints, vm::back, note, side) {
+            SetupFrame(status, SetupStep.SyncChoice, hints, vm::back, note, side, later) {
                 StepTitle("$name settings")
                 StepSub(SYNC_CHOICE_SUB)
                 Options(
