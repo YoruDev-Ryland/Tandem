@@ -15,8 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 
-/** One game in the right pane: GAME, NEWEST ON and HERE, with HERE's tone. */
-data class GameLine(val key: String, val name: String, val newestOn: String, val here: String, val tone: Tone)
+/** One game in the right pane: GAME, NEWEST ON and HERE, with the tones of NEWEST ON and HERE. */
+data class GameLine(val key: String, val name: String, val newestOn: String, val here: String, val tone: Tone, val newestTone: Tone = Tone.Ink2)
 
 /** "Close {emulator} to get the newer {game} save from {device}." */
 data class WaitLine(val emulator: String, val game: String, val device: String) {
@@ -83,7 +83,9 @@ fun deviceUi(
         }
         val lines = mine.map { g ->
             val (text, t) = hereCopy(here(g), emu.name)
-            GameLine(g.gameKey, g.displayName ?: g.gameKey, g.newestOnDeviceName.orEmpty(), text, t)
+            // No newest device (nothing uploaded yet): a dash in ink3, as the web's Games page shows it.
+            val newest = g.newestOnDeviceName
+            GameLine(g.gameKey, g.displayName ?: g.gameKey, newest ?: "—", text, t, if (newest == null) Tone.Ink3 else Tone.Ink2)
         }
         EmuPane(emu.id, emu.name, state, tone, lines, waits.values.toList())
     }

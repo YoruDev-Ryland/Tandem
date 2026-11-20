@@ -112,6 +112,12 @@ class DeviceScreenTest {
         assertEquals("two saves · choose in Conflicts" to Tone.Fault, here["Differs"])
     }
 
+    @Test fun aGameWithNoNewestDeviceShowsADashLikeTheWeb() {
+        val line = ui(listOf(game("k", "K", DeviceGameState.HasIt, newestOn = null))).panes.first { it.id == "eden" }.games.single()
+        assertEquals("—", line.newestOn)
+        assertEquals(Tone.Ink3, line.newestTone)
+    }
+
     @Test fun emulatorStatesUseTheirCopy() {
         val panes = ui(emptyList()).panes.associate { it.id to (it.state to it.tone) }
         assertEquals(listOf("eden", "azahar", "melonds", "retroarch", "dolphin"), ui(emptyList()).panes.map { it.id })

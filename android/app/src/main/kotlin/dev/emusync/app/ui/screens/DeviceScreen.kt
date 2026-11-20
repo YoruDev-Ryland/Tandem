@@ -31,6 +31,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.emusync.app.api.encodeKey
@@ -131,6 +132,7 @@ fun DeviceScreen(ui: DeviceUi, top: @Composable RowScope.() -> Unit, actions: De
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val portrait = maxWidth < 600.dp
+            val emuWidth = emulatorsWidth(maxWidth)
             val emulators: @Composable (Modifier) -> Unit = { m ->
                 Column(m.onPress { touch.fromInactive = inGames; pane = Pane.Emulators }) {
                     BasicText("Emulators", Modifier.padding(top = 4.dp, bottom = 12.dp), style = EmuType.title.copy(color = LocalEmu.current.ink))
@@ -164,7 +166,7 @@ fun DeviceScreen(ui: DeviceUi, top: @Composable RowScope.() -> Unit, actions: De
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                    emulators(Modifier.width(380.dp).fillMaxHeight())
+                    emulators(Modifier.width(emuWidth).fillMaxHeight())
                     gamesPane(Modifier.weight(1f).fillMaxHeight())
                 }
             }
@@ -201,7 +203,7 @@ private fun ColumnScope.GamesPane(
             CursorList(games, key = { it.key }, selected = selected, onSelect = onSelect, onOpen = onOpen,
                 modifier = Modifier.weight(1f, fill = false), active = active) { g, _ ->
                 Cell(g.name, Modifier.weight(1f), style = EmuType.rowPrimary)
-                Cell(g.newestOn, Modifier.width(NEWEST_W), tone = Tone.Ink2, style = EmuType.meta)
+                Cell(g.newestOn, Modifier.width(NEWEST_W), tone = g.newestTone, style = EmuType.meta)
                 Cell(g.here, Modifier.width(HERE_W), tone = g.tone, style = EmuType.meta)
             }
         }
@@ -222,4 +224,13 @@ private fun ColumnScope.GamesPane(
 }
 
 private val NEWEST_W = 96.dp
-private val HERE_W = 200.dp
+private val HERE_W = 172.dp   // the longest copy, "two saves · choose in Conflicts", whole
+
+/** What the games table needs to stay readable: row padding, column gaps, NEWEST ON, HERE and a 200 dp GAME. */
+private val GAMES_MIN = 24.dp + 28.dp + NEWEST_W + HERE_W + 200.dp
+
+/**
+ * The emulators pane takes what the games table leaves, from 240 dp (the longest name and state) up to the mockup's
+ * 380 dp. The Thor and the Odin 3 are 832 dp wide, not the mockup's 960, so a fixed 380 starved the GAME column.
+ */
+internal fun emulatorsWidth(content: Dp): Dp = (content - 28.dp - GAMES_MIN).coerceIn(240.dp, 380.dp)

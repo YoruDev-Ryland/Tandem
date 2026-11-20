@@ -1,6 +1,7 @@
 package dev.emusync.app.ui.kit
 
 import android.view.KeyEvent
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.Modifier
@@ -14,8 +15,10 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -123,5 +126,26 @@ class CursorListTest {
         compose.onNodeWithText("Game 30").assertIsDisplayed().assertIsSelected()
         repeat(25) { compose.key(KeyEvent.KEYCODE_DPAD_UP) }
         compose.onNodeWithText("Game 5").assertIsDisplayed().assertIsSelected()
+    }
+
+    @Test fun scrollingDownLeavesNoHalfRowUnderTheTopEdge() {
+        // 150 dp shows three whole 40 dp rows and part of a fourth. Moving the cursor past the bottom must start the
+        // view on a whole row, so no clipped row butts against a header above the list; the cut row is at the bottom.
+        items = List(30) { "Game $it" }
+        compose.host {
+            Column {
+                BasicText("HEADER", Modifier.height(20.dp))
+                CursorList(items, key = { it }, selected = selected, onSelect = { selected = it }, onOpen = {}, modifier = Modifier.height(150.dp)) { item, _ ->
+                    BasicText(item)
+                }
+            }
+        }
+        val listTop = compose.onNodeWithText("HEADER").getUnclippedBoundsInRoot().bottom
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN, repeats = 4)
+        assertEquals(5, selected)
+        compose.onNodeWithText("Game 5").assertIsDisplayed()
+        val shown = (0..6).filter { i -> runCatching { compose.onNodeWithText("Game $i").assertIsDisplayed() }.isSuccess }
+        val tops = shown.map { i -> with(compose.density) { compose.onNodeWithText("Game $i").fetchSemanticsNode().positionInRoot.y.toDp() } }
+        assertTrue("every row shown starts at or below the list top: $tops vs $listTop", tops.all { it >= listTop - 0.5.dp })
     }
 }

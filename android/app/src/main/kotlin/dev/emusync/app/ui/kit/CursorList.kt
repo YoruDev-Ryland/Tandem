@@ -99,7 +99,10 @@ fun <T> CursorList(
     }
 }
 
-/** Scrolls the least that shows row [index] whole: the cursor jumps, it never animates. */
+/**
+ * Scrolls the least that shows row [index] whole: the cursor jumps, it never animates. Going down, the view then
+ * starts on a whole row ([alignTop]), so the cut row is at the bottom edge and never under a header above the list.
+ */
 private suspend fun LazyListState.bringIntoView(index: Int) {
     val info = layoutInfo
     val start = info.viewportStartOffset
@@ -113,9 +116,24 @@ private suspend fun LazyListState.bringIntoView(index: Int) {
             if (index > first) {
                 val placed = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return
                 scrollBy(-(end - start - placed.size).toFloat().coerceAtLeast(0f))
+                alignTop(index)
             }
         }
         item.offset < start -> scrollBy((item.offset - start).toFloat())
-        item.offset + item.size > end -> scrollBy((item.offset + item.size - end).toFloat())
+        item.offset + item.size > end -> {
+            scrollBy((item.offset + item.size - end).toFloat())
+            alignTop(index)
+        }
     }
+}
+
+/** If the first row in view is cut by the top edge, scrolls it out, as long as row [index] stays whole. */
+private suspend fun LazyListState.alignTop(index: Int) {
+    val info = layoutInfo
+    val start = info.viewportStartOffset
+    val first = info.visibleItemsInfo.firstOrNull() ?: return
+    if (first.index == index || first.offset >= start) return
+    val cursor = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    val by = first.offset + first.size - start
+    if (cursor.offset - by >= start) scrollBy(by.toFloat())
 }
