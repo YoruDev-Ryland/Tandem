@@ -19,7 +19,7 @@ public interface IBlobStore
 
 public static partial class BlobHash
 {
-    [GeneratedRegex("^[0-9a-f]{64}$")]
+    [GeneratedRegex(@"\A[0-9a-f]{64}\z")] // \z: "$" would also match before a trailing newline
     private static partial Regex Pattern();
 
     public static bool IsValid(string? hash) => hash is not null && Pattern().IsMatch(hash);

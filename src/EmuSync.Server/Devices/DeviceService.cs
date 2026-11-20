@@ -13,7 +13,7 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
     public const int MaxGames = 20000;
     public const int MaxCores = 500;
 
-    [GeneratedRegex(@"^\{(INTERNAL|SD|EMU:[a-z0-9]+)\}$")]
+    [GeneratedRegex(@"\A\{(INTERNAL|SD|EMU:[a-z0-9]+)\}\z")] // \z: "$" would also match before a trailing newline
     private static partial Regex RootToken();
 
     public Task<bool> HasInstalled(Guid deviceId, string emulatorId, string gameKey) =>

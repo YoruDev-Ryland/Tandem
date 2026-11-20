@@ -23,6 +23,15 @@ namespace EmuSync.Server.Tests;
 
 public sealed class BackupTests : IDisposable
 {
+    [Fact]
+    public void Backup_name_with_a_trailing_newline_or_non_ascii_digits_is_not_a_backup_name()
+    {
+        Assert.True(BackupFormat.IsBackupName("emusync-backup-20261120-120000.tar.gz"));
+        Assert.False(BackupFormat.IsBackupName("emusync-backup-20261120-120000.tar.gz\n"));
+        Assert.False(BackupFormat.IsBackupName("emusync-backup-20261120-120000.tar.gz.enc\n"));
+        Assert.False(BackupFormat.IsBackupName("emusync-backup-2026112\u0660-120000.tar.gz"));
+    }
+
     private readonly List<string> _folders = [];
 
     public void Dispose()

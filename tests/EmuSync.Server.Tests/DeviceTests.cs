@@ -58,6 +58,7 @@ public class DeviceTests
     [InlineData("{internal}")]
     [InlineData("{EMU:nope}")]
     [InlineData("{EMU:}")]
+    [InlineData("{SD}\n")] // a trailing newline is not part of a valid token
     public async Task Bad_root_token_is_400(string token)
     {
         using var factory = new ServerFactory();

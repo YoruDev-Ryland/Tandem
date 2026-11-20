@@ -33,7 +33,7 @@ public static partial class BackupFormat
     public const string DbDir = "db/";
     public const string BlobDir = "blobs/";
 
-    [GeneratedRegex(@"^emusync-backup-\d{8}-\d{6}\.tar\.gz(\.enc)?$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\Aemusync-backup-[0-9]{8}-[0-9]{6}\.tar\.gz(\.enc)?\z", RegexOptions.CultureInvariant)] // ASCII digits; \z, not "$"
     private static partial Regex NamePattern();
 
     /// <summary>Only names of this exact shape are ever listed, pruned or deleted at a target.</summary>

@@ -11,6 +11,31 @@ namespace EmuSync.Server.Tests;
 [Collection("Memory")]
 public class BlobTests
 {
+    [Fact]
+    public void Hash_with_a_trailing_newline_is_invalid()
+    {
+        var hash = new string('a', 64);
+        Assert.True(EmuSync.Server.Blobs.BlobHash.IsValid(hash));
+        Assert.False(EmuSync.Server.Blobs.BlobHash.IsValid(hash + "\n"));
+        Assert.False(EmuSync.Server.Blobs.BlobHash.IsValid(hash[..63] + "\u0661")); // not an ASCII hex digit
+    }
+
+    [Fact]
+    public async Task Upload_with_a_trailing_newline_hash_is_400()
+    {
+        using var factory = new ServerFactory();
+        var (device, _) = await factory.Register("a@example.com");
+        var bytes = "hello"u8.ToArray();
+        var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        var content = new ByteArrayContent(bytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+
+        var r = await device.PutAsync($"/v1/blobs/{hash}%0A", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, r.StatusCode);
+        Assert.Equal("bad_hash", (await r.ReadAsync<ErrorResponse>()).Code);
+    }
+
     private static string Sha(byte[] data) => Convert.ToHexStringLower(SHA256.HashData(data));
 
     private static HttpContent Raw(Stream s)
