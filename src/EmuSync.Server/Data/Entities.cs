@@ -254,3 +254,14 @@ public class UserSetting
     public string Key { get; set; } = "";
     public string Value { get; set; } = "";
 }
+
+/// <summary>One off-server backup run (the history keeps the newest <c>BackupService.HistoryKeep</c>).</summary>
+public class BackupRun
+{
+    public long Id { get; set; }
+    public DateTimeOffset Utc { get; set; }
+    public bool Ok { get; set; }
+    public long Bytes { get; set; }
+    public string? Name { get; set; }
+    public string? Error { get; set; }
+}

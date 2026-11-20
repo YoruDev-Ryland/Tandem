@@ -17,6 +17,7 @@ public sealed class ServerFactory : WebApplicationFactory<Program>
     {
         ["EmuSync:AuthRequestsPerMinute"] = "10000",
         ["EmuSync:EnablePruning"] = "false",
+        ["EmuSync:EnableBackups"] = "false",
     };
 
     public FakeTimeProvider Time { get; } = new(DateTimeOffset.Parse("2026-11-19T12:00:00Z"));

@@ -63,6 +63,36 @@ namespace EmuSync.Server.Data.Migrations.Postgres
                     b.ToTable("ActivityEvents");
                 });
 
+            modelBuilder.Entity("EmuSync.Server.Data.BackupRun", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<long>("Bytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<bool>("Ok")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset>("Utc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("BackupRuns");
+                });
+
             modelBuilder.Entity("EmuSync.Server.Data.ConfigBundle", b =>
                 {
                     b.Property<Guid>("Id")

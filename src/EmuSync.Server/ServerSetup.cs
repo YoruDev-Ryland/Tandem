@@ -1,4 +1,5 @@
 using EmuSync.Server.Accounts;
+using EmuSync.Server.Backup;
 using EmuSync.Server.Auth;
 using EmuSync.Server.Blobs;
 using EmuSync.Server.Configs;
@@ -45,8 +46,11 @@ public static class ServerSetup
         builder.Services.AddScoped<VaultService>();
         builder.Services.AddScoped<WebQueryService>();
         builder.Services.AddHostedService<DeliveryHandlers>();
+        builder.Services.AddSingleton<MaintenanceLock>();
         builder.Services.AddSingleton<Pruner>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Pruner>());
+        builder.Services.AddSingleton<BackupService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<BackupService>());
     }
 
     /// <summary>Builds the pipeline and maps endpoints. Each feature adds one line here.</summary>
@@ -76,6 +80,7 @@ public static class ServerSetup
         app.MapEventEndpoints();
         app.MapWebEndpoints();
         app.MapRetentionEndpoints();
+        app.MapBackupEndpoints();
         app.MapWebFallback();
     }
 }

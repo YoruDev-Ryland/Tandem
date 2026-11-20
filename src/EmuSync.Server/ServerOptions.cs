@@ -22,6 +22,8 @@ public sealed class ServerOptions
     /// <summary>Runs the retention pruner in the background (on in production; the test factory turns it off).</summary>
     public bool EnablePruning { get; set; } = true;
     public int PruneIntervalMinutes { get; set; } = 60;
+    /// <summary>Runs the daily off-server backup schedule (on in production; the test factory turns it off).</summary>
+    public bool EnableBackups { get; set; } = true;
 
     public string ServerName
     {

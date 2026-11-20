@@ -32,6 +32,7 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
     public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
     public DbSet<ServerSetting> ServerSettings => Set<ServerSetting>();
     public DbSet<UserSetting> UserSettings => Set<UserSetting>();
+    public DbSet<BackupRun> BackupRuns => Set<BackupRun>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder b)
     {
@@ -183,6 +184,13 @@ public abstract class EmuSyncDbContext(DbContextOptions options) : DbContext(opt
         });
 
         m.Entity<ServerSetting>(e => e.HasKey(x => x.Key));
+
+        m.Entity<BackupRun>(e =>
+        {
+            e.Property(x => x.Id).ValueGeneratedOnAdd();
+            e.Property(x => x.Name).HasMaxLength(64);
+            e.Property(x => x.Error).HasMaxLength(1000);
+        });
 
         m.Entity<UserSetting>(e =>
         {

@@ -25,13 +25,14 @@ public sealed record PruneResult(int Versions, int Blobs, long Bytes)
 /// non-superseded delivery points at it; or it is any device's known, applied or vault-held version. Bases of kept
 /// versions are not kept for their own sake: BaseVersionId is never read back by the server (an upload only compares
 /// it with the head), and keeping it transitively would keep every version.</para>
+/// <para>Each user's prune holds the <see cref="MaintenanceLock"/> (so never overlaps a backup run) and then the user's lock.</para>
 /// <para>Then blob GC: a blob is deleted only when no remaining version manifest (save, config, vault), raw config
 /// upload, or expanded Config delivery manifest (un-acked, or created in the last 7 days) references it AND it was
 /// last uploaded or confirmed present more than an hour ago (blobs are sent before their manifest). Version rows are
 /// deleted first, then blob rows (committed), and only then the files; a failed file delete is logged and skipped.</para>
 /// </summary>
-public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, IOptions<ServerOptions> options, TimeProvider time,
-    ILogger<Pruner> logger) : BackgroundService
+public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, MaintenanceLock maintenance, IOptions<ServerOptions> options,
+    TimeProvider time, ILogger<Pruner> logger) : BackgroundService
 {
     public static readonly TimeSpan BlobGrace = TimeSpan.FromHours(1);
     public static readonly TimeSpan ExpandedConfigKeep = TimeSpan.FromDays(7);
@@ -79,6 +80,8 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, IOption
         var store = scope.ServiceProvider.GetRequiredService<IBlobStore>();
 
         PruneResult result;
+        // The maintenance lock first: a running backup is reading blob files, so GC waits for it to finish.
+        using (await maintenance.AcquireAsync(ct))
         using (await locks.Acquire(userId, ct))
         {
             var settings = await RetentionSettings.LoadAsync(db, userId, ct);

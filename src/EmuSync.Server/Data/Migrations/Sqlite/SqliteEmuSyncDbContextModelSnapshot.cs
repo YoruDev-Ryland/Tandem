@@ -56,6 +56,34 @@ namespace EmuSync.Server.Data.Migrations.Sqlite
                     b.ToTable("ActivityEvents");
                 });
 
+            modelBuilder.Entity("EmuSync.Server.Data.BackupRun", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("Bytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Ok")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("Utc")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("BackupRuns");
+                });
+
             modelBuilder.Entity("EmuSync.Server.Data.ConfigBundle", b =>
                 {
                     b.Property<Guid>("Id")
