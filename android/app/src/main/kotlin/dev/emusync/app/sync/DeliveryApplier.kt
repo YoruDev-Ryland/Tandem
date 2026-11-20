@@ -349,9 +349,10 @@ class DeliveryApplier(
                 throw NoAck("local files changed during the download")
             }
         }
-        val created = t.files.filter { it.abs !in existed }.map { it.abs }
-        val relOf = toBackup.entries.associate { it.value to it.key }
-        fun backed(abs: String): Pair<String?, String?> = relOf[abs]?.let { it to copied[it]?.first } ?: (null to null)
+        // Only files actually in the backup count as backed up; one that vanished before the copy counts as ours.
+        val relOf = toBackup.entries.filter { it.key in copied }.associate { it.value to it.key }
+        fun backed(abs: String): Pair<String?, String?> = relOf[abs]?.let { it to copied.getValue(it).first } ?: (null to null)
+        val created = t.files.filter { it.abs !in relOf }.map { it.abs }
         val delivered = t.files.map { lower(it.rel) }.toSet()
         val extras = t.deletable.filter { lower(it) !in delivered }.mapNotNull { t.local[it] }
         val files = LinkedHashMap<String, MarkerFile>()
@@ -369,7 +370,7 @@ class DeliveryApplier(
         } catch (e: Exception) {
             // Throws FsUnavailableException (marker kept, retried later) without a "Restore failed" notification.
             if (undo(marker)) store.clearApplyMarker(t.markerKey)
-            else notifier("Restore failed for ${t.name} — backup at ${backupDir ?: "none"}")
+            else if (notifiedRecovery.add(t.markerKey)) notifier("Restore failed for ${t.name} — backup at ${backupDir ?: "none"}")
             if (e is FsUnavailableException) throw e
             throw Reject("write failed: ${e.message}")
         }
@@ -387,8 +388,9 @@ class DeliveryApplier(
      */
     private suspend fun recoverMarkers() {
         for (mk in store.applyMarkers().values) {
+            var pkg: String? = null
             if (mk.emulatorId != "vault") {
-                val pkg = registry.byId(mk.emulatorId)?.let { m ->
+                pkg = registry.byId(mk.emulatorId)?.let { m ->
                     try { m.detect(fs, settings)?.pkg } catch (e: ModuleException) { null } catch (e: IOException) { null }
                 }
                 if (pkg == null) {
@@ -397,17 +399,17 @@ class DeliveryApplier(
                         notifier("EmuSync couldn't finish restoring ${mk.name}; backup at ${mk.backupDir ?: "none"}")
                     continue
                 }
-                if (fs.isProcessAlive(pkg)) {
-                    log("${mk.storeKey}: recovery of interrupted write waits for ${mk.emulatorId} to close")
-                    continue
-                }
+                notifiedUndetected.remove(mk.storeKey)
             }
             val ok = engine.withLock {
+                if (pkg != null && fs.isProcessAlive(pkg)) return@withLock null   // probed right before the undo
                 val ok = undo(mk)
                 if (ok) store.clearApplyMarker(mk.storeKey)
                 ok
             }
-            if (ok) {
+            if (ok == null) {
+                log("${mk.storeKey}: recovery of interrupted write waits for ${mk.emulatorId} to close")
+            } else if (ok) {
                 log("${mk.storeKey}: interrupted write of delivery ${mk.deliveryId} recovered")
                 notifiedRecovery.remove(mk.storeKey)
             } else if (notifiedRecovery.add(mk.storeKey)) {

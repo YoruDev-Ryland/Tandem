@@ -782,6 +782,91 @@ class DeliveryApplierTest {
         assertEquals(1, store.applyMarkers().size)
     }
 
+    @Test fun recovery_keeps_created_file_that_user_changed() = runBlocking {
+        put("saves/G1/a.sav", "new-a"); put("saves/G1/c.sav", "user-c")
+        backupFile("a.sav", "old-a")
+        crashMarker(mapOf(
+            "a.sav" to MarkerFile(h("new-a"), "a.sav", h("old-a")),   // ours
+            "c.sav" to MarkerFile(h("new-c"), null, null),            // we created it, then the user saved over it
+        ))
+        applier().applyAll()
+        assertEquals("new-a", read("saves/G1/a.sav"))
+        assertEquals("user-c", read("saves/G1/c.sav"))
+        assertTrue(store.applyMarkers().isEmpty())
+    }
+
+    @Test fun recovery_keeps_item_when_deleted_extra_reappears_with_other_content() = runBlocking {
+        put("saves/G1/a.sav", "new-a"); put("saves/G1/x.sav", "user-x")
+        backupFile("a.sav", "old-a"); backupFile("x.sav", "extra")
+        crashMarker(mapOf(
+            "a.sav" to MarkerFile(h("new-a"), "a.sav", h("old-a")),
+            "x.sav" to MarkerFile(null, "x.sav", h("extra")),          // we deleted it; the user wrote a new one
+        ))
+        applier().applyAll()
+        assertEquals("new-a", read("saves/G1/a.sav"))
+        assertEquals("user-x", read("saves/G1/x.sav"))
+        assertTrue(store.applyMarkers().isEmpty())
+    }
+
+    @Test fun file_vanished_before_backup_is_treated_as_created() = runBlocking {
+        // Untracked identical a.sav exists at the guard, vanishes just before the backup copies it; b.sav's write fails.
+        put("saves/G1/a.sav", "same"); module.hidden += "G1"
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "same", "b.sav" to "new-b"))
+        val aPath = "$root/saves/G1/a.sav"
+        var calls = 0
+        val fs = object : LocalFs() {
+            override fun exists(path: String): Boolean {
+                if (path == aPath && ++calls == 3) File(path).delete()   // guard, write-phase check, then backup
+                return super.exists(path)
+            }
+            override fun writeAtomic(path: String, data: InputStream) {
+                if (path.endsWith("/b.sav")) throw IOException("disk full")
+                super.writeAtomic(path, data)
+            }
+        }.apply { packages.add("com.fake.emu") }
+        applier(fs).applyAll()
+        assertEquals(DeliveryResult.Failed, ackOf("d1").result)
+        assertFalse(File(aPath).exists())                     // our written copy removed
+        assertFalse(File(root, "saves/G1/b.sav").exists())
+        assertTrue(store.applyMarkers().isEmpty())
+        assertTrue(notes.none { it.startsWith("Restore failed") })
+    }
+
+    @Test fun failed_inflow_undo_not_notified_twice() = runBlocking {
+        put("saves/G1/a.sav", "old-a"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new-a", "c.sav" to "new-c"))
+        val a = applier(failingRestoreFs())
+        a.applyAll(); a.applyAll()
+        assertEquals(1, notes.count { it.startsWith("Restore failed") })
+    }
+
+    @Test fun recovery_probe_runs_under_engine_lock() = runBlocking {
+        put("saves/G1/a.sav", "new"); backupFile("a.sav", "old")
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
+        val locked = mutableListOf<Boolean>()
+        val fs = object : LocalFs() {
+            override fun isProcessAlive(pkg: String): Boolean {
+                locked += runBlocking { withTimeoutOrNull(100) { engine.withLock { } } } == null
+                return super.isProcessAlive(pkg)
+            }
+        }.apply { packages.add("com.fake.emu") }
+        applier(fs).applyAll()
+        assertEquals(listOf(true), locked)
+        assertEquals("old", read("saves/G1/a.sav"))
+    }
+
+    @Test fun undetected_notice_resets_after_detection() = runBlocking {
+        put("saves/G1/a.sav", "new"); backupFile("a.sav", "old")
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
+        val fs = LocalFs().apply { alive.add("com.fake.emu") }
+        val a = applier(fs)
+        a.applyAll()                              // undetected: notice
+        fs.packages.add("com.fake.emu"); a.applyAll()   // detected but running: no notice, resets
+        fs.packages.clear(); a.applyAll()         // undetected again: notice again
+        assertEquals(2, notes.count { it.startsWith("EmuSync couldn't finish restoring") })
+        assertEquals(1, store.applyMarkers().size)
+    }
+
     @Test fun recovery_skipped_when_detect_fails() = runBlocking {
         put("saves/G1/a.sav", "new"); backupFile("a.sav", "old")
         crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
