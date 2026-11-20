@@ -195,6 +195,8 @@ class SyncService : Service() {
 
     /** One Shizuku-ready session. Returns only by throwing (or never, when not signed in). */
     private suspend fun runSession(): Unit = coroutineScope {
+        // The previous session has ended (collectLatest joins it): forgets recorded since can no longer be undone.
+        prepareSession(store).takeIf { it.isNotEmpty() }?.let { log("forgot what this device knew of ${it.sorted()}; their next uploads are fresh") }
         val url = store.serverUrl?.trimEnd('/')
         val key = store.deviceKey
         if (url.isNullOrBlank() || key.isNullOrBlank()) {

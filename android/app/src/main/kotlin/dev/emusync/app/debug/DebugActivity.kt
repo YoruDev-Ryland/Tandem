@@ -20,6 +20,7 @@ import dev.emusync.app.api.ApiClient
 import dev.emusync.app.api.ApiException
 import dev.emusync.app.fs.ShizukuState
 import dev.emusync.app.model.DeviceKeyResponse
+import dev.emusync.app.modules.ModuleRegistry
 import dev.emusync.app.service.AppGraph
 import dev.emusync.app.service.LogBuffer
 import dev.emusync.app.service.SyncService
@@ -178,9 +179,7 @@ class DebugActivity : Activity() {
         ui.launch {
             try {
                 val r = call(ApiClient(url, null), name)
-                store.serverUrl = url
-                store.deviceKey = r.deviceKey
-                store.deviceId = r.deviceId
+                store.signIn(url, r.deviceKey, r.deviceId, ModuleRegistry.default().all().map { it.emulatorId })
                 LogBuffer.add("$what ok: device ${r.deviceId} on $url")
                 toast("Signed in as device ${r.deviceId}")
                 SyncService.start(this@DebugActivity, SyncService.ACTION_RELOAD)

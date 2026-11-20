@@ -309,7 +309,7 @@ class SettingsViewModelTest {
         assertEquals(listOf("/storage/1A2B-3C4D/Roms"), st.settings.romDirs)
     }
 
-    @Test fun changingTheActiveVariantForgetsOnlyThatEmulatorsSyncState() {
+    @Test fun changingTheActiveVariantAsksTheNextSessionToForgetThatEmulator() {
         installed = setOf(EDEN, DUO)
         val (st, vm) = setup()
         st.put("eden|Save|0100ABF008968000||", ItemState("v1", "m", "m"))
@@ -318,10 +318,9 @@ class SettingsViewModelTest {
         st.putConfigState("dolphin", ConfigState("b2", "c2", "m", "m"))
         vm.chooseVariant("eden", DUO)
         assertEquals(DUO, st.settings.variants["eden"])
-        assertNull(st.get("eden|Save|0100ABF008968000||"))
-        assertNull(st.configState("eden"))
-        assertEquals("v9", st.get("dolphin|Save|GALE01||")?.knownVersionId)
-        assertEquals("c2", st.configState("dolphin")?.knownVersionId)
+        // The UI never clears sync state itself: the running session could write it back before it ends.
+        assertEquals(setOf("eden"), st.pendingForget)
+        assertEquals("v1", st.get("eden|Save|0100ABF008968000||")?.knownVersionId)
         assertEquals(1, reloads)
     }
 
@@ -332,6 +331,7 @@ class SettingsViewModelTest {
         vm.chooseVariant("eden", EDEN)   // already detected by preference: same folder, same state
         assertEquals(EDEN, st.settings.variants["eden"])
         assertEquals("v1", st.get("eden|Save|0100ABF008968000||")?.knownVersionId)
+        assertEquals(emptySet<String>(), st.pendingForget)
         assertEquals(1, reloads)   // the running session holds the settings it started with
     }
 }

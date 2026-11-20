@@ -179,7 +179,7 @@ class SettingsViewModel(
 
     /** Forgets this device's key, id and sync state (the server URL stays), stops sync and clears server data. */
     fun signOut() {
-        store.signOut()
+        store.signOut(modules.map { it.emulatorId })
         stopSync()
         afterSignOut()
     }

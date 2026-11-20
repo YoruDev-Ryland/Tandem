@@ -124,8 +124,10 @@ class SyncEngine(
         reportStatus(found.values.toList())
         for ((m, d) in found.values) reportInstalls(m, d)
         val now = clock()
+        val scanned = HashMap<String, List<String>>()
         for ((m, d) in found.values) {
             val items = scanModule(m, d) ?: continue
+            scanned[m.emulatorId] = items.map { storeKey(m.emulatorId, it) }
             for (item in items) {
                 val key = storeKey(m.emulatorId, item)
                 val pending = synchronized(ev) { dirty[key] }
@@ -134,6 +136,8 @@ class SyncEngine(
             }
         }
         for ((m, d) in found.values) if (!fs.isEmulatorRunning(m, d)) uploadConfigBundle(m, d)
+        // A forgotten emulator stops being fresh once every current item and its config have had an answer.
+        for ((id, keys) in scanned) store.clearFreshIfSettled(id, keys + ItemKey.config(id))
     }
 
     /**
@@ -331,23 +335,26 @@ class SyncEngine(
         }
         val hash = Manifests.hash(fresh.entries)
         if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= key }; return null }
+        // Forgotten (variant switch, new sign-in): until its first answer, the server must take the base as sent.
+        val isFresh = store.isFresh(id, key)
         return queueing(key, apiCall(name) {
             val built = fresh
             pushBlobs(built)
             val r = api.uploadSave(SaveUploadRequest(id, item.kind, item.gameKey, item.slot, item.core,
-                known?.knownVersionId, built.entries, item.displayName))
+                known?.knownVersionId, built.entries, item.displayName, fresh = if (isFresh) true else null))
             when (r.status) {
                 SaveUploadStatus.Accepted, SaveUploadStatus.Unchanged -> {
                     val v = if (r.status == SaveUploadStatus.Accepted) r.versionId else r.headVersionId
-                    store.put(key, ItemState(v, hash, hash))
+                    store.put(key, ItemState(v, hash, hash), settleFresh = isFresh)
                     log("$name: ${r.status} $v")
                 }
                 SaveUploadStatus.Superseded -> {
                     // content equals a version the user already decided against; adopt the matched version
-                    store.put(key, ItemState(r.versionId, hash, hash))
+                    store.put(key, ItemState(r.versionId, hash, hash), settleFresh = isFresh)
                     log("$name: superseded by ${r.versionId}")
                 }
                 SaveUploadStatus.Conflict -> {
+                    if (isFresh) store.settleFresh(key)
                     log("$name: conflict (head ${r.headVersionId})")
                     if (notified.add("$key|$hash"))
                         onConflict(SyncConflict(id, item.kind, item.gameKey, item.slot, item.core,
@@ -377,20 +384,22 @@ class SyncEngine(
         val known = store.configState(id)
         val hash = Manifests.hash(fresh.entries)
         if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= ItemKey.config(id) }; return null }
+        val isFresh = store.isFresh(id, ItemKey.config(id))
         return queueing(ItemKey.config(id), apiCall(name) {
             val built = fresh
             pushBlobs(built)
-            val r = api.uploadConfig(ConfigUploadRequest(id, known?.knownVersionId, built.entries))
+            val r = api.uploadConfig(ConfigUploadRequest(id, known?.knownVersionId, built.entries, fresh = if (isFresh) true else null))
             when (r.status) {
                 SaveUploadStatus.Accepted, SaveUploadStatus.Unchanged -> {
-                    store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash))
+                    store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash), settleFresh = isFresh)
                     log("$name: ${r.status} ${r.versionId}")
                 }
                 SaveUploadStatus.Superseded -> {
-                    store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash))
+                    store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash), settleFresh = isFresh)
                     log("$name: superseded by ${r.versionId}")
                 }
                 SaveUploadStatus.Conflict -> {
+                    if (isFresh) store.settleFresh(ItemKey.config(id))
                     log("$name: conflict")
                     if (notified.add("config:$id|$hash")) onConflict(SyncConflict(id, null, null, "", "", null, m.displayName))
                 }

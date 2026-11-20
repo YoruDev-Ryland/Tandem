@@ -182,17 +182,68 @@ class SyncEngineTest {
         assertEquals("v2", store.get(saveKey("GAME1"))!!.knownVersionId)
     }
 
-    @Test fun after_a_variant_change_the_new_folders_save_uploads_without_a_base() = runBlocking {
+    private fun forgetFake() { store.setVariant("fake", "com.fake.emu.duo", forgetState = true); store.applyPendingForget() }
+
+    @Test fun after_a_variant_change_the_new_folders_save_uploads_fresh_without_a_base() = runBlocking {
         put("saves/GAME1/a.sav", "old variant")
         store.put(ItemKey.of("other", "Save", "X", "", ""), ItemState("v7", "h", "h"))
         engine().fullScan()
+        assertNull(api.saves[0].fresh)   // an ordinary upload says nothing
         assertEquals("v1", store.get(saveKey("GAME1"))!!.knownVersionId)
         // The user picks another variant; its folder holds an older, different save of the same game.
-        store.setVariant("fake", "com.fake.emu.duo", forgetState = true)
+        forgetFake()
         put("saves/GAME1/a.sav", "new variant, older save", 6_000)
         engine().fullScan()
-        assertNull(api.saves[1].baseVersionId)   // the server sees no base: a conflict, never a fast-forward
+        assertNull(api.saves[1].baseVersionId)
+        assertEquals(true, api.saves[1].fresh)   // the server must not take its record of this device as the base
         assertEquals("v7", store.get(ItemKey.of("other", "Save", "X", "", ""))!!.knownVersionId)
+        // Answered: the next upload of the item is ordinary again.
+        put("saves/GAME1/a.sav", "played on", 7_000)
+        engine().fullScan()
+        assertNull(api.saves[2].fresh)
+        assertEquals("v2", api.saves[2].baseVersionId)
+    }
+
+    @Test fun a_conflict_answer_also_ends_the_items_fresh_upload() = runBlocking {
+        forgetFake()
+        put("saves/GAME1/a.sav", "mine")
+        api.saveStatus = SaveUploadStatus.Conflict
+        engine().fullScan()
+        assertEquals(true, api.saves[0].fresh)
+        put("saves/GAME1/a.sav", "mine, played on", 6_000)
+        engine().fullScan()
+        assertNull(api.saves[1].fresh)
+    }
+
+    @Test fun a_failed_upload_stays_fresh_for_the_retry() = runBlocking {
+        forgetFake()
+        put("saves/GAME1/a.sav", "mine")
+        api.failSaveFor = "GAME1"
+        engine().fullScan()
+        api.failSaveFor = null
+        engine().fullScan()
+        assertEquals(true, api.saves.single().fresh)
+    }
+
+    @Test fun the_config_uploads_fresh_once_and_a_fully_answered_emulator_stops_being_fresh() = runBlocking {
+        forgetFake()
+        put("saves/GAME1/a.sav", "mine")
+        put("config/a.ini", "x=1")
+        engine().fullScan()
+        assertEquals(true, api.configs[0].fresh)
+        assertEquals(emptySet<String>(), store.freshEmulators)   // every current item and the config answered
+        put("config/a.ini", "x=2", 6_000)
+        put("saves/GAME2/a.sav", "a new game", 6_000)
+        engine().fullScan()
+        assertNull(api.configs[1].fresh)
+        assertNull(api.saves.single { it.gameKey == "GAME2" }.fresh)
+    }
+
+    @Test fun an_ordinary_request_is_serialized_without_the_fresh_field() {
+        val req = SaveUploadRequest("eden", ItemKind.Save, "G", "", "", null, emptyList())
+        assertFalse(ProtocolJson.encodeToString(SaveUploadRequest.serializer(), req).contains("fresh"))
+        assertTrue(ProtocolJson.encodeToString(SaveUploadRequest.serializer(), req.copy(fresh = true)).contains("\"fresh\":true"))
+        assertFalse(ProtocolJson.encodeToString(ConfigUploadRequest.serializer(), ConfigUploadRequest("eden", null, emptyList())).contains("fresh"))
     }
 
     @Test fun unchanged_response_stores_head_version() = runBlocking {

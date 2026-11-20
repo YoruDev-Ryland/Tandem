@@ -52,6 +52,8 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val baseVersionId: String? = null,
     val manifest: List<ManifestEntry>,
     val displayName: String? = null,
+    /** True while this device has forgotten what it knew of the item (variant switch, new sign-in); null otherwise. */
+    val fresh: Boolean? = null,
 )
 @Serializable data class SaveUploadResponse(
     val status: SaveUploadStatus,
@@ -64,6 +66,8 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val emulatorId: String,
     val baseVersionId: String? = null,
     val files: List<ManifestEntry>,
+    /** As [SaveUploadRequest.fresh], for the emulator's config bundle. */
+    val fresh: Boolean? = null,
 )
 @Serializable data class ConfigUploadResponse(
     val status: SaveUploadStatus,
