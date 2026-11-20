@@ -32,6 +32,11 @@ class SessionFlows {
         runningState.value = emptySet()
     }
 
+    /** Runs [block] under the lock only while [token]'s session is live, so it can't interleave with [end]. */
+    fun ifLive(token: Token, block: () -> Unit) = synchronized(lock) {
+        if (live === token) block()
+    }
+
     fun publishWaiting(token: Token, v: List<WaitingDelivery>) = synchronized(lock) {
         if (live === token) waitingState.value = v
     }

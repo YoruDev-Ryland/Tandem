@@ -167,7 +167,7 @@ class SyncEngine(
         val put = statusScope.async {
             try {
                 apiCall("status") {
-                    api.putStatus(req)
+                    api.putStatus(req, callTimeoutMillis = statusTimeoutMillis)   // fails rather than landing late
                     synchronized(statusLock) { if (attempt == mine) sentOk = true }
                 }
             } finally {

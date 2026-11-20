@@ -52,9 +52,10 @@ class ApiClient(
 
     private suspend fun <B, R> call(
         method: String, path: String, bodySer: KSerializer<B>?, body: B?, respSer: KSerializer<R>?,
+        client: OkHttpClient = http,
     ): R? = withContext(Dispatchers.IO) {
         val rb = if (bodySer != null) jsonBody(bodySer, body as B) else if (method == "GET") null else ByteArray(0).toRequestBody(null)
-        val r = http.newCall(req(path).method(method, rb).build()).execute()
+        val r = client.newCall(req(path).method(method, rb).build()).execute()
         check(r).use { resp ->
             if (respSer == null) null else ProtocolJson.decodeFromString(respSer, resp.body.string())
         }
@@ -74,6 +75,11 @@ class ApiClient(
 
     override suspend fun putStatus(req: DeviceStatusRequest) {
         call("PUT", "/v1/devices/me/status", DeviceStatusRequest.serializer(), req, null as KSerializer<Unit>?)
+    }
+
+    override suspend fun putStatus(req: DeviceStatusRequest, callTimeoutMillis: Long) {
+        val bounded = http.newBuilder().callTimeout(callTimeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS).build()
+        call("PUT", "/v1/devices/me/status", DeviceStatusRequest.serializer(), req, null as KSerializer<Unit>?, bounded)
     }
 
     override suspend fun putInstalls(emulatorId: String, games: List<InstalledGame>) =

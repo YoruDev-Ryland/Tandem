@@ -94,4 +94,17 @@ class ApiClientTest {
             assertEquals("Bearer k", server.takeRequest().headers["Authorization"])
         } finally { stream.stop() }
     }
+
+    @Test fun timed_status_put_fails_instead_of_landing_late() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(204).headersDelay(3, TimeUnit.SECONDS).build())
+        val req = dev.emusync.app.model.DeviceStatusRequest("android", "0", true, emptyList(), emptyMap(), listOf("eden"))
+        val started = System.nanoTime()
+        try {
+            ApiClient(base(), "k").putStatus(req, callTimeoutMillis = 300)
+            fail("expected the call timeout")
+        } catch (e: java.io.IOException) {
+            // OkHttp's call timeout cancels the call: it fails rather than completing after the server answers
+        }
+        assertTrue("cancelled by the call timeout, not the 3 s answer", System.nanoTime() - started < 2_500_000_000L)
+    }
 }

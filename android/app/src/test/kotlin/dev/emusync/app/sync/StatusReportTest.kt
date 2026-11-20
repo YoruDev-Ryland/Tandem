@@ -61,6 +61,8 @@ class StatusReportTest {
     private val client by lazy { ApiClient(server.url("/").toString().trimEnd('/'), "k") }
     private val coreCalls = AtomicInteger()
 
+    private val logs = java.util.concurrent.LinkedBlockingQueue<String>()
+
     private fun engine(api: Api = client, statusTimeoutMillis: Long = 10_000L): SyncEngine {
         val root = tmp.newFolder().path
         val counting = object : EmulatorModule by Emu("eden", "dev.eden", root) {
@@ -68,7 +70,7 @@ class StatusReportTest {
         }
         val registry = ModuleRegistry(listOf(counting, Emu("ppsspp", "org.ppsspp", root)))
         return SyncEngine(fs, api, StateStore(File(tmp.root, "s.json")),
-            registry, DeviceSettings(emptyList(), emptyMap()), clock = { now }, log = {}, versionOf = { "1.0" },
+            registry, DeviceSettings(emptyList(), emptyMap()), clock = { now }, log = { logs += it }, versionOf = { "1.0" },
             appVersion = "0", shizukuOk = { true }, onConflict = {}, storageRoot = tmp.newFolder().path,
             statusTimeoutMillis = statusTimeoutMillis)
     }
@@ -178,6 +180,7 @@ class StatusReportTest {
                 puts.incrementAndGet()
                 release.await()   // blocking, non-cancellable
             }
+            override suspend fun putStatus(req: DeviceStatusRequest, callTimeoutMillis: Long) = putStatus(req)
         }
         val e = engine(hung, statusTimeoutMillis = 0L)   // gives up at once instead of waiting 10 s
         e.fullScan(); statusBodies()
@@ -187,5 +190,19 @@ class StatusReportTest {
         e.reportRunning(setOf("eden"))   // due, but the previous report is still in flight: not resent
         assertEquals(1, puts.get())
         release.countDown()
+    }
+
+    @Test fun a_running_report_the_server_answers_too_late_is_cancelled() = runBlocking {
+        val e = engine(statusTimeoutMillis = 300L)
+        e.fullScan(); statusBodies()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                MockResponse.Builder().code(204).headersDelay(3, TimeUnit.SECONDS).build()
+        }
+        e.reportRunning(setOf("eden"))
+        // The call itself times out (an io error), rather than staying open and landing after a newer report.
+        var line: String?
+        do { line = logs.poll(2, TimeUnit.SECONDS) } while (line != null && !line.startsWith("status: io error"))
+        assertTrue("PUT failed by its call timeout", line != null)
     }
 }

@@ -10,6 +10,8 @@ interface Api {
     suspend fun login(email: String, password: String, deviceName: String): DeviceKeyResponse
     suspend fun redeemPairing(code: String, deviceName: String): DeviceKeyResponse
     suspend fun putStatus(req: DeviceStatusRequest)
+    /** [putStatus] that fails (an IOException) once [callTimeoutMillis] pass, instead of completing late. */
+    suspend fun putStatus(req: DeviceStatusRequest, callTimeoutMillis: Long) = putStatus(req)
     suspend fun putInstalls(emulatorId: String, games: List<InstalledGame>): InstallsResponse
     suspend fun missingBlobs(hashes: List<String>): List<String>
     suspend fun putBlob(hash: String, size: Long, source: () -> InputStream)

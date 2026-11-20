@@ -47,4 +47,14 @@ class SessionFlowsTest {
         f.end(old)   // a duplicate end of the old session doesn't clear the new one
         assertEquals(setOf("ppsspp"), f.running.value)
     }
+
+    @Test fun ifLive_runs_only_for_the_live_session() {
+        val f = SessionFlows()
+        val t = f.begin()
+        var ran = 0
+        f.ifLive(t) { ran++ }
+        f.end(t)
+        f.ifLive(t) { ran++ }
+        assertEquals(1, ran)
+    }
 }

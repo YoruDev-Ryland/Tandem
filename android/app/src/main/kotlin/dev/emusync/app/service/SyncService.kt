@@ -188,21 +188,23 @@ class SyncService : Service() {
             throw FsUnavailableException("shell bind timed out")
         }
         val fs = RemoteFs(shell)
-        val api = StatusRecordingApi(ApiClient(url, key)) { lastStatus = SentStatus(url, key, it) }
-        val stored = store.settings
-        val s = DeviceSettings(stored.romDirs, stored.overrides)
-        val planner = WorkPlanner(stored.autoApply)
-        val engine = SyncEngine(
-            fs, api, store, registry, s,
-            clock = System::currentTimeMillis,   // compared with file mtimes: must be wall-clock time
-            log = log,
-            versionOf = ::versionOf,
-            appVersion = BuildConfig.VERSION_NAME,
-            shizukuOk = { gate.state.value == ShizukuState.Ready },
-            onConflict = notifier::conflict,
-        )
         val flows = AppGraph.sessionFlows.begin()
         try {
+            val api = StatusRecordingApi(ApiClient(url, key), AppGraph.sessionFlows, flows) {
+                lastStatus = SentStatus(url, key, it)
+            }
+            val stored = store.settings
+            val s = DeviceSettings(stored.romDirs, stored.overrides)
+            val planner = WorkPlanner(stored.autoApply)
+            val engine = SyncEngine(
+                fs, api, store, registry, s,
+                clock = System::currentTimeMillis,   // compared with file mtimes: must be wall-clock time
+                log = log,
+                versionOf = ::versionOf,
+                appVersion = BuildConfig.VERSION_NAME,
+                shizukuOk = { gate.state.value == ShizukuState.Ready },
+                onConflict = notifier::conflict,
+            )
             val applier = DeliveryApplier(
                 fs, api, store, registry, engine, notifier::alert, s, cacheDir,
                 onWaiting = { AppGraph.sessionFlows.publishWaiting(flows, it) }, log = log,
@@ -382,10 +384,26 @@ class SyncService : Service() {
     }
 }
 
-/** Passes calls through and remembers the last status the server accepted (for the Shizuku-off report). */
-private class StatusRecordingApi(private val inner: Api, private val onStatus: (DeviceStatusRequest) -> Unit) : Api by inner {
+/**
+ * Passes calls through and remembers the last status the server accepted (for the Shizuku-off report), but only
+ * while [token]'s session is live.
+ */
+internal class StatusRecordingApi(
+    private val inner: Api,
+    private val flows: SessionFlows,
+    private val token: SessionFlows.Token,
+    private val onStatus: (DeviceStatusRequest) -> Unit,
+) : Api by inner {
     override suspend fun putStatus(req: DeviceStatusRequest) {
         inner.putStatus(req)
-        onStatus(req)
+        record(req)
     }
+
+    override suspend fun putStatus(req: DeviceStatusRequest, callTimeoutMillis: Long) {
+        inner.putStatus(req, callTimeoutMillis)
+        record(req)
+    }
+
+    /** A call that returns after its session ended must not replace what the Shizuku-off report resends. */
+    private fun record(req: DeviceStatusRequest) = flows.ifLive(token) { onStatus(req) }
 }
