@@ -3,7 +3,7 @@ import { parseGamePath } from "./api/paths";
 export type RouteName =
   | "home" | "games" | "game" | "game-conflict" | "conflicts"
   | "devices" | "device" | "device-setup" | "device-pair"
-  | "configs" | "config-emulator" | "vault" | "activity" | "settings" | "sign-in" | "not-found";
+  | "configs" | "config-emulator" | "vault" | "activity" | "settings" | "sign-in" | "kit" | "not-found";
 
 export interface Route { name: RouteName; params: Record<string, string> }
 
@@ -28,6 +28,8 @@ export function matchRoute(rawPath: string): Route {
   const path = rawPath.length > 1 ? rawPath.replace(/\/+$/, "") : rawPath;
   const notFound: Route = { name: "not-found", params: {} };
   if (path in fixed) return { name: fixed[path], params: {} };
+  // The UI kit page exists only in dev builds.
+  if (import.meta.env.DEV && path === "/_kit") return { name: "kit", params: {} };
 
   if (path.startsWith("/games/")) {
     const conflict = path.endsWith("/conflict");

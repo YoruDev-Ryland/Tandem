@@ -5,6 +5,7 @@
   import { PRODUCT_NAME } from "./lib/brand";
   import { installInput } from "./lib/input";
   import SignIn from "./pages/SignIn.svelte";
+  import AppTopBar from "./lib/ui/AppTopBar.svelte";
 
   const titles: Record<string, string> = {
     home: "Home",
@@ -24,7 +25,7 @@
   };
 
   onMount(() => {
-    void session.check();
+    if (router.route.name !== "kit") void session.check();
     return installInput();
   });
 
@@ -33,7 +34,9 @@
   const key = $derived(router.path);
 </script>
 
-{#if route.name === "sign-in"}
+{#if import.meta.env.DEV && route.name === "kit"}
+  {#await import("./pages/_Kit.svelte") then Kit}<Kit.default />{/await}
+{:else if route.name === "sign-in"}
   <SignIn />
 {:else if session.checked && session.error}
   <main>
@@ -42,6 +45,7 @@
     <button type="button" onclick={() => session.check()}>Retry</button>
   </main>
 {:else if session.checked && session.account}
+  <AppTopBar />
   {#key key}
     <main>
       {#if route.name === "not-found"}

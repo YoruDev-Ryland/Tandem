@@ -33,6 +33,19 @@ describe("keyToAction", () => {
     }
   });
 
+  it("leaves Enter on a focused button or link to the browser, so the control activates itself", () => {
+    for (const tag of ["button", "a"]) {
+      const el = document.body.appendChild(document.createElement(tag));
+      const enter = new KeyboardEvent("keydown", { key: "Enter" });
+      Object.defineProperty(enter, "target", { value: el });
+      expect(keyToAction(enter)).toBeNull();
+      const down = new KeyboardEvent("keydown", { key: "ArrowDown" });
+      Object.defineProperty(down, "target", { value: el });
+      expect(keyToAction(down)).toBe("down");
+      el.remove();
+    }
+  });
+
   it("ignores keys with Ctrl, Alt or Meta held", () => {
     for (const mod of ["ctrlKey", "altKey", "metaKey"])
       expect(keyToAction(new KeyboardEvent("keydown", { key: "ArrowLeft", [mod]: true }))).toBeNull();

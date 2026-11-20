@@ -11,10 +11,16 @@ function isTextTarget(t: EventTarget | null): boolean {
   return t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable;
 }
 
+/** Buttons and links activate themselves on Enter; turning that into "a" would let a list or dialog swallow it. */
+function isActivatable(t: EventTarget | null): boolean {
+  return t instanceof HTMLElement && (t.tagName === "BUTTON" || t.tagName === "A" || t.tagName === "SUMMARY");
+}
+
 export function keyToAction(e: KeyboardEvent): Action | null {
   if (e.ctrlKey || e.altKey || e.metaKey) return null;
   const action = KEYS[e.key] ?? null;
   if (action && action !== "b" && isTextTarget(e.target)) return null;
+  if (action === "a" && isActivatable(e.target)) return null;
   return action;
 }
 
