@@ -4,6 +4,7 @@ using EmuSync.Protocol;
 using EmuSync.Server.Blobs;
 using EmuSync.Server.Configs.Formats;
 using EmuSync.Server.Data;
+using EmuSync.Server.Http;
 using EmuSync.Server.Saves;
 using Microsoft.EntityFrameworkCore;
 
@@ -165,7 +166,17 @@ public sealed partial class ConfigTransform(EmuSyncDbContext db, IBlobStore stor
         if (changes.Count == 0) return entry;
         var text = file.Format.Replace(file.Text, changes);
         if (text == file.Text) return entry;
-        var bytes = StrictUtf8.GetBytes(text);
+        var (hash, size) = await PutTextAsync(userId, text, ct);
+        return entry with { Hash = hash, Size = size };
+    }
+
+    /// <summary>Stores text (UTF-8, no BOM) as a blob of the user, if not already held. Callers must not have
+    /// pending changes (recording saves).</summary>
+    public async Task<(string Hash, long Size)> PutTextAsync(Guid userId, string text, CancellationToken ct)
+    {
+        byte[] bytes;
+        try { bytes = StrictUtf8.GetBytes(text); }
+        catch (EncoderFallbackException) { throw new ApiException(400, "bad_request", "The text is not valid Unicode."); }
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
         if (!await blobs.HasAsync(userId, hash, ct))
         {
@@ -173,7 +184,19 @@ public sealed partial class ConfigTransform(EmuSyncDbContext db, IBlobStore stor
                 await store.PutAsync(userId, hash, content, ct);
             await RecordAsync(userId, hash, bytes.Length, ct);
         }
-        return entry with { Hash = hash, Size = bytes.Length };
+        return (hash, bytes.Length);
+    }
+
+    /// <summary>The blob as text, or null when it is binary (not valid UTF-8) or larger than <see cref="MaxTextBytes"/>.</summary>
+    public async Task<string?> ReadTextAsync(Guid userId, ManifestEntry entry, CancellationToken ct)
+    {
+        if (entry.Size > MaxTextBytes) return null;
+        await using var stream = await store.OpenAsync(userId, entry.Hash, ct)
+            ?? throw new InvalidOperationException($"Blob {entry.Hash} is recorded but missing from the store.");
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer, ct);
+        try { return StrictUtf8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length); }
+        catch (DecoderFallbackException) { return null; }
     }
 
     /// <summary>Like <see cref="BlobService.RecordAsync"/>, but a duplicate-key race detaches only its own row:

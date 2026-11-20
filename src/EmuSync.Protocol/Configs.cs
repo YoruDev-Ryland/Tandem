@@ -25,3 +25,24 @@ public sealed record ApplyConfigRequest(Guid TargetDeviceId, string EmulatorId, 
 /// <param name="HeadVersionId">That bundle's head, which the target is sent unless it already holds it.</param>
 /// <param name="GroupId">The group the target is in after a Linked apply; null for Copy.</param>
 public sealed record ApplyConfigResponse(Guid BundleId, Guid HeadVersionId, Guid? GroupId);
+
+public sealed record ConfigVersionSummary(Guid Id, int Seq, ConfigSource Source, string? DeviceName, DateTimeOffset ReceivedUtc,
+    long TotalSize, bool Pinned);
+
+public enum FileDiffStatus { Added, Removed, Changed, Same }
+
+/// <param name="Op">' ' (context), '+' (added) or '-' (removed).</param>
+public sealed record DiffLine(char Op, string Text);
+
+/// <param name="OldStart">1-based line in the old file where the hunk starts (the line before which an insert lands).</param>
+public sealed record DiffHunk(int OldStart, int NewStart, IReadOnlyList<DiffLine> Lines);
+
+/// <param name="Hunks">Empty for Same, for binary/opaque files, and for a Changed file whose lines are equal once
+/// line terminators are ignored.</param>
+public sealed record FileDiff(string Path, FileDiffStatus Status, IReadOnlyList<DiffHunk> Hunks);
+
+public sealed record ConfigDiffResponse(IReadOnlyList<FileDiff> Files);
+
+/// <param name="BaseVersionId">The bundle head the editor started from; anything else is a 409 stale_base.</param>
+/// <param name="Text">The file as the chosen device sees it (expanded), UTF-8, at most 4 MiB.</param>
+public sealed record EditConfigFileRequest(Guid BaseVersionId, string Text);

@@ -37,6 +37,7 @@ public static class ServerSetup
         builder.Services.AddScoped<IActivityLog, ActivityLog>();
         builder.Services.AddScoped<ConfigTransform>();
         builder.Services.AddScoped<ConfigService>();
+        builder.Services.AddScoped<ConfigDiffService>();
         builder.Services.AddScoped<DeliveryService>();
         builder.Services.AddHostedService<DeliveryHandlers>();
     }

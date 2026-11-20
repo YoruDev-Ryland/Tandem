@@ -43,6 +43,20 @@ public static class ConfigEndpoints
             return Results.NoContent();
         });
 
+        configs.MapGet("/bundles/{id:guid}/versions", (HttpContext http, Guid id, ConfigService svc, CancellationToken ct) =>
+            svc.ListVersionsAsync(http.User.UserId(), id, ct));
+
+        configs.MapGet("/versions/{versionId:guid}/files/{*path}", async (HttpContext http, Guid versionId, string path, Guid? device,
+            ConfigDiffService diff, CancellationToken ct) =>
+            Results.Text(await diff.FileTextAsync(http.User.UserId(), versionId, path, device, ct), "text/plain; charset=utf-8"));
+
+        configs.MapGet("/diff", (HttpContext http, Guid a, Guid b, Guid? device, ConfigDiffService diff, CancellationToken ct) =>
+            diff.DiffAsync(http.User.UserId(), a, b, device, ct));
+
+        configs.MapPut("/bundles/{id:guid}/files/{*path}", (HttpContext http, Guid id, string path, Guid? device,
+            EditConfigFileRequest request, ConfigService svc, CancellationToken ct) =>
+            svc.EditFileAsync(http.User.UserId(), id, path, device, request, ct));
+
         configs.MapPost("/apply", (HttpContext http, ApplyConfigRequest request, ConfigService svc, CancellationToken ct) =>
             svc.ApplyAsync(http.User.UserId(), request, ct));
         return app;

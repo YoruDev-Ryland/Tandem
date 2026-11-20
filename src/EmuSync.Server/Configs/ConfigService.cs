@@ -1,3 +1,4 @@
+using System.Text;
 using EmuSync.Protocol;
 using EmuSync.Server.Blobs;
 using EmuSync.Server.Data;
@@ -97,6 +98,89 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
             else
                 await activity.WriteAsync(userId, "conflict_opened", $"{device} uploaded the {emulatorId} config, which conflicts",
                     deviceId, emulatorId, data: new { bundleId = response.BundleId, versionId = response.VersionId });
+        }
+        return response;
+    }
+
+    public async Task<List<ConfigVersionSummary>> ListVersionsAsync(Guid userId, Guid bundleId, CancellationToken ct)
+    {
+        if (!await db.ConfigBundles.AnyAsync(b => b.Id == bundleId && b.UserId == userId, ct))
+            throw new ApiException(404, "bundle_not_found", "Config bundle not found.");
+        return await db.ConfigVersions.AsNoTracking().Where(v => v.BundleId == bundleId)
+            .OrderByDescending(v => v.Seq)
+            .Select(v => new ConfigVersionSummary(v.Id, v.Seq, v.Source,
+                db.Devices.Where(d => d.Id == v.DeviceId).Select(d => d.Name).FirstOrDefault(),
+                v.ReceivedUtc, v.TotalSize, v.Pinned))
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Edits one file of the bundle head in the browser. <paramref name="request"/>.Text is the file as the chosen
+    /// device sees it (expanded): it is canonicalized with that device's roots and its raw values, spliced into the
+    /// head's canonical manifest and decided like an upload (Unchanged when nothing differs). The new version is
+    /// the head, so every member whose applied version differs is sent it, the chosen device included.
+    /// </summary>
+    public async Task<ConfigUploadResponse> EditFileAsync(Guid userId, Guid bundleId, string path, Guid? deviceId,
+        EditConfigFileRequest request, CancellationToken ct)
+    {
+        if (request is null || request.Text is null) throw new ApiException(400, "bad_request", "Text is required.");
+        if (Encoding.UTF8.GetByteCount(request.Text) > ConfigTransform.MaxTextBytes)
+            throw new ApiException(400, "too_large", "Config files can be edited in the browser up to 4 MiB.");
+
+        ConfigUploadResponse response;
+        string emulatorId;
+        using (await locks.Acquire(userId, ct))
+        {
+            await using var tx = await BeginAsync(ct);
+            var bundle = await LoadBundleForUpdateAsync(userId, bundleId, ct)
+                ?? throw new ApiException(404, "bundle_not_found", "Config bundle not found.");
+            emulatorId = bundle.EmulatorId;
+            if (bundle.GroupId is not null && deviceId is null)
+                throw new ApiException(400, "device_required", "Say which device's view of the file this is (?device=).");
+            var device = deviceId ?? bundle.OwnerDeviceId!.Value;
+            var isMember = bundle.GroupId is null
+                ? bundle.OwnerDeviceId == device
+                : await db.DeviceConfigs.AnyAsync(c => c.BundleId == bundle.Id && c.DeviceId == device, ct);
+            if (!isMember || !await db.Devices.AnyAsync(d => d.Id == device && d.UserId == userId && d.RevokedUtc == null, ct))
+                throw new ApiException(400, "not_member", "That device does not use this config.");
+
+            var head = bundle.HeadVersionId is Guid headId ? await db.ConfigVersions.SingleAsync(v => v.Id == headId, ct) : null;
+            if (head is null || head.Id != request.BaseVersionId)
+                throw new ApiException(409, "stale_base", "The config changed since you opened it; reload and edit again.");
+            if (bundle.OpenConflict)
+                throw new ApiException(409, "conflict_open", "Resolve the config conflict first.");
+            var headManifest = Manifests.FromJson(head.ManifestJson);
+            if (headManifest.All(e => e.Path != path))
+                throw new ApiException(404, "file_not_found", "That file is not in this config.");
+
+            // Before any tracked change: both calls may store blobs (SaveChanges).
+            var (rawHash, rawSize) = await transform.PutTextAsync(userId, request.Text, ct);
+            var roots = await transform.RootsAsync(device, ct);
+            var edited = (await transform.CanonicalizeAsync(userId, emulatorId, [new ManifestEntry(path, rawHash, rawSize)], roots,
+                headManifest, ct)).Single();
+            var canonical = headManifest.Select(e => e.Path == path ? edited : e).ToList();
+            var hash = Manifests.Hash(canonical);
+
+            if (head.ManifestHash == hash)
+            {
+                response = new ConfigUploadResponse(SaveUploadStatus.Unchanged, bundle.Id, head.Id);
+            }
+            else
+            {
+                var version = await NewVersionAsync(bundle.Id, head.Id, null, ConfigSource.WebEdit, Manifests.ToJson(canonical),
+                    hash, canonical.Sum(e => e.Size), ct);
+                bundle.HeadVersionId = version.Id;
+                response = new ConfigUploadResponse(SaveUploadStatus.Accepted, bundle.Id, version.Id);
+            }
+            await db.SaveChangesAsync(ct);
+            if (tx is not null) await tx.CommitAsync(ct);
+        }
+
+        if (response.Status == SaveUploadStatus.Accepted)
+        {
+            await events.Raise(new ConfigsChanged(userId), ct);
+            await activity.WriteAsync(userId, "config_uploaded", $"The {emulatorId} config file {path} was edited in the browser",
+                null, emulatorId, data: new { bundleId, versionId = response.VersionId, path });
         }
         return response;
     }
