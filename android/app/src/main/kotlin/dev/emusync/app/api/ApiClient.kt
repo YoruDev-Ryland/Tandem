@@ -121,4 +121,71 @@ class ApiClient(
     override suspend fun ack(id: String, req: AckRequest) {
         call("POST", "/v1/deliveries/$id/ack", AckRequest.serializer(), req, null as KSerializer<Unit>?)
     }
+
+    // ---- app UI (/v1/web/* and the conflict/config endpoints; the device key is accepted) ----
+
+    private suspend fun <R> get(path: String, ser: KSerializer<R>): R =
+        call("GET", path, null as KSerializer<Unit>?, null, ser)!!
+
+    override suspend fun games(emulator: String?): List<GameRow> =
+        get("/v1/web/games" + query("emulator" to emulator), ListSerializer(GameRow.serializer()))
+
+    override suspend fun game(emulatorId: String, gameKey: String): GameDetail =
+        get("/v1/web/games/${encodeSegment(emulatorId)}/${encodeKey(gameKey)}", GameDetail.serializer())
+
+    override suspend fun conflicts(): List<ConflictRow> =
+        get("/v1/web/conflicts", ListSerializer(ConflictRow.serializer()))
+
+    override suspend fun resolveConflict(itemId: String, req: ResolveConflictRequest) {
+        call("POST", "/v1/conflicts/${encodeSegment(itemId)}/resolve", ResolveConflictRequest.serializer(), req, null as KSerializer<Unit>?)
+    }
+
+    override suspend fun firstSync(req: BulkFirstSyncRequest) {
+        call("POST", "/v1/conflicts/first-sync/resolve", BulkFirstSyncRequest.serializer(), req, null as KSerializer<Unit>?)
+    }
+
+    override suspend fun configs(): ConfigOverview = get("/v1/web/configs", ConfigOverview.serializer())
+
+    override suspend fun joinGroup(groupId: String, deviceId: String) {
+        call("POST", "/v1/configs/groups/${encodeSegment(groupId)}/members", JoinGroupRequest.serializer(),
+            JoinGroupRequest(deviceId), null as KSerializer<Unit>?)
+    }
+
+    override suspend fun applyConfig(req: ApplyConfigRequest) =
+        call("POST", "/v1/configs/apply", ApplyConfigRequest.serializer(), req, ApplyConfigResponse.serializer())!!
+
+    override suspend fun keepOwn(deviceId: String, emulatorId: String) {
+        call("POST", "/v1/web/devices/${encodeSegment(deviceId)}/setup/keep-own/${encodeSegment(emulatorId)}",
+            null as KSerializer<Unit>?, null, null as KSerializer<Unit>?)
+    }
+
+    override suspend fun setup(deviceId: String): SetupChecklist =
+        get("/v1/web/devices/${encodeSegment(deviceId)}/setup", SetupChecklist.serializer())
+
+    override suspend fun activity(device: String?, before: Long?, limit: Int): ActivityPage =
+        get("/v1/activity" + query("device" to device, "before" to before, "limit" to limit), ActivityPage.serializer())
+
+    override suspend fun devices(): List<DeviceSummary> =
+        get("/v1/devices", ListSerializer(DeviceSummary.serializer()))
+
+    override suspend fun me(): DeviceSummary = get("/v1/devices/me", DeviceSummary.serializer())
 }
+
+private fun query(vararg params: Pair<String, Any?>): String =
+    params.filter { (_, v) -> v != null && v.toString().isNotEmpty() }
+        .joinToString("&") { (k, v) -> "$k=${encodeSegment(v.toString())}" }
+        .let { if (it.isEmpty()) "" else "?$it" }
+
+private const val UNRESERVED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()"
+
+/** Percent-encodes like JavaScript's encodeURIComponent (UTF-8; leaves A-Z a-z 0-9 - _ . ! ~ * ' ( )). */
+internal fun encodeSegment(s: String): String = buildString {
+    for (b in s.toByteArray(Charsets.UTF_8)) {
+        val c = (b.toInt() and 0xFF)
+        if (c < 128 && UNRESERVED.indexOf(c.toChar()) >= 0) append(c.toChar())
+        else append('%').append("0123456789ABCDEF"[c shr 4]).append("0123456789ABCDEF"[c and 15])
+    }
+}
+
+/** A game key as URL path: each segment encoded, '/' kept as the separator (the web client's encodeKey). */
+internal fun encodeKey(key: String): String = key.split('/').joinToString("/") { encodeSegment(it) }

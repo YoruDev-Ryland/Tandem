@@ -20,4 +20,18 @@ interface Api {
     suspend fun uploadConfig(req: ConfigUploadRequest): ConfigUploadResponse
     suspend fun deliveries(): List<DeliveryDto>
     suspend fun ack(id: String, req: AckRequest)
+
+    suspend fun games(emulator: String?): List<GameRow>
+    suspend fun game(emulatorId: String, gameKey: String): GameDetail
+    suspend fun conflicts(): List<ConflictRow>
+    suspend fun resolveConflict(itemId: String, req: ResolveConflictRequest)
+    suspend fun firstSync(req: BulkFirstSyncRequest)
+    suspend fun configs(): ConfigOverview
+    suspend fun joinGroup(groupId: String, deviceId: String)
+    suspend fun applyConfig(req: ApplyConfigRequest): ApplyConfigResponse
+    suspend fun keepOwn(deviceId: String, emulatorId: String)
+    suspend fun setup(deviceId: String): SetupChecklist
+    suspend fun activity(device: String?, before: Long?, limit: Int = 50): ActivityPage
+    suspend fun devices(): List<DeviceSummary>
+    suspend fun me(): DeviceSummary
 }

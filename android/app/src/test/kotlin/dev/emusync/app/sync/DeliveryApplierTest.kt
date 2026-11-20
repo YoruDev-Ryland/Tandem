@@ -32,6 +32,20 @@ class DeliveryApplierTest {
     // ---- fakes ----
 
     class FakeApi : Api {
+        override suspend fun games(emulator: String?): List<GameRow> = error("unused")
+        override suspend fun game(emulatorId: String, gameKey: String): GameDetail = error("unused")
+        override suspend fun conflicts(): List<ConflictRow> = error("unused")
+        override suspend fun resolveConflict(itemId: String, req: ResolveConflictRequest) = error("unused")
+        override suspend fun firstSync(req: BulkFirstSyncRequest) = error("unused")
+        override suspend fun configs(): ConfigOverview = error("unused")
+        override suspend fun joinGroup(groupId: String, deviceId: String) = error("unused")
+        override suspend fun applyConfig(req: ApplyConfigRequest): ApplyConfigResponse = error("unused")
+        override suspend fun keepOwn(deviceId: String, emulatorId: String) = error("unused")
+        override suspend fun setup(deviceId: String): SetupChecklist = error("unused")
+        override suspend fun activity(device: String?, before: Long?, limit: Int): ActivityPage = error("unused")
+        override suspend fun devices(): List<DeviceSummary> = error("unused")
+        override suspend fun me(): DeviceSummary = error("unused")
+
         /** Each deliveries() call pops the next list; when empty, returns [standing]. */
         val pages = ArrayDeque<List<DeliveryDto>>()
         var standing: List<DeliveryDto> = emptyList()
