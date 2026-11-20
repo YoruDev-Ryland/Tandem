@@ -28,6 +28,9 @@ public sealed class ServerOptions
     /// <summary>Runs the 5-minute Shizuku-off check in the background (on in production; the test factory turns it off).</summary>
     public bool EnableNotifyChecks { get; set; } = true;
 
+    /// <summary>Capacity of the notification queue; when full, further notifications are dropped (and logged).</summary>
+    public int NotifyQueueCapacity { get; set; } = 1000;
+
     public string ServerName
     {
         get => _serverName;

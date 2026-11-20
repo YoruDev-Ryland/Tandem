@@ -39,7 +39,8 @@ public interface INotifier
 
 /// <summary>
 /// Posts to ntfy, Discord and generic webhook targets through the named "notify" HttpClient (10 s timeout). Target URLs
-/// and tokens are never logged: a Discord webhook URL is itself a secret.
+/// and tokens are never logged (a Discord webhook URL is itself a secret): this class logs none, and the client is
+/// registered with RemoveAllLoggers so IHttpClientFactory's request logging (which prints the URI) is off.
 /// </summary>
 public sealed class Notifier(IServiceScopeFactory scopes, IHttpClientFactory clients, TimeProvider time, ILogger<Notifier> logger) : INotifier
 {

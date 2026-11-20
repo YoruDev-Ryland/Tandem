@@ -27,7 +27,7 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
     private sealed record ShizukuOff(Guid UserId, Guid DeviceId, string DeviceName);
 
     private readonly Channel<object> _queue = Channel.CreateBounded<object>(
-        new BoundedChannelOptions(QueueCapacity) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
+        new BoundedChannelOptions(Math.Max(1, options.Value.NotifyQueueCapacity)) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
     private readonly object _gate = new();
     private readonly Dictionary<(Guid User, string Event, string Item), DateTimeOffset> _recent = [];
     private int _pending;

@@ -10,6 +10,7 @@ using EmuSync.Server.Notify;
 using EmuSync.Server.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace EmuSync.Server.Tests;
 
@@ -26,6 +27,8 @@ public class NotifyTests
     private sealed class CaptureHandler : HttpMessageHandler
     {
         public ConcurrentQueue<Sent> Requests { get; } = new();
+        /// <summary>When set, every send waits for this task before answering.</summary>
+        public Task? Gate { get; set; }
         public Func<HttpRequestMessage, HttpResponseMessage> Respond { get; set; } = _ => new HttpResponseMessage(HttpStatusCode.OK);
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -33,16 +36,37 @@ public class NotifyTests
             var headers = request.Headers.ToDictionary(h => h.Key, h => string.Join(",", h.Value), StringComparer.OrdinalIgnoreCase);
             Requests.Enqueue(new Sent(request.Method, request.RequestUri!.ToString(), headers,
                 request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct)));
+            if (Gate is not null) await Gate;
             return Respond(request);
         }
     }
 
-    private static (ServerFactory Factory, CaptureHandler Handler) NewFactory()
+    private sealed class CaptureLogs : ILoggerProvider
     {
-        var handler = new CaptureHandler();
+        public ConcurrentQueue<string> Lines { get; } = new();
+        public ILogger CreateLogger(string categoryName) => new Sink(this, categoryName);
+        public void Dispose() { }
+
+        private sealed class Sink(CaptureLogs owner, string category) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+                owner.Lines.Enqueue($"{category}: {formatter(state, exception)} {exception}");
+        }
+    }
+
+    private static (ServerFactory Factory, CaptureHandler Handler) NewFactory(Action<IServiceCollection>? more = null, CaptureHandler? handler = null)
+    {
+        handler ??= new CaptureHandler();
         var factory = new ServerFactory();
         factory.Settings["EmuSync:AllowRegistration"] = "true";
-        factory.ConfigureExtraServices = s => s.AddHttpClient(Notifier.ClientName).ConfigurePrimaryHttpMessageHandler(() => handler);
+        var h = handler;
+        factory.ConfigureExtraServices = s =>
+        {
+            s.AddHttpClient(Notifier.ClientName).ConfigurePrimaryHttpMessageHandler(() => h);
+            more?.Invoke(s);
+        };
         return (factory, handler);
     }
 
@@ -55,11 +79,12 @@ public class NotifyTests
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
     }
 
-    private static async Task<SaveUploadResponse> Upload(HttpClient device, string content, Guid? baseId, string? displayName = null)
+    private static async Task<SaveUploadResponse> Upload(HttpClient device, string content, Guid? baseId, string? displayName = null,
+        string game = Game)
     {
         var manifest = await Fixtures.Manifest(device, ("data.dat", Encoding.UTF8.GetBytes(content)));
         var response = await device.PostJsonAsync("/v1/saves/upload",
-            new SaveUploadRequest("eden", ItemKind.Save, Game, "", "", baseId, manifest, displayName));
+            new SaveUploadRequest("eden", ItemKind.Save, game, "", "", baseId, manifest, displayName));
         response.EnsureSuccessStatusCode();
         return await response.ReadAsync<SaveUploadResponse>();
     }
@@ -431,5 +456,197 @@ public class NotifyTests
         Assert.Equal("EmuSync: config conflict", sent.Headers["Title"]);
         Assert.Contains("RetroArch", sent.Body);
         Assert.Contains("Thor", sent.Body);
+    }
+
+    [Fact]
+    public async Task No_log_entry_contains_target_urls_or_tokens()
+    {
+        var logs = new CaptureLogs();
+        var (f, handler) = NewFactory(s => s.AddLogging(b => { b.SetMinimumLevel(LogLevel.Trace); b.AddFilter(null, LogLevel.Trace); b.AddProvider(logs); }));
+        using var _ = f;
+        var (a, b, v1, _) = await Pair(f);
+        await Configure(a, null, new NotifyTarget(NotifyKind.Discord, DiscordUrl),
+            new NotifyTarget(NotifyKind.Ntfy, NtfyUrl, "tk_secret"));
+        await Upload(a, "v2", v1.VersionId);
+
+        await OpenConflict(a, b, v1.VersionId);
+        await Flush(f);
+        await a.PostAsync("/v1/settings/notifications/test", null);
+        handler.Respond = _ => throw new HttpRequestException("boom"); // the failure path logs too
+        f.Time.Advance(TimeSpan.FromMinutes(11));
+        await Upload(b, "b-edit-2", v1.VersionId);
+        await Flush(f);
+
+        Assert.Equal(6, handler.Requests.Count);
+        Assert.NotEmpty(logs.Lines);
+        Assert.All(logs.Lines, l =>
+        {
+            Assert.DoesNotContain("api/webhooks", l);
+            Assert.DoesNotContain("secret", l);
+            Assert.DoesNotContain("tk_secret", l);
+            Assert.DoesNotContain("ntfy.example.com", l);
+        });
+    }
+
+    [Fact]
+    public async Task Other_users_receive_nothing()
+    {
+        var (f, handler) = NewFactory();
+        using var _ = f;
+        var (a, b, v1, _) = await Pair(f);
+        var (other, _) = await f.Register("b@example.com", deviceName: "Other");
+        await SetStatus(other, false);
+        await Configure(a, null, new NotifyTarget(NotifyKind.Webhook, "https://hooks.example.com/a"));
+        await Configure(other, null, new NotifyTarget(NotifyKind.Webhook, "https://hooks.example.com/other"));
+        await Upload(a, "v2", v1.VersionId);
+
+        await OpenConflict(a, b, v1.VersionId);
+        await SetStatus(a, true);
+        await SetStatus(b, true);
+        f.Time.Advance(TimeSpan.FromMinutes(31));
+        // Only the other user's device is off: A's conflict went to A alone, and the Shizuku notice goes to the other user alone.
+        await f.Services.GetRequiredService<NotifyTriggers>().RunOnceAsync(default);
+        await Flush(f);
+
+        Assert.Equal(["https://hooks.example.com/a", "https://hooks.example.com/other"], handler.Requests.Select(r => r.Url).ToArray());
+        Assert.Contains("conflict", handler.Requests.First().Body);
+        Assert.Contains("Other", handler.Requests.Last().Body);
+    }
+
+    [Fact]
+    public async Task Full_queue_drops_notifications_and_the_request_still_succeeds()
+    {
+        var gate = new TaskCompletionSource();
+        var (f, handler) = NewFactory(handler: new CaptureHandler { Gate = gate.Task });
+        f.Settings["EmuSync:NotifyQueueCapacity"] = "1";
+        using var _ = f;
+        var (a, _) = await f.Register("a@example.com");
+        var (b, _) = await f.PairSecondDevice(a, "Odin");
+        await Configure(a, null, new NotifyTarget(NotifyKind.Webhook, HookUrl));
+        var bases = new List<Guid>();
+        foreach (var g in new[] { "g1", "g2", "g3" }) bases.Add((await Upload(a, "v1", null, game: g)).VersionId);
+
+        // 1st conflict: taken by the consumer, which then blocks in the target. 2nd: waits in the queue. 3rd: queue full, dropped.
+        var first = await Upload(b, "x1", null, game: "g1");
+        await WaitFor(() => handler.Requests.Count == 1);
+        var second = await Upload(b, "x2", null, game: "g2");
+        var third = await Upload(b, "x3", null, game: "g3");
+        Assert.All(new[] { first, second, third }, r => Assert.Equal(SaveUploadStatus.Conflict, r.Status));
+
+        gate.SetResult();
+        await Flush(f);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.DoesNotContain(handler.Requests, r => r.Body.Contains("g3"));
+    }
+
+    private static async Task WaitFor(Func<bool> condition)
+    {
+        for (var i = 0; i < 400 && !condition(); i++) await Task.Delay(10);
+        Assert.True(condition());
+    }
+
+    // Retries and Superseded results open no conflict, so they must not notify. Real uploads, not hand-raised events.
+    private static async Task<(HttpClient Web, Guid Head, SaveUploadResponse Conflict)> SaveConflictThenResolve(ServerFactory f, HttpClient a)
+    {
+        var web = await f.WebLogin("a@example.com");
+        var head = await Upload(a, "head", null);
+        var conflict = await Upload(a, "other", null);
+        Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
+        return (web, head.VersionId, conflict);
+    }
+
+    [Fact]
+    public async Task Save_upload_retry_of_an_open_conflict_does_not_notify()
+    {
+        var (f, handler) = NewFactory();
+        using var _ = f;
+        var (a, _) = await f.Register("a@example.com");
+        await Configure(a, null, new NotifyTarget(NotifyKind.Webhook, HookUrl));
+        var (_, _, conflict) = await SaveConflictThenResolve(f, a);
+        await Flush(f);
+        Assert.Single(handler.Requests);
+
+        f.Time.Advance(TimeSpan.FromMinutes(30)); // outside the dedupe window: only "no new conflict" can explain silence
+        var retry = await Upload(a, "other", null);
+        await Flush(f);
+
+        Assert.Equal(SaveUploadStatus.Conflict, retry.Status);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Save_superseded_upload_does_not_notify()
+    {
+        var (f, handler) = NewFactory();
+        using var _ = f;
+        var (a, _) = await f.Register("a@example.com");
+        await Configure(a, null, new NotifyTarget(NotifyKind.Webhook, HookUrl));
+        var (web, head, conflict) = await SaveConflictThenResolve(f, a);
+        (await web.PostJsonAsync($"/v1/conflicts/{conflict.ItemId}/resolve", new ResolveConflictRequest(ResolveChoice.KeepVersion, head))).EnsureSuccessStatusCode();
+        await Flush(f);
+        Assert.Single(handler.Requests);
+
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        var again = await Upload(a, "other", null);
+        await Flush(f);
+
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+        Assert.Single(handler.Requests);
+    }
+
+    private static async Task<ConfigUploadResponse> ConfigUpload(HttpClient device, string text, Guid? baseId)
+    {
+        var files = await Fixtures.Manifest(device, ("Eden/config/qt-config.ini", Encoding.UTF8.GetBytes(text)));
+        var r = await device.PostJsonAsync("/v1/configs/upload", new ConfigUploadRequest("eden", baseId, files));
+        Assert.True(r.StatusCode == HttpStatusCode.OK, $"{r.StatusCode}: {await r.Content.ReadAsStringAsync()}");
+        return await r.ReadAsync<ConfigUploadResponse>();
+    }
+
+    private static async Task<(HttpClient A, ConfigUploadResponse Head, ConfigUploadResponse Conflict)> ConfigConflict(ServerFactory f,
+        CaptureHandler handler)
+    {
+        var (a, _) = await f.Register("a@example.com");
+        await a.PutAsJsonAsync("/v1/devices/me/status", new DeviceStatusRequest("android", "1.0", true,
+            [new EmulatorStatus("eden", "dev.eden", "0.1", null)], new Dictionary<string, string> { ["{INTERNAL}"] = "/storage/emulated/0" }));
+        await Configure(a, null, new NotifyTarget(NotifyKind.Webhook, HookUrl));
+        var head = await ConfigUpload(a, "[Renderer]\nresolution_setup=1\n", null);
+        var conflict = await ConfigUpload(a, "[Renderer]\nresolution_setup=2\n", null);
+        Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
+        await Flush(f);
+        Assert.Single(handler.Requests); // the one real new conflict notified
+        return (a, head, conflict);
+    }
+
+    [Fact]
+    public async Task Config_upload_retry_of_an_open_conflict_does_not_notify()
+    {
+        var (f, handler) = NewFactory();
+        using var _ = f;
+        var (a, _, _) = await ConfigConflict(f, handler);
+
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        var retry = await ConfigUpload(a, "[Renderer]\nresolution_setup=2\n", null);
+        await Flush(f);
+
+        Assert.Equal(SaveUploadStatus.Conflict, retry.Status);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Config_superseded_upload_does_not_notify()
+    {
+        var (f, handler) = NewFactory();
+        using var _ = f;
+        var (a, head, conflict) = await ConfigConflict(f, handler);
+        var web = await f.WebLogin("a@example.com");
+        (await web.PostJsonAsync($"/v1/configs/bundles/{conflict.BundleId}/conflicts/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, head.VersionId))).EnsureSuccessStatusCode();
+
+        f.Time.Advance(TimeSpan.FromMinutes(30));
+        var again = await ConfigUpload(a, "[Renderer]\nresolution_setup=2\n", null);
+        await Flush(f);
+
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+        Assert.Single(handler.Requests);
     }
 }

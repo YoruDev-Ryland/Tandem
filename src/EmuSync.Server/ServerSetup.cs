@@ -52,7 +52,8 @@ public static class ServerSetup
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Pruner>());
         builder.Services.AddSingleton<BackupService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<BackupService>());
-        builder.Services.AddHttpClient(Notifier.ClientName, c => c.Timeout = Notifier.RequestTimeout);
+        builder.Services.AddHttpClient(Notifier.ClientName, c => c.Timeout = Notifier.RequestTimeout)
+            .RemoveAllLoggers(); // the default handlers log every request URI, and a Discord webhook URL is a secret
         builder.Services.AddSingleton<INotifier, Notifier>();
         builder.Services.AddSingleton<NotifyTriggers>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<NotifyTriggers>());
