@@ -168,8 +168,22 @@ class StateStore(
     /** Changes the settings from their current value in one write. */
     fun updateSettings(f: (DeviceSettingsData) -> DeviceSettingsData) = mutate { it.copy(settings = f(it.settings)) }
 
-    /** Forgets this device's key and id in one write; the server URL stays for the next sign-in. */
-    fun signOut() = mutate { it.copy(deviceKey = null, deviceId = null) }
+    /**
+     * Makes [pkg] the active variant of [emulatorId] in one write. With [forgetState] the emulator's per-item and
+     * config sync state goes too: it describes the previous variant's folder, and kept, the first scan of the new
+     * folder would upload against the old base and fast-forward over the server's head.
+     */
+    fun setVariant(emulatorId: String, pkg: String, forgetState: Boolean) = mutate {
+        val chosen = it.copy(settings = it.settings.copy(variants = it.settings.variants + (emulatorId to pkg)))
+        if (!forgetState) chosen
+        else chosen.copy(items = it.items.filterKeys { k -> !k.startsWith("$emulatorId|") }, configs = it.configs - emulatorId)
+    }
+
+    /**
+     * Forgets this device's key and id, and what it knew of the server's versions (per-item and config state), in one
+     * write. The server URL stays for the next sign-in. Apply markers stay: they guard local files, not server state.
+     */
+    fun signOut() = mutate { it.copy(deviceKey = null, deviceId = null, items = emptyMap(), configs = emptyMap()) }
 
     var signInForm: SignInForm
         get() = synchronized(lock) { data.signInForm }

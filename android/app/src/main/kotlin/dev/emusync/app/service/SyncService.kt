@@ -81,6 +81,11 @@ class SyncService : Service() {
         /** [start] for callers that may run in the background (a request finishing after the app left the screen). */
         fun tryStart(context: Context, action: String? = null): Boolean = guardedStart { start(context, action) }
 
+        /** Stops sync (sign-out). Nothing restarts it until a sign-in: the launcher and boot start it only with a key. */
+        fun stop(context: Context) {
+            context.stopService(Intent(context, SyncService::class.java))
+        }
+
         fun start(context: Context, action: String? = null) {
             context.startForegroundService(Intent(context, SyncService::class.java).setAction(action))
         }

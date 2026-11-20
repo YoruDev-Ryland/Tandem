@@ -64,6 +64,7 @@ class SettingsViewModel(
     private val label: (String) -> String?,
     deviceName: StateFlow<String?>,
     private val reload: () -> Unit,
+    private val stopSync: () -> Unit,
     private val afterSignOut: () -> Unit,
     scope: CoroutineScope,
 ) {
@@ -116,6 +117,9 @@ class SettingsViewModel(
         focus.value = EmulatorFocus(emulatorId, ++focusSeq)
     }
 
+    /** The Emulators section applied the focus request: it must not be applied again when the tab comes back. */
+    fun consumeFocus() { focus.value = null }
+
     private fun change(f: (DeviceSettingsData) -> DeviceSettingsData) {
         store.updateSettings(f)
         if (store.deviceKey != null) reload()
@@ -131,6 +135,10 @@ class SettingsViewModel(
         if (p.isEmpty()) return "Enter a folder path."
         if (!p.startsWith("/")) return "Enter a full path, starting with /."
         val want = Paths.canonical(p)
+        // A whole volume would have every module walk all of storage for games.
+        if (want == "/" || want == "/storage" || want == "/storage/emulated" || want == "/storage/emulated/0" ||
+            SD_ROOT.matches(want)
+        ) return "Choose the folder your games are in, not the whole storage."
         if (store.settings.romDirs.any { Paths.canonical(it.trimEnd('/')) == want }) return "That folder is already in the list."
         change { it.copy(romDirs = it.romDirs + p) }
         return null
@@ -148,7 +156,12 @@ class SettingsViewModel(
         change { it.copy(overrides = if (v.isEmpty()) it.overrides - key else it.overrides + (key to v)) }
     }
 
-    /** Makes [pkg] the active variant of [emulatorId]. Sync restarts only if detection now picks another package. */
+    /**
+     * Makes [pkg] the active variant of [emulatorId] and restarts sync (the running session holds the settings it
+     * started with). If detection now picks another package, the emulator's sync state is forgotten in the same
+     * write: it describes the old variant's folder, so the new folder's first scan uploads with no base and the
+     * server reports a conflict rather than taking an older save as the newest. No file is touched.
+     */
     fun chooseVariant(emulatorId: String, pkg: String) {
         val m = modules.firstOrNull { it.emulatorId == emulatorId } ?: return
         val inst = packages.value
@@ -156,20 +169,23 @@ class SettingsViewModel(
         val st = store.settings
         if (st.variants[emulatorId] == pkg) return
         val before = m.activePackage(inst, st.toModule())
-        store.updateSettings { it.copy(variants = it.variants + (emulatorId to pkg)) }
-        if (before != pkg && store.deviceKey != null) reload()
+        store.setVariant(emulatorId, pkg, forgetState = before != pkg)
+        if (store.deviceKey != null) reload()
     }
 
     fun setTheme(mode: ThemeMode) {
         if (store.settings.theme != mode.setting) store.updateSettings { it.copy(theme = mode.setting) }
     }
 
-    /** Forgets this device's key and id (the server URL stays), restarts sync to stop it, and clears server data. */
+    /** Forgets this device's key, id and sync state (the server URL stays), stops sync and clears server data. */
     fun signOut() {
         store.signOut()
-        reload()
+        stopSync()
         afterSignOut()
     }
 }
+
+/** The root of a removable volume, such as /storage/1A2B-3C4D. */
+private val SD_ROOT = Regex("/storage/[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")
 
 private fun DeviceSettingsData.toModule() = DeviceSettings(romDirs, overrides, variants)

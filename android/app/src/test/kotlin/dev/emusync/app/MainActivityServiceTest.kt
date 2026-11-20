@@ -45,4 +45,18 @@ class MainActivityServiceTest {
             assertNull(shadowOf(app).nextStartedService)
         }
     }
+
+    @Test fun stopStopsTheSyncService() {
+        SyncService.stop(app)
+        assertEquals(SyncService::class.java.name, shadowOf(app).nextStoppedService?.component?.className)
+    }
+
+    @Test fun bootStartsSyncOnlyWhenSignedIn() {
+        store.deviceKey = null
+        dev.emusync.app.service.BootReceiver().onReceive(app, android.content.Intent(android.content.Intent.ACTION_BOOT_COMPLETED))
+        assertNull(shadowOf(app).nextStartedService)
+        store.deviceKey = "k"
+        dev.emusync.app.service.BootReceiver().onReceive(app, android.content.Intent(android.content.Intent.ACTION_BOOT_COMPLETED))
+        assertEquals(SyncService::class.java.name, shadowOf(app).nextStartedService?.component?.className)
+    }
 }

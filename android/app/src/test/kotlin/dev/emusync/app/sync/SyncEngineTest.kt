@@ -182,6 +182,19 @@ class SyncEngineTest {
         assertEquals("v2", store.get(saveKey("GAME1"))!!.knownVersionId)
     }
 
+    @Test fun after_a_variant_change_the_new_folders_save_uploads_without_a_base() = runBlocking {
+        put("saves/GAME1/a.sav", "old variant")
+        store.put(ItemKey.of("other", "Save", "X", "", ""), ItemState("v7", "h", "h"))
+        engine().fullScan()
+        assertEquals("v1", store.get(saveKey("GAME1"))!!.knownVersionId)
+        // The user picks another variant; its folder holds an older, different save of the same game.
+        store.setVariant("fake", "com.fake.emu.duo", forgetState = true)
+        put("saves/GAME1/a.sav", "new variant, older save", 6_000)
+        engine().fullScan()
+        assertNull(api.saves[1].baseVersionId)   // the server sees no base: a conflict, never a fast-forward
+        assertEquals("v7", store.get(ItemKey.of("other", "Save", "X", "", ""))!!.knownVersionId)
+    }
+
     @Test fun unchanged_response_stores_head_version() = runBlocking {
         put("saves/GAME1/a.sav", "hello")
         api.saveStatus = SaveUploadStatus.Unchanged

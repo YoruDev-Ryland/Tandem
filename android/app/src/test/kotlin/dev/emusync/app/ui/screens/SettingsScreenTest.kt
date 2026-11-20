@@ -3,6 +3,8 @@ package dev.emusync.app.ui.screens
 import android.view.KeyEvent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -15,6 +17,8 @@ import dev.emusync.app.fs.ShizukuState
 import dev.emusync.app.model.GameRow
 import dev.emusync.app.modules.ModuleRegistry
 import dev.emusync.app.service.AppGraph
+import dev.emusync.app.sync.ConfigState
+import dev.emusync.app.sync.ItemState
 import dev.emusync.app.sync.StateStore
 import dev.emusync.app.ui.kit.TopBar
 import dev.emusync.app.ui.kit.key
@@ -54,6 +58,7 @@ class SettingsScreenTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private var reloads = 0
     private var refreshed = 0
+    private var stops = 0
     private var installed = setOf(EDEN, DUO, "org.ppsspp.ppsspp", "org.ppsspp.ppssppgold")
 
     @After fun stop() = scope.cancel()
@@ -65,7 +70,8 @@ class SettingsScreenTest {
 
     private fun vm(store: StateStore) = SettingsViewModel(
         store, ModuleRegistry.default().all(), installed = { installed }, label = { null },
-        deviceName = MutableStateFlow("Thor"), reload = { reloads++ }, afterSignOut = { refreshed++ }, scope = scope,
+        deviceName = MutableStateFlow("Thor"), reload = { reloads++ },
+        stopSync = { stops++ }, afterSignOut = { refreshed++ }, scope = scope,
     )
 
     private class NoServer : ServerView {
@@ -104,7 +110,10 @@ class SettingsScreenTest {
     }
 
     @Test fun signOutClearsTheKeyAndTheTopBarSaysSignedOut() {
-        val st = store()
+        val st = store().apply {
+            put("eden|Save|0100ABF008968000||", ItemState("v1", "m", "m"))
+            putConfigState("eden", ConfigState("b", "c1", "m", "m"))
+        }
         show(st, vm(st))
         compose.onNodeWithText("Signed out").assertDoesNotExist()
         r2(3)   // › Account
@@ -117,7 +126,11 @@ class SettingsScreenTest {
         assertNull(st.deviceKey)
         assertNull(st.deviceId)
         assertEquals("http://nas:5100", st.serverUrl)
-        assertEquals(1, reloads)
+        // What this device knew of the server goes with the key; the save files are not touched.
+        assertNull(st.get("eden|Save|0100ABF008968000||"))
+        assertNull(st.configState("eden"))
+        assertEquals(1, stops)     // sync stops rather than restarting signed out
+        assertEquals(0, reloads)
         assertEquals(1, refreshed)
         compose.onNodeWithText("Signed out").assertIsDisplayed()
     }
@@ -131,6 +144,7 @@ class SettingsScreenTest {
         compose.onNodeWithText("This device stops syncing until you sign in again. Nothing on it is deleted.").assertDoesNotExist()
         assertEquals("secret-key", st.deviceKey)
         assertEquals(0, reloads)
+        assertEquals(0, stops)
     }
 
     @Test fun choosingAnInstalledVariantMakesItActiveAndReloadsSync() {
@@ -189,6 +203,44 @@ class SettingsScreenTest {
         compose.onNodeWithText("That folder is already in the list.").assertIsDisplayed()
         assertEquals(listOf("/sdcard/Roms"), st.settings.romDirs)
     }
+
+    @Test fun removingARomFolderAsksFirstAndBKeepsIt() {
+        val st = store().apply { settings = settings.copy(romDirs = listOf("/sdcard/Roms")) }
+        show(st, vm(st))
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)   // the folder's row
+        compose.key(KeyEvent.KEYCODE_BUTTON_X)
+        compose.onNodeWithText("Remove /sdcard/Roms?").assertIsDisplayed()
+        compose.onNodeWithText("Games found only in this folder stop receiving saves on this device.").assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_BUTTON_B)
+        compose.onNodeWithText("Remove /sdcard/Roms?").assertDoesNotExist()
+        assertEquals(listOf("/sdcard/Roms"), st.settings.romDirs)
+        compose.key(KeyEvent.KEYCODE_BUTTON_X)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(emptyList<String>(), st.settings.romDirs)
+        assertEquals(1, reloads)
+    }
+
+    @Test fun theFocusFromThisDeviceIsAppliedOnceNotEachTimeTheTabReturns() {
+        val st = store()
+        val vm = vm(st)
+        vm.focusEmulator("ppsspp")
+        var visible by mutableStateOf(true)
+        compose.setContent {
+            StoredTheme(st) {
+                val ui by vm.ui.collectAsState()
+                if (visible) SettingsScreen(ui, top = {}, actions = vm.actions({}, {}))
+            }
+        }
+        compose.onNodeWithText("org.ppsspp.ppssppgold").assertIsDisplayed()
+        assertNull(vm.ui.value.focus)
+        visible = false; compose.waitForIdle()
+        visible = true; compose.waitForIdle()
+        // Back on the tab the cursor starts at the top (Eden), not on PPSSPP again.
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(DUO, st.settings.variants["eden"])
+        assertNull(st.settings.variants["ppsspp"])
+    }
 }
 
 /** The model on its own: validation, what reloads sync and what does not. */
@@ -196,14 +248,15 @@ class SettingsViewModelTest {
     @get:Rule val tmp = TemporaryFolder()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private var reloads = 0
+    private var installed = setOf(EDEN)
 
     @After fun stop() = scope.cancel()
 
     private fun setup(signedIn: Boolean = true): Pair<StateStore, SettingsViewModel> {
         val st = StateStore(File(tmp.root, "state.json")).apply { if (signedIn) deviceKey = "k" }
         return st to SettingsViewModel(
-            st, ModuleRegistry.default().all(), installed = { setOf(EDEN) }, label = { if (it == EDEN) "Eden" else null },
-            deviceName = MutableStateFlow(null), reload = { reloads++ }, afterSignOut = {}, scope = scope,
+            st, ModuleRegistry.default().all(), installed = { installed }, label = { if (it == EDEN) "Eden" else null },
+            deviceName = MutableStateFlow(null), reload = { reloads++ }, stopSync = {}, afterSignOut = {}, scope = scope,
         )
     }
 
@@ -244,5 +297,41 @@ class SettingsViewModelTest {
         assertNull(dolphin.pkg)
         assertEquals("Not installed", dolphin.label)
         assertEquals(ModuleRegistry.default().all().size, rows.size)
+    }
+
+    @Test fun theStorageRootsAreRefusedAsRomFolders() {
+        val (st, vm) = setup()
+        val refusal = "Choose the folder your games are in, not the whole storage."
+        for (p in listOf("/", "/sdcard", "/sdcard/", "/storage/emulated/0", "/storage", "/storage/emulated", "/storage/1A2B-3C4D")) {
+            assertEquals(p, refusal, vm.addRomDir(p))
+        }
+        assertNull(vm.addRomDir("/storage/1A2B-3C4D/Roms"))
+        assertEquals(listOf("/storage/1A2B-3C4D/Roms"), st.settings.romDirs)
+    }
+
+    @Test fun changingTheActiveVariantForgetsOnlyThatEmulatorsSyncState() {
+        installed = setOf(EDEN, DUO)
+        val (st, vm) = setup()
+        st.put("eden|Save|0100ABF008968000||", ItemState("v1", "m", "m"))
+        st.putConfigState("eden", ConfigState("b", "c1", "m", "m"))
+        st.put("dolphin|Save|GALE01||", ItemState("v9", "m", "m"))
+        st.putConfigState("dolphin", ConfigState("b2", "c2", "m", "m"))
+        vm.chooseVariant("eden", DUO)
+        assertEquals(DUO, st.settings.variants["eden"])
+        assertNull(st.get("eden|Save|0100ABF008968000||"))
+        assertNull(st.configState("eden"))
+        assertEquals("v9", st.get("dolphin|Save|GALE01||")?.knownVersionId)
+        assertEquals("c2", st.configState("dolphin")?.knownVersionId)
+        assertEquals(1, reloads)
+    }
+
+    @Test fun savingTheDefaultVariantKeepsStateButStillReloads() {
+        installed = setOf(EDEN, DUO)
+        val (st, vm) = setup()
+        st.put("eden|Save|0100ABF008968000||", ItemState("v1", "m", "m"))
+        vm.chooseVariant("eden", EDEN)   // already detected by preference: same folder, same state
+        assertEquals(EDEN, st.settings.variants["eden"])
+        assertEquals("v1", st.get("eden|Save|0100ABF008968000||")?.knownVersionId)
+        assertEquals(1, reloads)   // the running session holds the settings it started with
     }
 }

@@ -75,6 +75,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         label = { app.appLabel(it) },
         deviceName = server.deviceName,
         reload = { SyncService.tryStart(app, SyncService.ACTION_RELOAD) },
+        stopSync = { SyncService.stop(app) },
         afterSignOut = { server.refresh() },   // no key: the server data clears
         scope = viewModelScope,
     )

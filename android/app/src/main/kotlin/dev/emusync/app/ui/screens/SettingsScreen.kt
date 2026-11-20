@@ -70,6 +70,7 @@ class SettingsActions(
     val removeRomDir: (String) -> Unit = {},
     val setOverride: (key: String, value: String) -> Unit = { _, _ -> },
     val chooseVariant: (emulatorId: String, pkg: String) -> Unit = { _, _ -> },
+    val consumeFocus: () -> Unit = {},
     val setTheme: (ThemeMode) -> Unit = {},
     val signOut: () -> Unit = {},
     val diagnostics: () -> Unit = {},
@@ -78,11 +79,12 @@ class SettingsActions(
 
 fun SettingsViewModel.actions(diagnostics: () -> Unit, back: () -> Unit) = SettingsActions(
     select = ::select, setAutoApply = ::setAutoApply, addRomDir = ::addRomDir, removeRomDir = ::removeRomDir,
-    setOverride = ::setOverride, chooseVariant = ::chooseVariant, setTheme = ::setTheme, signOut = ::signOut,
+    setOverride = ::setOverride, chooseVariant = ::chooseVariant, consumeFocus = ::consumeFocus, setTheme = ::setTheme, signOut = ::signOut,
     diagnostics = diagnostics, back = back,
 )
 
 const val AUTO_APPLY_COPY = "Apply newer saves automatically when the emulator is closed"
+const val REMOVE_ROM_COPY = "Games found only in this folder stop receiving saves on this device."
 const val SIGN_OUT_COPY = "This device stops syncing until you sign in again. Nothing on it is deleted."
 
 /** A row of Settings › Sync. */
@@ -106,6 +108,7 @@ private fun syncRows(ui: SettingsUi): List<SyncRow> =
 /** An open sheet. Each takes every button while open: A confirms, B cancels. */
 private sealed interface Sheet {
     data object SignOut : Sheet
+    data class RemoveRomDir(val path: String) : Sheet
     data class Path(val title: String, val detail: String, val confirm: String, val initial: String, val submit: (String) -> String?) : Sheet
 }
 
@@ -131,6 +134,7 @@ fun SettingsScreen(ui: SettingsUi, top: @Composable RowScope.() -> Unit, actions
     LaunchedEffect(ui.focus) {
         val f = ui.focus ?: return@LaunchedEffect
         ui.variants.indexOfFirst { it.emulatorId == f.emulatorId }.takeIf { it >= 0 }?.let { emuAt = it }
+        actions.consumeFocus()   // once: coming back to the tab later starts where the tab always starts
     }
 
     val rows = syncRows(ui)
@@ -146,7 +150,7 @@ fun SettingsScreen(ui: SettingsUi, top: @Composable RowScope.() -> Unit, actions
     fun openSync(r: SyncRow) {
         when (r) {
             is SyncRow.AutoApply -> actions.setAutoApply(!r.on)
-            is SyncRow.RomDir -> {}
+            is SyncRow.RomDir -> sheet = Sheet.RemoveRomDir(r.path)
             SyncRow.AddRomDir -> openPath(Sheet.Path(
                 "Add a ROM folder",
                 "The full path of a folder with your games, such as /sdcard/Roms. EmuSync looks in it for the games " +
@@ -168,16 +172,19 @@ fun SettingsScreen(ui: SettingsUi, top: @Composable RowScope.() -> Unit, actions
     }
     fun confirmSignOut() { sheet = null; actions.signOut() }
     val cancel = Hint(Action.B, "Cancel") { sheet = null }
+    val keep = Hint(Action.B, "Keep") { sheet = null }
+    fun confirmRemove(path: String) { sheet = null; actions.removeRomDir(path) }
 
     val back = Hint(Action.B, "Back", actions.back)
     val open = sheet
     val hints = when (open) {
         Sheet.SignOut -> listOf(Hint(Action.A, "Sign out", ::confirmSignOut), cancel)
         is Sheet.Path -> listOf(Hint(Action.A, open.confirm, ::submitPath), cancel)
+        is Sheet.RemoveRomDir -> listOf(Hint(Action.A, "Remove") { confirmRemove(open.path) }, keep)
         null -> when (ui.section) {
             SettingsSection.Sync -> when (syncRow) {
                 is SyncRow.AutoApply -> listOf(Hint(Action.A, if (syncRow.on) "Turn off" else "Turn on") { openSync(syncRow) }, back)
-                is SyncRow.RomDir -> listOf(Hint(Action.X, "Remove") { actions.removeRomDir(syncRow.path) }, back)
+                is SyncRow.RomDir -> listOf(Hint(Action.X, "Remove") { openSync(syncRow) }, back)
                 SyncRow.AddRomDir -> listOf(Hint(Action.A, "Add") { openSync(SyncRow.AddRomDir) }, back)
                 is SyncRow.Override -> listOf(Hint(Action.A, "Change") { openSync(syncRow) }, back)
                 null -> listOf(back)
@@ -236,6 +243,10 @@ fun SettingsScreen(ui: SettingsUi, top: @Composable RowScope.() -> Unit, actions
             when (open) {
                 Sheet.SignOut -> SheetFrame("Sign out?", SIGN_OUT_COPY, "Sign out", ::confirmSignOut, cancel.onClick) {}
                 is Sheet.Path -> PathSheet(open, pathText, pathError, ::submitPath, cancel.onClick)
+                is Sheet.RemoveRomDir -> SheetFrame(
+                    "Remove ${open.path}?", REMOVE_ROM_COPY, "Remove", { confirmRemove(open.path) }, keep.onClick,
+                    cancelLabel = "Keep",
+                ) {}
                 null -> {}
             }
         }
@@ -347,6 +358,7 @@ private fun SheetFrame(
     confirmLabel: String,
     confirm: () -> Unit,
     cancel: () -> Unit,
+    cancelLabel: String = "Cancel",
     content: @Composable () -> Unit,
 ) {
     val c = LocalEmu.current
@@ -373,7 +385,7 @@ private fun SheetFrame(
                 content()
                 Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     EmuButton(confirmLabel, primary = true, glyph = Action.A, onClick = confirm)
-                    EmuButton("Cancel", glyph = Action.B, onClick = cancel)
+                    EmuButton(cancelLabel, glyph = Action.B, onClick = cancel)
                 }
             }
         }

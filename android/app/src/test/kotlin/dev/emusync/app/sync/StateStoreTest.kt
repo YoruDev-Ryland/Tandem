@@ -122,10 +122,30 @@ class StateStoreTest {
         val f = File(tmp.root, "state.json")
         val s = StateStore(f)
         s.serverUrl = "http://x"; s.deviceKey = "dk"; s.deviceId = "d1"
+        s.put("eden|Save|G||", ItemState("v1", "m", "m"))
+        s.putConfigState("eden", ConfigState("b", "c", "m", "m"))
         val before = s.changes.value
         s.signOut()
         assertEquals(before + 1, s.changes.value)
         val r = StateStore(f)
         assertNull(r.deviceKey); assertNull(r.deviceId); assertEquals("http://x", r.serverUrl)
+        assertNull(r.get("eden|Save|G||")); assertNull(r.configState("eden"))
+    }
+
+    @Test fun set_variant_forgets_only_that_emulators_state_when_asked_in_one_write() {
+        val f = File(tmp.root, "state.json")
+        val s = StateStore(f)
+        s.put("eden|Save|G||", ItemState("v1", "m", "m"))
+        s.put("edenx|Save|G||", ItemState("v2", "m", "m"))   // another id sharing the prefix
+        s.putConfigState("eden", ConfigState("b", "c", "m", "m"))
+        s.setVariant("eden", "dev.eden.eden_emulator", forgetState = false)
+        assertEquals("v1", s.get("eden|Save|G||")?.knownVersionId)
+        val before = s.changes.value
+        s.setVariant("eden", "dev.igawa6.edenduo", forgetState = true)
+        assertEquals(before + 1, s.changes.value)
+        val r = StateStore(f)
+        assertEquals("dev.igawa6.edenduo", r.settings.variants["eden"])
+        assertNull(r.get("eden|Save|G||")); assertNull(r.configState("eden"))
+        assertEquals("v2", r.get("edenx|Save|G||")?.knownVersionId)
     }
 }
