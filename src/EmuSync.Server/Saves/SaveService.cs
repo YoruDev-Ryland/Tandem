@@ -84,8 +84,10 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 // The server may have recorded this device as holding the head without telling it (a resolve or a
                 // first-sync choice made its upload the head), so the device still names its older base. The
                 // server's own record, never the request, decides this: only then is the upload based on the head.
+                // A Fresh upload comes from a device that forgot what it knew (a variant switch, a new sign-in), so
+                // its files need not descend from that record: its base is taken as sent.
                 var baseId = request.BaseVersionId;
-                if (head is not null && baseId != head.Id && deviceId is Guid holder
+                if (head is not null && baseId != head.Id && request.Fresh != true && deviceId is Guid holder
                     && await db.DeviceItemStates.AnyAsync(s => s.DeviceId == holder && s.ItemId == item.Id && s.KnownVersionId == head.Id, ct))
                     baseId = head.Id;
 

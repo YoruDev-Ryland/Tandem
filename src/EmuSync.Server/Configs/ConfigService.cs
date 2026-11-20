@@ -84,8 +84,10 @@ public sealed class ConfigService(EmuSyncDbContext db, BlobService blobs, Config
                 // The server may have recorded this device as holding the head without telling it (group creation,
                 // leaving a group, or a resolve made its files the head), so the device still names its older base.
                 // The server's own record, never the request, decides this: only then is the upload based on the head.
+                // A Fresh upload comes from a device that forgot what it knew (a variant switch, a new sign-in): its
+                // base is taken as sent.
                 var baseId = request.BaseVersionId;
-                if (head is not null && baseId != head.Id && config.AppliedVersionId == head.Id) baseId = head.Id;
+                if (head is not null && baseId != head.Id && request.Fresh != true && config.AppliedVersionId == head.Id) baseId = head.Id;
 
                 var version = await NewVersionAsync(bundle.Id, baseId, deviceId, ConfigSource.Device,
                     Manifests.ToJson(canonical), hash, canonical.Sum(e => e.Size), ct);

@@ -2,7 +2,9 @@ namespace EmuSync.Protocol;
 
 /// <param name="BaseVersionId">The last bundle version this device applied or uploaded, or null if it never synced the config.</param>
 /// <param name="Files">The bundle's files, by client bundle path (e.g. <c>data/config/config.ini</c>).</param>
-public sealed record ConfigUploadRequest(string EmulatorId, Guid? BaseVersionId, IReadOnlyList<ManifestEntry> Files);
+/// <param name="Fresh">True when the device has forgotten what it knew of this config (a variant switch or a new
+/// sign-in): the server takes BaseVersionId as sent, never the version it last recorded this device as applying.</param>
+public sealed record ConfigUploadRequest(string EmulatorId, Guid? BaseVersionId, IReadOnlyList<ManifestEntry> Files, bool? Fresh = null);
 
 /// <param name="VersionId">The new (or matching) version. For Unchanged it is the head.</param>
 public sealed record ConfigUploadResponse(SaveUploadStatus Status, Guid BundleId, Guid VersionId);
