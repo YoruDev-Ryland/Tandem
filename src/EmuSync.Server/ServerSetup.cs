@@ -3,6 +3,7 @@ using EmuSync.Server.Auth;
 using EmuSync.Server.Data;
 using EmuSync.Server.Devices;
 using EmuSync.Server.Http;
+using EmuSync.Server.Pairing;
 
 namespace EmuSync.Server;
 
@@ -17,6 +18,7 @@ public static class ServerSetup
         builder.Services.AddDatabase(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
         builder.Services.AddEmuSyncAuth(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
         builder.Services.AddScoped<AccountService>();
+        builder.Services.AddScoped<PairingService>();
     }
 
     /// <summary>Builds the pipeline and maps endpoints. Each feature adds one line here.</summary>
@@ -35,5 +37,6 @@ public static class ServerSetup
         app.MapAccountEndpoints();
         app.MapAdminEndpoints();
         app.MapDeviceEndpoints();
+        app.MapPairingEndpoints();
     }
 }

@@ -112,14 +112,6 @@ public class AccountTests
     }
 
     [Fact]
-    public async Task Web_session_with_pairing_code_is_not_supported_yet()
-    {
-        using var factory = new ServerFactory();
-        var r = await factory.Client().PostAsJsonAsync("/v1/web/session", new WebSessionRequest(null, null, "ABC"));
-        await AssertError(r, HttpStatusCode.BadRequest, "not_supported");
-    }
-
-    [Fact]
     public async Task Change_password_works()
     {
         using var factory = new ServerFactory();

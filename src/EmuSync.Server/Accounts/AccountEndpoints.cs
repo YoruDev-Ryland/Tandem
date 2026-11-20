@@ -2,6 +2,7 @@ using EmuSync.Protocol;
 using EmuSync.Server.Auth;
 using EmuSync.Server.Data;
 using EmuSync.Server.Http;
+using EmuSync.Server.Pairing;
 using Microsoft.EntityFrameworkCore;
 
 namespace EmuSync.Server.Accounts;
@@ -16,10 +17,17 @@ public static class AccountEndpoints
         app.MapPost("/v1/auth/login", (LoginRequest request, AccountService accounts, CancellationToken ct) =>
             accounts.Login(request, ct)).RequireRateLimiting(AuthSetup.AuthRateLimit);
 
-        app.MapPost("/v1/web/session", async (WebSessionRequest request, HttpContext http, AccountService accounts, TimeProvider time, CancellationToken ct) =>
+        app.MapPost("/v1/web/session", async (WebSessionRequest request, HttpContext http, AccountService accounts, PairingService pairing, EmuSyncDbContext db, TimeProvider time, CancellationToken ct) =>
         {
             if (!string.IsNullOrEmpty(request.PairingCode))
-                throw new ApiException(400, "not_supported", "Signing in with a pairing code is not available yet.");
+            {
+                var paired = await pairing.Redeem(request.PairingCode, string.IsNullOrWhiteSpace(request.DeviceName) ? "Web browser" : request.DeviceName, "web", ct);
+                var pairedToken = await accounts.CreateWebSession(paired.UserId, paired.DeviceId, ct);
+                WebSessionCookie.Append(http, pairedToken, time);
+                var info = await db.Users.AsNoTracking().Where(u => u.Id == paired.UserId)
+                    .Select(u => new AccountInfo(u.Id, u.Email, u.IsAdmin)).FirstAsync(ct);
+                return info;
+            }
             if (request.Email is null || request.Password is null)
                 throw new ApiException(400, "invalid_request", "Email and password are required.");
             var user = await accounts.Authenticate(request.Email, request.Password, ct);

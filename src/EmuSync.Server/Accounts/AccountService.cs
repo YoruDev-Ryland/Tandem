@@ -68,7 +68,7 @@ public sealed class AccountService(EmuSyncDbContext db, IOptions<ServerOptions> 
             if (!first && !await GetAllowRegistration(ct))
                 throw new ApiException(403, "registration_closed", "Registration is closed on this server.");
             var user = await CreateUser(email, request.Password, isAdmin: first, ct);
-            return await CreateDevice(user, request.DeviceName, request.Platform, ct);
+            return await CreateDevice(user.Id, request.DeviceName, request.Platform, ct);
         }
         finally
         {
@@ -100,7 +100,7 @@ public sealed class AccountService(EmuSyncDbContext db, IOptions<ServerOptions> 
     public async Task<DeviceKeyResponse> Login(LoginRequest request, CancellationToken ct)
     {
         var user = await Authenticate(request.Email, request.Password, ct);
-        return await CreateDevice(user, request.DeviceName, request.Platform, ct);
+        return await CreateDevice(user.Id, request.DeviceName, request.Platform, ct);
     }
 
     /// <summary>Verifies email and password; every failure is the same 401.</summary>
@@ -119,13 +119,13 @@ public sealed class AccountService(EmuSyncDbContext db, IOptions<ServerOptions> 
         return user;
     }
 
-    private async Task<DeviceKeyResponse> CreateDevice(User user, string? name, string? platform, CancellationToken ct)
+    public async Task<DeviceKeyResponse> CreateDevice(Guid userId, string? name, string? platform, CancellationToken ct)
     {
         var key = Secrets.NewKey();
         var device = new Device
         {
             Id = Guid.NewGuid(),
-            UserId = user.Id,
+            UserId = userId,
             Name = Clip(string.IsNullOrWhiteSpace(name) ? "Device" : name.Trim(), 80),
             Platform = Clip(string.IsNullOrWhiteSpace(platform) ? "unknown" : platform.Trim(), 32),
             KeyHash = Secrets.Hash(key),
@@ -133,7 +133,7 @@ public sealed class AccountService(EmuSyncDbContext db, IOptions<ServerOptions> 
         };
         db.Devices.Add(device);
         await db.SaveChangesAsync(ct);
-        return new DeviceKeyResponse(user.Id, device.Id, key);
+        return new DeviceKeyResponse(userId, device.Id, key);
     }
 
     /// <summary>Creates a session for the user and returns the cookie token.</summary>
