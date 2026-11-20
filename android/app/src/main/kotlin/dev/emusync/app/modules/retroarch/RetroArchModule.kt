@@ -30,6 +30,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
     private val archiveSep = Regex("\\.(zip|7z|rar)#", RegexOption.IGNORE_CASE)
     private val maxConfigFile = 1_000_000L
     private val keyPrefix = "retroarch/"
+    private val coreFolder = Regex("\\(([^()]+)\\)\\s*$")   // "Nintendo - Game Boy Advance (mGBA)" -> mGBA
 
     private class Dirs(val saves: String, val states: String, val config: String, val playlists: String,
                        val sortSaves: Boolean, val sortStates: Boolean)
@@ -105,7 +106,8 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         return listOf(dirs.saves, dirs.states)
     }
 
-    private class PlaylistEntry(val path: String, val label: String?, val core: String?)
+    /** [core] is the entry's core_path, [coreName] its core_name; DETECT entries take the playlist's defaults. */
+    private class PlaylistEntry(val path: String, val label: String?, val core: String?, val coreName: String? = null)
 
     private fun playlists(fs: Fs, d: Detected): List<PlaylistEntry> {
         val dir = dirs(fs, d)?.playlists ?: return emptyList()
@@ -116,11 +118,15 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
                 if (e.size > maxPlaylist) { System.err.println("RetroArch: skipping oversized playlist ${e.path} (${e.size} bytes)"); continue }
                 try {
                     val text = fs.openRead(e.path).bufferedReader().use { it.readText() }
-                    val items = Json.parseToJsonElement(text).jsonObject["items"]?.jsonArray ?: continue
+                    val root = Json.parseToJsonElement(text).jsonObject
+                    val items = root["items"]?.jsonArray ?: continue
+                    fun str(o: JsonObject, k: String) = (o[k] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    val defaultName = str(root, "default_core_name")
                     for (it in items) {
                         val o = it as? JsonObject ?: continue
-                        val path = o["path"]?.jsonPrimitive?.contentOrNull ?: continue
-                        out += PlaylistEntry(path, o["label"]?.jsonPrimitive?.contentOrNull, o["core_path"]?.jsonPrimitive?.contentOrNull)
+                        val path = str(o, "path") ?: continue
+                        val coreName = str(o, "core_name")?.takeIf { n -> n.isNotEmpty() && n != "DETECT" } ?: defaultName
+                        out += PlaylistEntry(path, str(o, "label"), str(o, "core_path"), coreName)
                     }
                 } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { /* malformed playlist: skip */ }
             }
@@ -183,10 +189,33 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
             Paths.requireSafeSegment(slot)
             Triple(dirs.saves, dirs.sortSaves, "$base.$slot")
         }
-        val preferred = if (sorted && core.isNotEmpty()) "$root/$core" else root
-        val matches = fs.walk(root).filter { !it.isDir && name(it.path).equals(fileName, true) }
+        val files = fs.walk(root).filter { !it.isDir }
+        val matches = files.filter { name(it.path).equals(fileName, true) }
+        // The sender's core folder means nothing here: this device may use another core for the game.
+        val preferred = if (sorted) localCoreDir(fs, d, root, base, files) else root
         if (matches.any { it.path.substringBeforeLast('/') == preferred }) return preferred
         val existing = matches.firstOrNull()
         return existing?.path?.substringBeforeLast('/') ?: preferred
+    }
+
+    /**
+     * Where a sorted save or state for [base] goes on this device: (1) the core this device's playlists give the
+     * game (an entry's core, or its playlist's default), reusing an existing folder's spelling; (2) the core folder
+     * under [root] holding the most files; (3) [root] itself (unsorted).
+     */
+    private fun localCoreDir(fs: Fs, d: Detected, root: String, base: String, files: List<dev.emusync.app.fs.FileEntry>): String {
+        val counts = files.mapNotNull { f -> f.path.removePrefix("$root/").takeIf { '/' in it }?.substringBefore('/') }
+            .groupingBy { it }.eachCount()
+        fun existing(n: String) = counts.keys.firstOrNull { it.equals(n, true) }
+        for (e in playlists(fs, d)) {
+            if (!contentBase(e.path).equals(base, true)) continue
+            val libName = e.coreName?.let { coreFolder.find(it)?.groupValues?.get(1)?.trim() }?.takeIf { it.isNotEmpty() }
+            val stem = e.core?.takeIf { it.isNotEmpty() && it != "DETECT" }
+                ?.let { name(it).removeSuffix(".so").removeSuffix("_libretro_android").removeSuffix("_libretro") }
+            val folder = libName?.let { existing(it) ?: it } ?: stem?.let { existing(it) } ?: continue
+            if (runCatching { Paths.requireSafeSegment(folder) }.isSuccess) return "$root/$folder"
+        }
+        val common = counts.entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key }).firstOrNull()
+        return common?.let { "$root/${it.key}" } ?: root
     }
 }

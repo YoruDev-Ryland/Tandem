@@ -124,13 +124,54 @@ class RetroArchModuleTest {
         withCfg()
         File(ra("saves")).mkdirs()
         val mod = m(); val d = detect()
-        assertEquals(ra("saves/mGBA"), mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "mGBA"))
+        // sorted, nothing local to go by: the unsorted root, never the sender's core folder
+        assertEquals(ra("saves"), mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "mGBA"))
         assertEquals(ra("saves"), mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", ""))
         put(ra("saves/Gambatte/Game.srm"))
         assertEquals(ra("saves/Gambatte"), mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "mGBA"))
-        assertEquals(ra("states/mGBA"), mod.targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "auto", "mGBA"))
+        assertEquals(ra("states"), mod.targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "auto", "mGBA"))
         assertThrows(ModuleException::class.java) { mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "..") }
         assertThrows(ModuleException::class.java) { mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/a/b", "srm", "") }
+    }
+
+    // ---- final review I6: a delivered save goes to this device's core folder ----
+
+    @Test fun sorted_target_uses_this_devices_playlist_core() {
+        withCfg()
+        put(ra("saves/Gambatte/Other.srm")); put(ra("saves/Gambatte/Other2.srm"))   // more common, but not this game's core
+        put(ra("playlists/builtin/content_history.lpl"), """{"items":[
+            {"path":"/x/Game.zip#Game (USA).gba","core_path":"/data/cores/mgba_libretro_android.so","core_name":"Nintendo - Game Boy Advance (mGBA)"}]}""")
+        val d = detect()
+        assertEquals(ra("saves/mGBA"), m().targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game (USA)", "srm", "Gambatte"))
+        assertEquals(ra("states/mGBA"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/Game (USA)", "", "Gambatte"))
+    }
+
+    @Test fun playlist_core_reuses_existing_folder_spelling_and_playlist_default() {
+        withCfg()
+        put(ra("saves/MGBA/Other.srm"))
+        put(ra("playlists/Nintendo - Game Boy Advance.lpl"), res("gba.lpl"))   // entries DETECT; default core mGBA
+        assertEquals(ra("saves/MGBA"), m().targetDirFor(fs(), detect(), ItemKind.Save,
+            "retroarch/Castlevania - Aria of Sorrow (USA)", "srm", "gpSP"))
+    }
+
+    @Test fun sorted_target_falls_back_to_most_common_local_core_folder() {
+        withCfg()
+        put(ra("saves/mGBA/A.srm")); put(ra("saves/Gambatte/B.srm")); put(ra("saves/Gambatte/C.srm")); put(ra("saves/root.srm"))
+        put(ra("states/Snes9x/X.state"))
+        put(ra("playlists/builtin/content_history.lpl"), """{"items":[{"path":"/x/Game.gba","core_path":"DETECT","core_name":"DETECT"}]}""")
+        val d = detect()
+        assertEquals(ra("saves/Gambatte"), m().targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "mGBA"))
+        assertEquals(ra("states/Snes9x"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "1", "mGBA"))
+    }
+
+    @Test fun unsorted_target_is_the_root() {
+        withCfg(res("retroarch.cfg").replace("sort_savefiles_enable = \"true\"", "sort_savefiles_enable = \"false\"")
+            .replace("sort_savestates_enable = \"true\"", "sort_savestates_enable = \"false\""))
+        put(ra("saves/mGBA/A.srm"))
+        put(ra("playlists/builtin/content_history.lpl"), """{"items":[{"path":"/x/Game.gba","core_name":"Nintendo - Game Boy Advance (mGBA)"}]}""")
+        val d = detect()
+        assertEquals(ra("saves"), m().targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "mGBA"))
+        assertEquals(ra("states"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "", "mGBA"))
     }
 
     @Test fun hash_in_filename_not_treated_as_archive_separator() {
@@ -153,7 +194,7 @@ class RetroArchModuleTest {
         val s = m().saveItems(fs(), detect()).single()
         assertEquals("12", s.slot)
         val d = detect()
-        assertEquals(ra("states/mGBA"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "12", "mGBA"))
+        assertEquals(ra("states/mGBA"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "12", "Gambatte"))
         assertThrows(ModuleException::class.java) { m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "../x", "mGBA") }
         assertThrows(ModuleException::class.java) { m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "1a", "mGBA") }
     }
