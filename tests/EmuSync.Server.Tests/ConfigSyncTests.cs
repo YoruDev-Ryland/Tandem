@@ -603,6 +603,39 @@ public class ConfigSyncTests
     }
 
     [Fact]
+    public async Task Config_upload_identical_to_resolved_version_is_Superseded()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var (group, _, _) = await Linked(s, EdenIni(OdinLink), EdenIni(ThorLink));
+        var thorChange = await Upload(s.Thor, await Files(s.Thor, (Ini, EdenIni(ThorLink, resolution: "2"))), group.HeadVersionId);
+        var odinChange = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), group.HeadVersionId);
+        Assert.Equal(SaveUploadStatus.Conflict, odinChange.Status);
+        (await s.Web.PostJsonAsync($"/v1/configs/bundles/{group.BundleId}/conflicts/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepVersion, thorChange.VersionId))).EnsureSuccessStatusCode();
+        var versions = await InDb(f, db => db.ConfigVersions.CountAsync(v => v.BundleId == group.BundleId));
+
+        // Odin, about to apply Thor's head, first uploads its local (resolved, losing) copy on the old base.
+        var again = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), group.HeadVersionId);
+
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+        Assert.Equal(odinChange.VersionId, again.VersionId);
+        Assert.Equal(versions, await InDb(f, db => db.ConfigVersions.CountAsync(v => v.BundleId == group.BundleId)));
+        var bundle = await Bundle(f, group.BundleId);
+        Assert.False(bundle.OpenConflict);
+        Assert.Equal(thorChange.VersionId, bundle.HeadVersionId);
+        Assert.Equal(odinChange.VersionId, (await Config(f, s.OdinId)).AppliedVersionId);
+        var d = Assert.Single(await Deliveries(s.Odin));
+        Assert.Equal(thorChange.VersionId, d.VersionId);
+        Assert.Empty(await Deliveries(s.Thor));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Odin, d.Id)).StatusCode);
+        Assert.Equal(thorChange.VersionId, (await Config(f, s.OdinId)).AppliedVersionId);
+        Assert.Empty(await Deliveries(s.Odin));
+        Assert.Empty(await OpenConfigRows(f));
+    }
+
+    [Fact]
     public async Task First_sync_upload_against_existing_head_conflicts()
     {
         using var f = NewFactory();
@@ -711,6 +744,10 @@ public class ConfigSyncTests
         (await s.Web.PostJsonAsync($"/v1/configs/bundles/{group.BundleId}/conflicts/resolve",
             new ResolveConflictRequest(ResolveChoice.KeepVersion, change.VersionId))).EnsureSuccessStatusCode();
         Assert.True((await Version(f, conflict.VersionId)).Resolved);
+        Assert.Single(await Deliveries(s.Odin));
+        var again = await Upload(s.Odin, await Files(s.Odin, (Ini, EdenIni(OdinLink, resolution: "3"))), group.HeadVersionId);
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+        Assert.Equal(conflict.VersionId, again.VersionId);
         Assert.Single(await Deliveries(s.Odin));
         (await s.Web.DeleteAsync($"/v1/configs/groups/{group.Id}/members/{s.ThorId}")).EnsureSuccessStatusCode();
         (await s.Web.DeleteAsync($"/v1/configs/groups/{group.Id}/members/{s.OdinId}")).EnsureSuccessStatusCode();

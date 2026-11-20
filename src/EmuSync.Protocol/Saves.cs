@@ -3,7 +3,7 @@ namespace EmuSync.Protocol;
 /// <summary>One file of a save/state/config snapshot. Path is relative, '/'-separated.</summary>
 public sealed record ManifestEntry(string Path, string Hash, long Size);
 
-public enum SaveUploadStatus { Accepted, Unchanged, Conflict }
+public enum SaveUploadStatus { Accepted, Unchanged, Conflict, Superseded }
 
 /// <param name="Core">For Kind=State it is part of the item identity; for Kind=Save it is only recorded on the version.</param>
 /// <param name="BaseVersionId">The last version this device saw for the item, or null if it never synced it.</param>

@@ -325,6 +325,88 @@ public class DeliveryTests
         Assert.All(known, k => Assert.Equal(v1.VersionId, k));
     }
 
+    /// <summary>The on-device scenario: B loses a KeepBoth resolve, then, before applying the head, re-uploads its
+    /// content (now the pinned variant) on the old base. That is the server's own variant coming back, not an edit.</summary>
+    private static async Task<(HttpClient B, Guid BId, SaveUploadResponse V2, SaveUploadResponse Conflict, SaveUploadResponse Again)>
+        ReuploadAfterKeepBoth(ServerFactory factory, HttpClient a)
+    {
+        var (b, bKey) = await factory.PairSecondDevice(a, "B");
+        await Install(a, Sword);
+        await Install(b, Sword);
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        (await Ack(b, Assert.Single(await Deliveries(b)).Id, DeliveryResult.Applied)).EnsureSuccessStatusCode();
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+        var conflict = await Upload(b, Req(await Files(b, "b"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, conflict.Status);
+        (await a.PostJsonAsync($"/v1/conflicts/{v1.ItemId}/resolve",
+            new ResolveConflictRequest(ResolveChoice.KeepBoth, v2.VersionId))).EnsureSuccessStatusCode();
+        Assert.Equal(v2.VersionId, Assert.Single(await Deliveries(b)).VersionId);
+
+        var again = await Upload(b, Req(await Files(b, "b"), v1.VersionId));
+        return (b, bKey.DeviceId, v2, conflict, again);
+    }
+
+    [Fact]
+    public async Task Upload_identical_to_resolved_variant_is_Superseded_and_delivers_head()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+
+        var (b, bId, v2, conflict, again) = await ReuploadAfterKeepBoth(factory, a);
+
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+        Assert.Equal(conflict.VersionId, again.VersionId);
+        Assert.Equal(v2.VersionId, again.HeadVersionId);
+        Assert.Equal(conflict.VersionId, await Known(factory, bId, v2.ItemId));
+        Assert.Equal(3, await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v2.ItemId))); // v1, v2, B's
+        var item = await InDb(factory, db => db.SaveItems.AsNoTracking().SingleAsync(i => i.Id == v2.ItemId));
+        Assert.False(item.OpenConflict);
+        Assert.Equal(v2.VersionId, item.HeadVersionId);
+        Assert.False(await InDb(factory, db => db.SaveVersions.AnyAsync(v => v.ItemId == v2.ItemId && v.ConflictReason != null && !v.Resolved)));
+        Assert.Equal(v2.VersionId, Assert.Single(await OpenRows(factory), r => r.DeviceId == bId).VersionId);
+        var d = Assert.Single(await Deliveries(b));
+        Assert.Equal(v2.VersionId, d.VersionId);
+        Assert.Equal(conflict.VersionId, d.KnownVersionId);
+    }
+
+    [Fact]
+    public async Task Superseded_then_applied_ack_settles()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bId, v2, _, again) = await ReuploadAfterKeepBoth(factory, a);
+        Assert.Equal(SaveUploadStatus.Superseded, again.Status);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await Ack(b, Assert.Single(await Deliveries(b)).Id, DeliveryResult.Applied)).StatusCode);
+
+        Assert.Equal(v2.VersionId, await Known(factory, bId, v2.ItemId));
+        Assert.Empty(await Deliveries(b));
+        Assert.Empty(await Deliveries(a));
+        Assert.Empty(await OpenRows(factory));
+        Assert.False(await InDb(factory, db => db.SaveItems.Where(i => i.Id == v2.ItemId).Select(i => i.OpenConflict).SingleAsync()));
+        // A later upload from B, now based on the head, is an ordinary accept.
+        var next = await Upload(b, Req(await Files(b, "b2"), v2.VersionId));
+        Assert.Equal(SaveUploadStatus.Accepted, next.Status);
+    }
+
+    [Fact]
+    public async Task Upload_identical_to_plain_old_version_still_conflicts()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, _) = await factory.PairSecondDevice(a, "B");
+        var v1 = await Upload(a, Req(await Files(a, "v1"), null));
+        var v2 = await Upload(a, Req(await Files(a, "v2"), v1.VersionId));
+
+        // B holds v1's content but never synced it: plain history, not a resolved copy, so the old rules apply.
+        var concurrent = await Upload(b, Req(await Files(b, "v1"), v1.VersionId));
+        Assert.Equal(SaveUploadStatus.Conflict, concurrent.Status);
+        Assert.NotEqual(v1.VersionId, concurrent.VersionId);
+        Assert.Equal(v2.VersionId, concurrent.HeadVersionId);
+        Assert.Equal(3, await InDb(factory, db => db.SaveVersions.CountAsync(v => v.ItemId == v1.ItemId)));
+        Assert.True(await InDb(factory, db => db.SaveItems.Where(i => i.Id == v1.ItemId).Select(i => i.OpenConflict).SingleAsync()));
+    }
+
     [Fact]
     public async Task Bulk_UseDevice_delivers_to_others_not_the_chosen_device()
     {
