@@ -1,3 +1,4 @@
+using EmuSync.Server.Data;
 using EmuSync.Server.Http;
 
 namespace EmuSync.Server;
@@ -10,11 +11,13 @@ public static class ServerSetup
         EnvironmentAliases.Add(builder.Configuration);
         builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection(ServerOptions.Section));
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddDatabase(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
     }
 
     /// <summary>Builds the pipeline and maps endpoints. Each feature adds one line here.</summary>
     public static void Map(WebApplication app)
     {
+        app.Services.MigrateDatabase();
         app.UseApiErrors();
         app.UseMiddleware<ProtocolVersionMiddleware>(); // before routing so unknown /v1 routes still get 426
 
