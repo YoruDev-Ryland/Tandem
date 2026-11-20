@@ -77,13 +77,17 @@ describe("Conflicts", () => {
     render(Conflicts);
     await screen.findByText("Pokémon Brilliant Diamond");
     await fireEvent.click(screen.getByRole("button", { name: "Use Ayn's for all first-sync games" }));
-    await waitFor(() => expect(calls.length).toBe(1));
-    expect(calls[0]!.body).toEqual({ deviceId: AYN, choice: "UseDevice", itemIds: ["item-bd"] });
+    // Ayn's save goes in first, then Odin 3's upload is set aside so the row is fully settled.
+    await waitFor(() => expect(calls.length).toBe(2));
+    expect(calls.map((c) => c.body)).toEqual([
+      { deviceId: AYN, choice: "UseDevice", itemIds: ["item-bd"] },
+      { deviceId: ODIN, choice: "UseServer", itemIds: ["item-bd"] },
+    ]);
     await screen.findByText("Kept Ayn's save for 1 game");
     await new Promise((r) => setTimeout(r, 0));
     await fireEvent.click(screen.getByRole("button", { name: "Use Thor's for all first-sync games" }));
-    await waitFor(() => expect(calls.length).toBe(3));
-    expect(calls.slice(1).map((c) => c.body)).toEqual([
+    await waitFor(() => expect(calls.length).toBe(4));
+    expect(calls.slice(2).map((c) => c.body)).toEqual([
       { deviceId: ODIN, choice: "UseServer", itemIds: ["item-bd"] },
       { deviceId: AYN, choice: "UseServer", itemIds: ["item-bd"] },
     ]);

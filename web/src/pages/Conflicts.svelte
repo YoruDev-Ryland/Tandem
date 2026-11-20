@@ -58,9 +58,11 @@
       const mine = r.sides.find((s) => s.deviceId === d.deviceId);
       if (!mine) continue;
       if (!mine.isHead) add(d.deviceId, "UseDevice", r.itemId);
-      else for (const o of r.sides) if (o.deviceId && !o.isHead) add(o.deviceId, "UseServer", r.itemId);
+      // Every other device's conflicting upload is set aside, so the row ends with no open conflict.
+      for (const o of r.sides) if (o.deviceId && o.deviceId !== d.deviceId && !o.isHead) add(o.deviceId, "UseServer", r.itemId);
     }
-    return [...calls.values()];
+    // UseDevice first: UseServer keeps whatever is head by then, which must be the chosen device's save.
+    return [...calls.values()].sort((x, y) => Number(y.choice === "UseDevice") - Number(x.choice === "UseDevice"));
   }
   const label = (name: string) => `Use ${name}'s for all first-sync games`;
   const pair = $derived(bulk.length === 2);
