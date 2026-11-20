@@ -69,8 +69,10 @@ class SyncEngineTest {
             if ("com.fake.emu" in fs.installedPackages()) Detected(emulatorId, "com.fake.emu", "", root) else null
         override fun saveItems(fs: Fs, d: Detected): List<LocalItem> {
             if (throwOnItems) throw ModuleException("broken")
+            // "<game>@<core>" dirs give the same Save key with different cores (like RetroArch core folders).
             return fs.list("$root/saves").filter { it.isDir }.map { e ->
-                LocalItem(ItemKind.Save, e.path.substringAfterLast('/'), "", "core1", e.path,
+                val n = e.path.substringAfterLast('/')
+                LocalItem(ItemKind.Save, n.substringBefore('@'), "", if ('@' in n) n.substringAfter('@') else "core1", e.path,
                     fs.walk(e.path).map { it.path.removePrefix(e.path + "/") })
             }
         }
@@ -99,10 +101,11 @@ class SyncEngineTest {
     private fun engine(
         fs: Fs = fs(),
         modules: List<EmulatorModule> = listOf(module),
+        versionOf: (String) -> String? = { if (it == "com.fake.emu") "1.2.3" else null },
     ) = SyncEngine(
         fs, api, store, ModuleRegistry(modules), DeviceSettings(emptyList(), emptyMap()),
         clock = { now }, log = { logs += it },
-        versionOf = { if (it == "com.fake.emu") "1.2.3" else null },
+        versionOf = versionOf,
         appVersion = "0.1.0", shizukuOk = { true },
         onConflict = { conflicts += it },
         storageRoot = storage,
@@ -295,10 +298,86 @@ class SyncEngineTest {
         )
     }
 
-    @Test fun status_without_sd() = runBlocking {
+    @Test fun status_without_sd_and_unknown_version_is_null() = runBlocking {
         File(storage, "emulated/0").mkdirs()
-        engine().fullScan()
+        engine(versionOf = { null }).fullScan()
         assertFalse(api.statuses.single().roots.containsKey("{SD}"))
+        assertNull(api.statuses.single().emulators.single().version)
+    }
+
+    @Test fun duplicate_store_keys_upload_once_and_do_not_flip() = runBlocking {
+        put("saves/GAME1@coreA/a.sav", "old", 5_000)
+        put("saves/GAME1@coreB/a.sav", "new", 6_000)
+        val e = engine()
+        e.fullScan()
+        e.fullScan()
+        assertEquals(1, api.saves.size)
+        assertEquals("coreB", api.saves[0].core)
+        assertEquals(listOf("$root/saves/GAME1@coreB"),
+            e.currentItems(module, Detected("fake", "com.fake.emu", "", root)).map { it.baseDir })
+        assertEquals(1, logs.count { it.contains("shadowed") })
+    }
+
+    @Test fun fullScan_defers_freshly_modified_file() = runBlocking {
+        put("saves/GAME1/a.sav", "hello", now - 1_000)
+        val e = engine()
+        e.fullScan()
+        assertEquals(0, api.saves.size)
+        now += 2_900; e.tick()
+        assertEquals(0, api.saves.size)
+        now += 200; e.tick()
+        assertEquals(1, api.saves.size)
+    }
+
+    @Test fun event_during_hash_defers_upload() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        lateinit var e: SyncEngine
+        var fire = false
+        val fs = object : LocalFs() {
+            override fun openRead(path: String): InputStream {
+                if (fire) { fire = false; e.onFsEvent("$root/saves/GAME1") }
+                return super.openRead(path)
+            }
+        }.apply { packages.add("com.fake.emu") }
+        e = engine(fs)
+        e.fullScan()                       // tracks the item, uploads v1
+        put("saves/GAME1/a.sav", "hello2", 6_000)
+        e.onFsEvent("$root/saves/GAME1")
+        now += 3_000
+        fire = true
+        e.tick()                           // event lands while hashing -> deferred
+        assertEquals(1, api.saves.size)
+        now += 3_000; e.tick()
+        assertEquals(2, api.saves.size)
+    }
+
+    @Test fun unchanged_files_are_not_rehashed() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        put("saves/GAME2/b.sav", "world")
+        var reads = 0
+        val fs = object : LocalFs() {
+            override fun openRead(path: String): InputStream { reads++; return super.openRead(path) }
+        }.apply { packages.add("com.fake.emu") }
+        val e = engine(fs)
+        e.fullScan()
+        val first = reads                  // 2 hashes + 2 blob uploads
+        e.fullScan()
+        assertEquals(first, reads)
+        put("saves/GAME2/b.sav", "world2", 6_000)
+        e.fullScan()
+        assertEquals(first + 2, reads)     // one rehash + one blob upload
+    }
+
+    @Test fun repeated_conflict_for_same_content_notifies_once() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.saveStatus = SaveUploadStatus.Conflict
+        val e = engine()
+        e.fullScan(); e.fullScan()
+        assertEquals(2, api.saves.size)
+        assertEquals(1, conflicts.size)
+        put("saves/GAME1/a.sav", "hello2", 6_000)
+        e.fullScan()
+        assertEquals(2, conflicts.size)
     }
 
     @Test fun installs_sent_on_scan_and_deduplicated() = runBlocking {
@@ -363,7 +442,7 @@ class SyncEngineTest {
         File(javaClass.getResource("/fixtures/eden/thor/config.ini")!!.toURI()).copyTo(cfg)
         val title = "01002C9022770000"
         val save = File(internal, "Games/switch-saves/user/save/0000000000000000/23E468EE7BBC25842DE9EAD88AB25814/$title/data.dat")
-        save.parentFile!!.mkdirs(); save.writeText("zelda")
+        save.parentFile!!.mkdirs(); save.writeText("zelda"); save.setLastModified(5_000)
         val fs = LocalFs().apply { packages.add(pkg) }
         engine(fs, listOf(EdenModule(internal))).fullScan()
         val r = api.saves.single()

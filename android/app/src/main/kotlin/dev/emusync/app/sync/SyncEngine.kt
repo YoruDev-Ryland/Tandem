@@ -50,8 +50,15 @@ class SyncEngine(
     private class Tracked(val module: EmulatorModule, val detected: Detected, val item: LocalItem)
 
     private sealed interface Build
-    private class Built(val entries: List<ManifestEntry>, val sources: Map<String, String>, val stats: Map<String, FileEntry>) : Build
+    private class Built(
+        val entries: List<ManifestEntry>,
+        val sources: Map<String, String>,            // hash -> absolute path
+        val stats: Map<String, FileEntry>,           // absolute path -> stat taken before hashing
+        val hashed: Map<String, CachedHash>,         // newly computed hashes, committed once stable
+    ) : Build
     private class TooLarge(val path: String, val size: Long) : Build
+    private object Fresh : Build                     // a file was modified within the quiet window
+    private data class CachedHash(val size: Long, val mtime: Long, val hash: String)
 
     private val mutex = Mutex()
 
@@ -63,7 +70,14 @@ class SyncEngine(
     private val dirty = HashMap<String, Long>()               // store key -> time of last event
     private val rescan = HashMap<String, Long>()              // emulatorId -> time of last event
 
-    private val lastInstalls = HashMap<String, List<InstalledGame>>()   // touched only under [mutex]
+    private val marks = HashMap<String, Long>()               // store key -> sequence of its last event
+    private var eventSeq = 0L
+    private val shadowLogged = HashSet<String>()
+
+    // Touched only under [mutex].
+    private val lastInstalls = HashMap<String, List<InstalledGame>>()
+    private val hashCache = HashMap<String, CachedHash>()     // absolute path -> last stable hash
+    private val notified = HashSet<String>()                  // "<key>|<manifest hash>" conflicts already reported
 
     // ---- public API ----
 
@@ -98,7 +112,7 @@ class SyncEngine(
         synchronized(ev) {
             val hit = HashSet<String>()
             for ((key, tr) in tracked) if (under(dir, tr.item.baseDir)) {
-                dirty[key] = t; hit += tr.module.emulatorId
+                dirty[key] = t; marks[key] = ++eventSeq; hit += tr.module.emulatorId
             }
             for ((id, dirs) in watchDirs) if (id in hit || dirs.any { under(dir, it) || under(it, dir) }) rescan[id] = t
         }
@@ -155,6 +169,13 @@ class SyncEngine(
         for (item in items) uploadItem(m, d, item)
     }
 
+    /**
+     * The module's items with duplicate store keys collapsed: per key, the item with the newest file mtime wins
+     * (tie: smallest baseDir). Throws what the module throws.
+     */
+    fun currentItems(module: EmulatorModule, detected: Detected): List<LocalItem> =
+        dedupe(module, module.saveItems(fs, detected))
+
     /** Uploads one item. Null when skipped: unchanged, not uploadable, deferred, or failed. */
     suspend fun upload(module: EmulatorModule, detected: Detected, item: LocalItem): SaveUploadStatus? =
         mutex.withLock { uploadItem(module, detected, item) }
@@ -169,15 +190,23 @@ class SyncEngine(
         val id = m.emulatorId
         val key = storeKey(id, item)
         val name = "$id/${item.kind}/${item.gameKey}" + (if (item.slot.isNotEmpty()) "#${item.slot}" else "")
-        val built = buildOrNull(name, item.files.map { it to "${item.baseDir}/$it" }) ?: return null
+        val seq0 = synchronized(ev) { marks[key] }
+        fun defer(why: String): SaveUploadStatus? {
+            synchronized(ev) { tracked[key] = Tracked(m, d, item); dirty[key] = clock() }
+            log("$name: $why, deferred")
+            return null
+        }
+        val built = when (val b = buildOrNull(name, item.files.map { it to "${item.baseDir}/$it" }, rejectFresh = true)) {
+            null -> return null
+            Fresh -> return defer("modified within quiet window")
+            else -> b as Built
+        }
+        if (!stable(built)) return defer("changed while reading")
+        hashCache.putAll(built.hashed)
+        if (synchronized(ev) { marks[key] } != seq0) return defer("event while reading")
         val hash = Manifests.hash(built.entries)
         val known = store.get(key)
         if (hash == known?.knownManifestHash) return null
-        if (!stable(built)) {
-            synchronized(ev) { tracked[key] = Tracked(m, d, item); dirty[key] = clock() }
-            log("$name: changed while reading, deferred")
-            return null
-        }
         return apiCall(name) {
             pushBlobs(built)
             val r = api.uploadSave(SaveUploadRequest(id, item.kind, item.gameKey, item.slot, item.core,
@@ -190,7 +219,8 @@ class SyncEngine(
                 }
                 SaveUploadStatus.Conflict -> {
                     log("$name: conflict (head ${r.headVersionId})")
-                    onConflict(SyncConflict(id, item.kind, item.gameKey, item.slot, item.core, item.displayName))
+                    if (notified.add("$key|$hash"))
+                        onConflict(SyncConflict(id, item.kind, item.gameKey, item.slot, item.core, item.displayName))
                 }
             }
             r.status
@@ -201,14 +231,15 @@ class SyncEngine(
         val id = m.emulatorId
         val name = "$id/config"
         val files = moduleCall(m, "configBundle") { m.configBundle(fs, d).files } ?: return null
-        val built = buildOrNull(name, files.entries.map { it.key to it.value }) ?: return null
-        val hash = Manifests.hash(built.entries)
-        val known = store.configState(id)
-        if (hash == known?.knownManifestHash) return null
+        val built = buildOrNull(name, files.entries.map { it.key to it.value }, rejectFresh = false) as Built? ?: return null
         if (!stable(built)) {
             log("$name: changed while reading, skipped")
             return null
         }
+        hashCache.putAll(built.hashed)
+        val hash = Manifests.hash(built.entries)
+        val known = store.configState(id)
+        if (hash == known?.knownManifestHash) return null
         return apiCall(name) {
             pushBlobs(built)
             val r = api.uploadConfig(ConfigUploadRequest(id, known?.knownVersionId, built.entries))
@@ -219,7 +250,7 @@ class SyncEngine(
                 }
                 SaveUploadStatus.Conflict -> {
                     log("$name: conflict")
-                    onConflict(SyncConflict(id, null, null, "", "", null))
+                    if (notified.add("config:$id|$hash")) onConflict(SyncConflict(id, null, null, "", "", null))
                 }
             }
             r.status
@@ -238,10 +269,13 @@ class SyncEngine(
 
     // ---- manifests ----
 
-    /** Builds over (manifest path, absolute path) pairs; null (logged) when the item can't be uploaded. */
-    private fun buildOrNull(name: String, files: List<Pair<String, String>>): Built? {
+    /**
+     * Builds over (manifest path, absolute path) pairs. Returns [Built], [Fresh] (only with [rejectFresh]), or
+     * null (logged) when the item can't be uploaded.
+     */
+    private fun buildOrNull(name: String, files: List<Pair<String, String>>, rejectFresh: Boolean): Build? {
         val b = try {
-            build(files)
+            build(files, rejectFresh)
         } catch (e: IOException) {
             log("$name: read failed, skipped (${e.message})"); return null
         } catch (e: ModuleException) {
@@ -250,7 +284,7 @@ class SyncEngine(
         if (b is TooLarge) {
             log("$name: ${b.path} too large (${b.size} bytes), skipped"); return null
         }
-        b as Built
+        if (b !is Built) return b
         if (!Manifests.isUploadable(b.entries)) {
             if (b.entries.size > Manifests.MAX_ENTRIES) log("$name: ${b.entries.size} files, over the limit, skipped")
             return null
@@ -258,16 +292,29 @@ class SyncEngine(
         return b
     }
 
-    private fun build(files: List<Pair<String, String>>): Build {
+    /**
+     * Stats every file first (size cap; with [rejectFresh], an mtime within quietMillis of now — a future mtime
+     * beyond that is treated as clock skew, not as activity). Hashes reuse [hashCache] when size and mtime match.
+     */
+    private fun build(files: List<Pair<String, String>>, rejectFresh: Boolean): Build {
         files.forEach { Paths.requireSafeRelative(it.first) }
         val stats = HashMap<String, FileEntry>()
+        val now = clock()
         for ((rel, abs) in files) {
             val st = fs.stat(abs) ?: throw IOException("vanished: $abs")
             if (st.size > SyncConfig.maxBlobBytes) return TooLarge(rel, st.size)
             stats[abs] = st
         }
+        if (rejectFresh && stats.values.any { it.mtimeMillis > now - quietMillis && it.mtimeMillis <= now + quietMillis }) return Fresh
         val sources = HashMap<String, String>()
+        val hashed = HashMap<String, CachedHash>()
         val entries = files.map { (rel, abs) ->
+            val st = stats.getValue(abs)
+            val c = hashCache[abs]
+            if (c != null && c.size == st.size && c.mtime == st.mtimeMillis) {
+                sources.putIfAbsent(c.hash, abs)
+                return@map ManifestEntry(rel, c.hash, c.size)
+            }
             val md = MessageDigest.getInstance("SHA-256")
             val buf = ByteArray(64 * 1024)
             var size = 0L
@@ -280,9 +327,10 @@ class SyncEngine(
             }
             val h = md.digest().joinToString("") { "%02x".format(it) }
             sources.putIfAbsent(h, abs)
+            hashed[abs] = CachedHash(st.size, st.mtimeMillis, h)
             ManifestEntry(rel, h, size)
         }.sortedBy { it.path }
-        return Built(entries, sources, stats)
+        return Built(entries, sources, stats, hashed)
     }
 
     /** True when every file still has the size and mtime it had before hashing. */
@@ -297,19 +345,35 @@ class SyncEngine(
 
     /** Lists the module's items and refreshes [tracked]; null (logged) when the module failed. */
     private fun scanModule(m: EmulatorModule, d: Detected): List<LocalItem>? {
-        val items = moduleCall(m, "saveItems") { m.saveItems(fs, d) } ?: return null
+        val items = moduleCall(m, "saveItems") { dedupe(m, m.saveItems(fs, d)) } ?: return null
         val byKey = items.associateBy { storeKey(m.emulatorId, it) }
         synchronized(ev) {
             tracked.entries.removeIf { it.value.module.emulatorId == m.emulatorId && it.key !in byKey }
             for ((k, item) in byKey) tracked[k] = Tracked(m, d, item)
             dirty.keys.retainAll(tracked.keys)
+            marks.keys.retainAll(tracked.keys)
         }
         return items
     }
 
+    /** Collapses items sharing a store key (RetroArch core folders, Dolphin regions): newest mtime wins. */
+    private fun dedupe(m: EmulatorModule, items: List<LocalItem>): List<LocalItem> =
+        items.groupBy { storeKey(m.emulatorId, it) }.map { (key, group) ->
+            if (group.size == 1) return@map group[0]
+            val newest = group.associateWith { item ->
+                item.files.maxOfOrNull { f ->
+                    try { fs.stat("${item.baseDir}/$f")?.mtimeMillis ?: 0L } catch (e: IOException) { 0L }
+                } ?: 0L
+            }
+            val chosen = group.sortedWith(compareByDescending<LocalItem> { newest.getValue(it) }.thenBy { it.baseDir }).first()
+            for (other in group) if (other !== chosen && synchronized(ev) { shadowLogged.add("$key|${other.baseDir}") })
+                log("$key: ${other.baseDir} shadowed by ${chosen.baseDir}")
+            chosen
+        }
+
     private suspend fun reportStatus(found: List<Pair<EmulatorModule, Detected>>) {
         val emulators = found.map { (m, d) ->
-            EmulatorStatus(m.emulatorId, d.pkg, versionOf(d.pkg) ?: "", moduleCall(m, "cores") { m.cores(fs, d) })
+            EmulatorStatus(m.emulatorId, d.pkg, versionOf(d.pkg), moduleCall(m, "cores") { m.cores(fs, d) })
         }
         val roots = LinkedHashMap<String, String>()
         roots["{INTERNAL}"] = "$storageRoot/emulated/0"
