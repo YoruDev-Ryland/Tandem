@@ -24,9 +24,12 @@
         <package android:name="moe.shizuku.privileged.api" />
     </queries>
 
+    <!-- TODO(https): v1 tests against a LAN server over plain HTTP. Switch to HTTPS (and drop
+         usesCleartextTraffic) before any non-LAN use. -->
     <application
         android:allowBackup="false"
-        android:label="EmuSync">
+        android:label="EmuSync"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".debug.DebugActivity"
@@ -38,7 +41,7 @@
         </activity>
 
         <service
-            android:name=".SyncService"
+            android:name=".service.SyncService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
@@ -47,7 +50,7 @@
         </service>
 
         <receiver
-            android:name=".BootReceiver"
+            android:name=".service.BootReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

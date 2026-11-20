@@ -266,6 +266,28 @@ class SyncEngineTest {
         assertNotNull(store.get(saveKey("GAME2")))
     }
 
+    @Test fun failed_upload_counts_as_queued_until_retried() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        put("saves/GAME2/a.sav", "world")
+        api.failSaveFor = "GAME1"
+        val e = engine()
+        e.fullScan()
+        assertEquals(1, e.queuedCount())
+        api.failSaveFor = null
+        e.fullScan()
+        assertEquals(0, e.queuedCount())
+    }
+
+    @Test fun exposes_detected_watch_dirs_and_item_counts() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        put("saves/GAME2/a.sav", "world")
+        val e = engine()
+        e.fullScan()
+        assertEquals(listOf("fake"), e.detectedEmulators().map { it.emulatorId })
+        assertEquals(listOf("$root/saves"), e.allWatchDirs())
+        assertEquals(mapOf("fake" to 2), e.itemCounts())
+    }
+
     @Test fun module_error_skips_module() = runBlocking {
         put("saves/GAME1/a.sav", "hello")
         val other = FakeModule(tmp.newFolder("emu2").path, "other").also {

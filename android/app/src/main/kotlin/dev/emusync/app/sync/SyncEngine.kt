@@ -73,6 +73,7 @@ class SyncEngine(
     private val marks = HashMap<String, Long>()               // store key -> sequence of its last event
     private var eventSeq = 0L
     private val shadowLogged = HashSet<String>()
+    private val queued = HashSet<String>()                   // store keys whose last upload attempt failed
 
     // Touched only under [mutex].
     private val lastInstalls = HashMap<String, List<InstalledGame>>()
@@ -184,6 +185,18 @@ class SyncEngine(
     suspend fun uploadConfig(module: EmulatorModule, detected: Detected): SaveUploadStatus? =
         mutex.withLock { uploadConfigBundle(module, detected) }
 
+    /** Every watch dir of the modules detected by the last scan, deduped and sorted. */
+    fun allWatchDirs(): List<String> = synchronized(ev) { watchDirs.values.flatten().distinct().sorted() }
+
+    /** The emulators detected by the last scan, in registry order. */
+    fun detectedEmulators(): List<Detected> = synchronized(ev) { detected.values.map { it.second } }
+
+    /** Tracked item count per emulator id, from the last scan. */
+    fun itemCounts(): Map<String, Int> = synchronized(ev) { tracked.values.groupingBy { it.module.emulatorId }.eachCount() }
+
+    /** Items and config bundles whose last upload failed on a server or network error (retried by the next scan). */
+    fun queuedCount(): Int = synchronized(ev) { queued.size }
+
     /** Runs [block] under the engine's lock (non-reentrant: [block] must not call the engine's public suspend functions). */
     suspend fun <T> withLock(block: suspend () -> T): T = mutex.withLock { block() }
 
@@ -213,8 +226,8 @@ class SyncEngine(
         if (synchronized(ev) { marks[key] } != seq0) return defer("event while reading")
         val hash = Manifests.hash(built.entries)
         val known = store.get(key)
-        if (hash == known?.knownManifestHash) return null
-        return apiCall(name) {
+        if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= key }; return null }
+        return queueing(key, apiCall(name) {
             pushBlobs(built)
             val r = api.uploadSave(SaveUploadRequest(id, item.kind, item.gameKey, item.slot, item.core,
                 known?.knownVersionId, built.entries, item.displayName))
@@ -231,7 +244,7 @@ class SyncEngine(
                 }
             }
             r.status
-        }
+        })
     }
 
     private suspend fun uploadConfigBundle(m: EmulatorModule, d: Detected): SaveUploadStatus? {
@@ -250,8 +263,8 @@ class SyncEngine(
         hashCache.putAll(built.hashed)
         val hash = Manifests.hash(built.entries)
         val known = store.configState(id)
-        if (hash == known?.knownManifestHash) return null
-        return apiCall(name) {
+        if (hash == known?.knownManifestHash) { synchronized(ev) { queued -= ItemKey.config(id) }; return null }
+        return queueing(ItemKey.config(id), apiCall(name) {
             pushBlobs(built)
             val r = api.uploadConfig(ConfigUploadRequest(id, known?.knownVersionId, built.entries))
             when (r.status) {
@@ -265,7 +278,13 @@ class SyncEngine(
                 }
             }
             r.status
-        }
+        })
+    }
+
+    /** Records whether the upload of [key] failed ([status] null from [apiCall]) for [queuedCount]. */
+    private fun queueing(key: String, status: SaveUploadStatus?): SaveUploadStatus? {
+        synchronized(ev) { if (status == null) queued += key else queued -= key }
+        return status
     }
 
     private suspend fun pushBlobs(b: Built) {

@@ -1,0 +1,39 @@
+package dev.emusync.app.service
+
+import dev.emusync.app.fs.ShizukuState
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class StatusTextTest {
+    @Test fun watching_counts_emulators() {
+        assertEquals("Watching 6 emulators", statusText(ShizukuState.Ready, 6, 0))
+        assertEquals("Watching 1 emulator", statusText(ShizukuState.Ready, 1, 0))
+    }
+
+    @Test fun shizuku_off_wins() {
+        assertEquals("Shizuku is off: open EmuSync", statusText(ShizukuState.NotRunning, 6, 3))
+        assertEquals("Shizuku is off: open EmuSync", statusText(ShizukuState.NotRunning, 0, 0, online = false, signedIn = false))
+    }
+
+    @Test fun shizuku_permission_missing() {
+        assertEquals("Shizuku permission needed: open EmuSync", statusText(ShizukuState.NoPermission, 0, 0))
+    }
+
+    @Test fun offline_shows_queue() {
+        assertEquals("Offline: 3 changes queued", statusText(ShizukuState.Ready, 6, 3, online = false))
+        assertEquals("Offline: 1 change queued", statusText(ShizukuState.Ready, 6, 1, online = false))
+        assertEquals("Offline: 0 changes queued", statusText(ShizukuState.Ready, 6, 0, online = false))
+    }
+
+    @Test fun online_with_queue() {
+        assertEquals("Watching 6 emulators, 2 changes queued", statusText(ShizukuState.Ready, 6, 2))
+    }
+
+    @Test fun not_signed_in() {
+        assertEquals("Not signed in: open EmuSync", statusText(ShizukuState.Ready, 0, 0, signedIn = false))
+    }
+
+    @Test fun no_emulators() {
+        assertEquals("No emulators found", statusText(ShizukuState.Ready, 0, 0))
+    }
+}

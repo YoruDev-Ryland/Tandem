@@ -27,20 +27,30 @@ class ShizukuGate(private val context: Context) {
     private val dead = Shizuku.OnBinderDeadListener { service = null; refresh() }
     private val permResult = Shizuku.OnRequestPermissionResultListener { _, _ -> refresh() }
 
+    @Volatile private var started = false
+
+    /** Registers the Shizuku listeners once per gate (idempotent). Call from the main thread. */
+    @Synchronized
     fun start() {
+        if (started) return
+        started = true
         Shizuku.addBinderReceivedListenerSticky(received)
         Shizuku.addBinderDeadListener(dead)
         Shizuku.addRequestPermissionResultListener(permResult)
         refresh()
     }
 
+    @Synchronized
     fun stop() {
+        if (!started) return
+        started = false
         Shizuku.removeBinderReceivedListener(received)
         Shizuku.removeBinderDeadListener(dead)
         Shizuku.removeRequestPermissionResultListener(permResult)
     }
 
-    private fun refresh() {
+    /** Re-reads the Shizuku state (e.g. when a screen resumes after the user granted access in Shizuku). */
+    fun refresh() {
         _state.value = try {
             when {
                 !Shizuku.pingBinder() -> ShizukuState.NotRunning
