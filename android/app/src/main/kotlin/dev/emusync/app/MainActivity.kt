@@ -21,11 +21,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.emusync.app.debug.DebugActivity
+import dev.emusync.app.service.AppGraph
+import dev.emusync.app.service.SyncService
 import dev.emusync.app.ui.AppViewModel
 import dev.emusync.app.ui.input.Action
 import dev.emusync.app.ui.kit.ConsoleScaffold
 import dev.emusync.app.ui.kit.Hint
 import dev.emusync.app.ui.kit.TopBar
+import dev.emusync.app.ui.screens.ConflictsActions
+import dev.emusync.app.ui.screens.ConflictsScreen
 import dev.emusync.app.ui.screens.DeviceActions
 import dev.emusync.app.ui.screens.DeviceScreen
 import dev.emusync.app.ui.screens.gameUrl
@@ -52,6 +56,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // The only in-app start: sync runs whenever this device is signed in. Starting a running service is a no-op.
+        if (AppGraph.store(this).deviceKey != null) SyncService.start(this)
         vm.server.setVisible(true)
         vm.server.refresh()   // the key or server may have changed while we were away (setup, debug screen)
     }
@@ -70,9 +76,9 @@ class MainActivity : ComponentActivity() {
 private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
     var tab by rememberSaveable { mutableIntStateOf(TAB_DEVICE) }
     val status by vm.state.top.collectAsStateWithLifecycle()
-    val conflicts by vm.server.conflicts.collectAsStateWithLifecycle()
     val device by vm.device.ui.collectAsStateWithLifecycle()
-    val openConflicts = conflicts.value?.size ?: 0
+    val conflictsUi by vm.conflicts.ui.collectAsStateWithLifecycle()
+    val openConflicts = conflictsUi.entries.size   // the ones this device is part of, as the tab lists them
     // Shizuku help is a later task; until then the fix opens Shizuku itself, when it is installed.
     val shizuku = remember { activity.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE) }
 
@@ -96,6 +102,10 @@ private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
                 setup = { activity.startActivity(Intent(activity, DebugActivity::class.java)) },
                 back = { activity.onBackPressedDispatcher.onBackPressed() },
             ),
+        )
+        TAB_CONFLICTS -> ConflictsScreen(
+            conflictsUi, top,
+            ConflictsActions(resolve = vm.conflicts::resolve, bulk = vm.conflicts::bulk, back = { tab = TAB_DEVICE }),
         )
         else -> PlaceholderTab(TABS[tab], top) { tab = TAB_DEVICE }
     }
