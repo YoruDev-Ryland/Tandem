@@ -128,6 +128,11 @@ class DeliveryApplier(
         if (waitingNow.values.removeAll { it.emulatorId == emulatorId }) publishWaiting()
     }
 
+    /** Drops the published waiting entries of emulators not in [emulatorIds] (no longer detected). */
+    suspend fun retainWaiting(emulatorIds: Set<String>): Unit = mutex.withLock {
+        if (waitingNow.values.removeAll { it.emulatorId !in emulatorIds }) publishWaiting()
+    }
+
     private fun publishWaiting() = onWaiting(waitingNow.values.toList())
 
     // ---- loop ----

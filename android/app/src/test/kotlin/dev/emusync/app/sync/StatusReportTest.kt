@@ -6,7 +6,11 @@ import dev.emusync.app.fs.LocalFs
 import dev.emusync.app.model.*
 import dev.emusync.app.modules.*
 import java.io.File
+import dev.emusync.app.api.Api
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.Dispatcher
 import mockwebserver3.MockResponse
@@ -54,12 +58,19 @@ class StatusReportTest {
 
     @After fun tearDown() { server.close() }
 
-    private fun engine(): SyncEngine {
+    private val client by lazy { ApiClient(server.url("/").toString().trimEnd('/'), "k") }
+    private val coreCalls = AtomicInteger()
+
+    private fun engine(api: Api = client, statusTimeoutMillis: Long = 10_000L): SyncEngine {
         val root = tmp.newFolder().path
-        val registry = ModuleRegistry(listOf(Emu("eden", "dev.eden", root), Emu("ppsspp", "org.ppsspp", root)))
-        return SyncEngine(fs, ApiClient(server.url("/").toString().trimEnd('/'), "k"), StateStore(File(tmp.root, "s.json")),
+        val counting = object : EmulatorModule by Emu("eden", "dev.eden", root) {
+            override fun cores(fs: Fs, d: Detected): List<String>? { coreCalls.incrementAndGet(); return listOf("c") }
+        }
+        val registry = ModuleRegistry(listOf(counting, Emu("ppsspp", "org.ppsspp", root)))
+        return SyncEngine(fs, api, StateStore(File(tmp.root, "s.json")),
             registry, DeviceSettings(emptyList(), emptyMap()), clock = { now }, log = {}, versionOf = { "1.0" },
-            appVersion = "0", shizukuOk = { true }, onConflict = {}, storageRoot = tmp.newFolder().path)
+            appVersion = "0", shizukuOk = { true }, onConflict = {}, storageRoot = tmp.newFolder().path,
+            statusTimeoutMillis = statusTimeoutMillis)
     }
 
     /** Bodies of the status reports received since the last call. */
@@ -145,5 +156,36 @@ class StatusReportTest {
         now -= 60 * 60_000L
         e.reportRunning(setOf("eden"))
         assertEquals(1, statusBodies().size)
+    }
+
+    @Test fun running_report_reuses_the_last_full_scan_status() = runBlocking {
+        val e = engine()
+        e.fullScan()
+        val scanned = statusBodies().single()
+        assertEquals(1, coreCalls.get())
+        e.reportRunning(setOf("eden"))
+        val body = statusBodies().single()
+        assertEquals("no module or storage calls for a running report", 1, coreCalls.get())
+        assertEquals(scanned.replace("\"runningEmulators\":[]", "\"runningEmulators\":[\"eden\"]"), body)
+    }
+
+    @Test(timeout = 10_000L) fun a_hung_server_does_not_hold_the_engine_or_pile_up_reports() = runBlocking {
+        val release = CountDownLatch(1)
+        val puts = AtomicInteger()
+        val hung = object : Api by client {
+            override suspend fun putStatus(req: DeviceStatusRequest) {
+                if (req.runningEmulators.orEmpty().isEmpty()) return client.putStatus(req)   // the full scan's report
+                puts.incrementAndGet()
+                release.await()   // blocking, non-cancellable
+            }
+        }
+        val e = engine(hung, statusTimeoutMillis = 0L)   // gives up at once instead of waiting 10 s
+        e.fullScan(); statusBodies()
+        withTimeout(5_000) { e.reportRunning(setOf("eden")) }   // returns although the PUT hangs
+        withTimeout(5_000) { e.onEmulatorExited("eden"); e.tick() }   // the engine lock is free
+        now += 90_000L
+        e.reportRunning(setOf("eden"))   // due, but the previous report is still in flight: not resent
+        assertEquals(1, puts.get())
+        release.countDown()
     }
 }

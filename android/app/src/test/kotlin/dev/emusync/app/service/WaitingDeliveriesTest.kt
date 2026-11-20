@@ -13,6 +13,10 @@ import dev.emusync.app.sync.SyncEngine
 import dev.emusync.app.sync.WaitingDelivery
 import java.io.File
 import java.security.MessageDigest
+import dev.emusync.app.api.Api
+import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -65,7 +69,10 @@ class WaitingDeliveriesTest {
             listOf(ManifestEntry("a.sav", sha(b), b.size.toLong())))
     }
 
-    private suspend fun setUp(): Pair<SyncEngine, DeliveryApplier> {
+    private suspend fun setUp(
+        deliveriesApi: Api = api,
+        onWaiting: (List<WaitingDelivery>) -> Unit = { waiting.value = it },
+    ): Pair<SyncEngine, DeliveryApplier> {
         put("saves/0100A/a.sav", "old")
         val dir = "$root/saves/0100A"
         val h = Manifests.hash(Manifests.build(LocalFs(), dir, listOf("a.sav")))
@@ -75,9 +82,9 @@ class WaitingDeliveriesTest {
             versionOf = { null }, appVersion = "0", shizukuOk = { true }, onConflict = {},
             storageRoot = tmp.newFolder().path)
         engine.fullScan()   // learns the game titles
-        val applier = DeliveryApplier(fs, api, store, registry, engine, notifier = { notes += it }, settings = none,
+        val applier = DeliveryApplier(fs, deliveriesApi, store, registry, engine, notifier = { notes += it }, settings = none,
             cacheDir = tmp.newFolder("cache"), backups = LocalBackups(tmp.newFolder("backups").path, clock = { 0L }),
-            vaultRoot = File(tmp.root, "vault").path, onWaiting = { waiting.value = it })
+            vaultRoot = File(tmp.root, "vault").path, onWaiting = onWaiting)
         return engine to applier
     }
 
@@ -126,5 +133,40 @@ class WaitingDeliveriesTest {
         assertTrue(waiting.value.isEmpty())
         assertEquals("old", File(root, "saves/0100A/a.sav").readText())
         assertTrue(api.acks.isEmpty())
+    }
+
+    @Test fun retaining_detected_emulators_drops_entries_of_undetected_ones() = runBlocking {
+        val (_, applier) = setUp()
+        api.standing = listOf(delivery("d1", "0100A", "new"))
+        fs.alive.add("dev.eden.eden_emulator")
+        applier.applyAll()
+        applier.retainWaiting(setOf("eden"))
+        assertEquals(1, waiting.value.size)
+        applier.retainWaiting(emptySet())   // Eden uninstalled or no longer detected
+        assertTrue(waiting.value.isEmpty())
+        assertTrue(api.acks.isEmpty())
+    }
+
+    @Test fun a_pass_returning_after_its_session_ended_does_not_republish() = runBlocking {
+        val flows = SessionFlows()
+        val token = flows.begin()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val blocking = object : Api by api {
+            override suspend fun deliveries(): List<DeliveryDto> {
+                entered.countDown()
+                release.await()   // a blocking, non-cancellable network call
+                return api.deliveries()
+            }
+        }
+        val (_, applier) = setUp(blocking) { flows.publishWaiting(token, it) }
+        api.standing = listOf(delivery("d1", "0100A", "new"))
+        fs.alive.add("dev.eden.eden_emulator")
+        val pass = async(Dispatchers.IO) { applier.applyAll() }
+        entered.await()
+        flows.end(token)   // the session ends while the pass is stuck in the call
+        release.countDown()
+        assertEquals(1, pass.await().waitingForEmulator)
+        assertTrue(flows.waiting.value.isEmpty())
     }
 }

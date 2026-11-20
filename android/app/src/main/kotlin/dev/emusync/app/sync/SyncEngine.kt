@@ -9,8 +9,13 @@ import dev.emusync.app.model.*
 import dev.emusync.app.modules.*
 import java.io.IOException
 import java.security.MessageDigest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** A server-reported conflict. [kind] and [gameKey] are null for a config bundle. */
 data class SyncConflict(
@@ -49,6 +54,10 @@ class SyncEngine(
     private val storageRoot: String = "/storage",
     private val quietMillis: Long = SyncConfig.quietMillis,
     private val runningReportMillis: Long = SyncConfig.runningReportMillis,
+    /** How long [reportRunning] waits for the server before leaving the PUT to finish in the background. */
+    private val statusTimeoutMillis: Long = 10_000L,
+    /** Runs [reportRunning]'s PUTs, so a hung (non-cancellable) call never blocks the caller past the timeout. */
+    private val statusScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
 ) {
     private class Tracked(val module: EmulatorModule, val detected: Detected, val item: LocalItem)
@@ -83,10 +92,14 @@ class SyncEngine(
     private val titles = HashMap<String, String>()            // "<emulatorId>|<gameKey>" -> game title (items, installs)
     private var running: Set<String> = emptySet()             // emulator ids the last [reportRunning] saw running
 
-    // The last status report attempt, touched only under [mutex].
+    // The last status report and its attempt, guarded by [statusLock].
+    private val statusLock = Any()
+    private var lastStatus: DeviceStatusRequest? = null       // last built or sent; its emulators and roots are reused
     private var sentRunning: List<String>? = null
     private var sentAt = 0L
     private var sentOk = false
+    private var attempt = 0L                                  // bumped per attempt; a late success counts only if current
+    private var inFlight = false                              // a [reportRunning] PUT hasn't returned yet
 
     // Touched only under [mutex].
     private val lastInstalls = HashMap<String, List<InstalledGame>>()
@@ -127,17 +140,42 @@ class SyncEngine(
      * Records the emulators running now (from the process monitor) and sends a status report when the set changed
      * since the last report, or when [runningReportMillis] passed since it while an emulator runs or the last report
      * failed. Nothing is sent while nothing runs and the last report went through.
+     *
+     * Cheap and lock-free with respect to the engine: it resends the last full scan's status (emulators, roots) with
+     * only the running list replaced, never touches modules or storage, and waits at most [statusTimeoutMillis] for
+     * the server. While a previous PUT is still out, nothing more is sent.
      */
-    suspend fun reportRunning(ids: Set<String>): Unit = mutex.withLock {
-        val found = synchronized(ev) {
-            running = ids
-            detected.values.toList()
+    suspend fun reportRunning(ids: Set<String>) {
+        synchronized(ev) { running = ids }
+        val (req, mine) = synchronized(statusLock) {
+            val base = lastStatus ?: return   // no full scan reported yet; it will include the running list
+            if (inFlight) return
+            val known = base.emulators.map { it.emulatorId }.toSet()
+            val current = ids.filter { it in known }.sorted()
+            val elapsed = clock() - sentAt   // wall clock: a step backwards counts as due rather than stalling
+            val due = current != sentRunning ||
+                ((current.isNotEmpty() || !sentOk) && (elapsed >= runningReportMillis || elapsed < 0))
+            if (!due) return
+            val r = base.copy(shizukuOk = shizukuOk(), runningEmulators = current)
+            lastStatus = r
+            sentRunning = current
+            sentAt = clock()
+            sentOk = false
+            inFlight = true
+            r to ++attempt
         }
-        val elapsed = clock() - sentAt   // wall clock: a step backwards counts as due rather than stalling the refresh
-        val current = runningOf(found)
-        val due = current != sentRunning ||
-            ((current.isNotEmpty() || !sentOk) && (elapsed >= runningReportMillis || elapsed < 0))
-        if (due) reportStatus(found)
+        val put = statusScope.async {
+            try {
+                apiCall("status") {
+                    api.putStatus(req)
+                    synchronized(statusLock) { if (attempt == mine) sentOk = true }
+                }
+            } finally {
+                synchronized(statusLock) { inFlight = false }
+            }
+        }
+        if (withTimeoutOrNull(statusTimeoutMillis) { put.await() } == null && put.isActive)
+            log("status: no answer in ${statusTimeoutMillis / 1000} s, left running")
     }
 
     /** Drops cached hashes for [paths] (files the applier wrote, deleted or restored). Lock-free. */
@@ -514,12 +552,17 @@ class SyncEngine(
         sdCard()?.let { roots["{SD}"] = it }
         for ((m, d) in found) roots["{EMU:${m.emulatorId}}"] = d.dataRoot
         val runningNow = runningOf(found)
-        sentRunning = runningNow
-        sentAt = clock()
-        sentOk = false
+        val req = DeviceStatusRequest("android", appVersion, shizukuOk(), emulators, roots, runningNow)
+        val mine = synchronized(statusLock) {
+            lastStatus = req
+            sentRunning = runningNow
+            sentAt = clock()
+            sentOk = false
+            ++attempt
+        }
         apiCall("status") {
-            api.putStatus(DeviceStatusRequest("android", appVersion, shizukuOk(), emulators, roots, runningNow))
-            sentOk = true
+            api.putStatus(req)
+            synchronized(statusLock) { if (attempt == mine) sentOk = true }
         }
     }
 

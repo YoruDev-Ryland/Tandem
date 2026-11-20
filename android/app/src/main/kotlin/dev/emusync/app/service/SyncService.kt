@@ -77,6 +77,7 @@ class SyncService : Service() {
         val applier: DeliveryApplier,
         val queue: WorkQueue<SyncWork>,
         val planner: WorkPlanner,
+        val flows: SessionFlows.Token,
         val exits: ExitDetector = ExitDetector(),
         var watched: List<String> = emptyList(),
     )
@@ -125,8 +126,7 @@ class SyncService : Service() {
         destroyed = true
         scope.cancel()
         AppGraph.snapshot.value = ServiceSnapshot(running = false, status = "Not running")
-        AppGraph.runningState.value = emptySet()
-        AppGraph.waitingState.value = emptyList()
+        AppGraph.sessionFlows.end(null)   // drops the live session's late writes too
         super.onDestroy()
     }
 
@@ -201,49 +201,52 @@ class SyncService : Service() {
             shizukuOk = { gate.state.value == ShizukuState.Ready },
             onConflict = notifier::conflict,
         )
-        val applier = DeliveryApplier(
-            fs, api, store, registry, engine, notifier::alert, s, cacheDir,
-            onWaiting = { AppGraph.waitingState.value = it }, log = log,
-        )
-        val sess = Session(fs, engine, applier, WorkQueue(), planner)
-        log("sync session starting ($url, auto-apply ${if (stored.autoApply) "on" else "off"})")
-
-        // Initial pass before anything else is queued.
-        handle(sess, SyncWork.FullScan)
-        session = sess
-        publish()
-
-        fun offer(work: List<SyncWork>) = work.forEach { sess.queue.offer(it) }
-        val opens = java.util.concurrent.atomic.AtomicInteger(0)
-        val events = EventStream(
-            defaultHttpClient(), url, key,
-            onDeliveries = { offer(planner.deliveriesEvent()) },
-            onState = { up ->
-                if (up != online) log(if (up) "server events connected" else "server events disconnected")
-                online = up
-                // A reconnect rescans to catch up on what was missed.
-                if (up) offer(planner.streamOpened(reconnect = opens.getAndIncrement() > 0))
-                publish()
-            },
-        )
+        val flows = AppGraph.sessionFlows.begin()
         try {
-            launch { sess.queue.consume { handle(sess, it) } }
-            launch { every(TICK_MS) { offer(planner.tick()) } }
-            launch { every(MONITOR_MS) { offer(planner.monitor()) } }
-            launch { every(SyncConfig.pollMillis) { offer(planner.poll()) } }
-            launch { every(FULL_SCAN_MS) { offer(planner.periodicScan()) } }
-            offer(planner.sessionStarted())
-            events.start()
-            awaitCancellation()
+            val applier = DeliveryApplier(
+                fs, api, store, registry, engine, notifier::alert, s, cacheDir,
+                onWaiting = { AppGraph.sessionFlows.publishWaiting(flows, it) }, log = log,
+            )
+            val sess = Session(fs, engine, applier, WorkQueue(), planner, flows)
+            log("sync session starting ($url, auto-apply ${if (stored.autoApply) "on" else "off"})")
+
+            // Initial pass before anything else is queued.
+            handle(sess, SyncWork.FullScan)
+            session = sess
+            publish()
+
+            fun offer(work: List<SyncWork>) = work.forEach { sess.queue.offer(it) }
+            val opens = java.util.concurrent.atomic.AtomicInteger(0)
+            val events = EventStream(
+                defaultHttpClient(), url, key,
+                onDeliveries = { offer(planner.deliveriesEvent()) },
+                onState = { up ->
+                    if (up != online) log(if (up) "server events connected" else "server events disconnected")
+                    online = up
+                    // A reconnect rescans to catch up on what was missed.
+                    if (up) offer(planner.streamOpened(reconnect = opens.getAndIncrement() > 0))
+                    publish()
+                },
+            )
+            try {
+                launch { sess.queue.consume { handle(sess, it) } }
+                launch { every(TICK_MS) { offer(planner.tick()) } }
+                launch { every(MONITOR_MS) { offer(planner.monitor()) } }
+                launch { every(SyncConfig.pollMillis) { offer(planner.poll()) } }
+                launch { every(FULL_SCAN_MS) { offer(planner.periodicScan()) } }
+                offer(planner.sessionStarted())
+                events.start()
+                awaitCancellation()
+            } finally {
+                events.stop()
+                online = null
+                sess.queue.close()
+                runCatching { fs.unwatchAll() }
+                if (session === sess) session = null
+            }
         } finally {
-            events.stop()
-            online = null
-            sess.queue.close()
-            runCatching { fs.unwatchAll() }
-            if (session === sess) session = null
-            // This session's knowledge ends with it; the next one probes and applies afresh.
-            AppGraph.runningState.value = emptySet()
-            AppGraph.waitingState.value = emptyList()
+            // This session's knowledge ends with it, and its late writes (blocked calls returning) are dropped.
+            AppGraph.sessionFlows.end(flows)
         }
     }
 
@@ -287,7 +290,9 @@ class SyncService : Service() {
      */
     private suspend fun monitor(s: Session) {
         val found = s.engine.detectedEmulators()
-        s.exits.retain(found.map { it.emulatorId }.toSet())
+        val ids = found.map { it.emulatorId }.toSet()
+        s.exits.retain(ids)
+        s.applier.retainWaiting(ids)   // an emulator no longer detected holds nothing back
         val running = LinkedHashSet<String>()
         val exited = ArrayList<String>()
         for (d in found) {
@@ -296,7 +301,7 @@ class SyncService : Service() {
             if (alive) running += d.emulatorId
             if (s.exits.observe(d.emulatorId, alive)) exited += d.emulatorId
         }
-        AppGraph.runningState.value = running
+        AppGraph.sessionFlows.publishRunning(s.flows, running)
         s.engine.reportRunning(running)
         for (id in exited) {
             log("$id exited")

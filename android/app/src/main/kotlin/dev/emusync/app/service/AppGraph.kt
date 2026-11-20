@@ -35,13 +35,14 @@ object AppGraph {
     val snapshot = MutableStateFlow(ServiceSnapshot())
     val snapshots: StateFlow<ServiceSnapshot> get() = snapshot
 
-    /** Written by [SyncService]: the deliveries its last apply pass held back because their emulator runs. */
-    internal val waitingState = MutableStateFlow<List<WaitingDelivery>>(emptyList())
-    val waiting: StateFlow<List<WaitingDelivery>> get() = waitingState
+    /** Written only by the live [SyncService] session (see [SessionFlows]). */
+    internal val sessionFlows = SessionFlows()
 
-    /** Written by [SyncService] on every process monitor tick: the emulator ids running; empty while sync is off. */
-    internal val runningState = MutableStateFlow<Set<String>>(emptySet())
-    val running: StateFlow<Set<String>> get() = runningState
+    /** The deliveries the last apply pass held back because their emulator runs; empty while sync is off. */
+    val waiting: StateFlow<List<WaitingDelivery>> get() = sessionFlows.waiting
+
+    /** The emulator ids running, refreshed on every process monitor tick; empty while sync is off. */
+    val running: StateFlow<Set<String>> get() = sessionFlows.running
 
     fun store(context: Context): StateStore = storeRef ?: synchronized(this) {
         storeRef ?: StateStore(File(context.applicationContext.filesDir, "state.json")).also { storeRef = it }
