@@ -93,4 +93,13 @@ class MelonDsModuleTest {
     @Test fun detect_needs_package() {
         assertNull(m().detect(LocalFs(), none))
     }
+
+    @Test fun detect_survives_unlistable_storage() {
+        put("${internal()}/Games/nds/A.nds")
+        val boom = object : LocalFs() {
+            override fun list(dir: String) = if (dir == storage()) throw java.io.IOException("denied") else super.list(dir)
+        }.apply { packages.add("me.magnum.melonds") }
+        val d = m().detect(boom, none)!!
+        assertEquals(listOf("nds/A"), m().installedGames(boom, d, none).map { it.gameKey })
+    }
 }

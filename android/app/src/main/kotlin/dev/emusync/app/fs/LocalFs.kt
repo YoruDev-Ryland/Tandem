@@ -5,11 +5,11 @@ import java.io.File
 import java.io.InputStream
 
 /** Fs over ShellFsCore directly, for JVM tests. Process/package probes are settable fakes. */
-class LocalFs : Fs {
+open class LocalFs : Fs {
     var alive: MutableSet<String> = mutableSetOf()
     var packages: MutableSet<String> = mutableSetOf()
 
-    override fun list(dir: String) = ShellFsCore.list(dir)
+    override fun list(dir: String): List<FileEntry> = ShellFsCore.list(dir)
     override fun walk(dir: String) = ShellFsCore.walk(dir)
     override fun stat(path: String) = ShellFsCore.stat(path)
     override fun exists(path: String) = ShellFsCore.exists(path)

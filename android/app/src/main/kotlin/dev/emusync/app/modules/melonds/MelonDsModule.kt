@@ -28,7 +28,7 @@ class MelonDsModule(
         val pkg = packages.firstOrNull { it in fs.installedPackages() } ?: return null
         val dirs = LinkedHashSet<String>()
         dirs += rooted("/sdcard/Games/nds")
-        for (e in fs.list(storageRoot)) {
+        for (e in try { fs.list(storageRoot) } catch (_: Exception) { emptyList() }) {
             if (e.isDir && sdRe.matches(e.path.substringAfterLast('/'))) dirs += "${e.path}/Games/nds"
         }
         for (r in settings.romDirs) {
