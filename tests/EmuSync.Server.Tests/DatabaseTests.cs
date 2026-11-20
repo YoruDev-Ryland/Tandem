@@ -21,6 +21,48 @@ public class DatabaseTests
         Assert.True(File.Exists(Path.Combine(factory.DataDirectory, "emusync.db")));
     }
 
+    [Theory]
+    [InlineData("mysql")]
+    [InlineData("sqlserver")]
+    [InlineData("sqlite3")]
+    public void Unknown_database_provider_fails_startup_with_a_clear_message(string provider)
+    {
+        var dir = Directory.CreateTempSubdirectory("emusync-test-").FullName;
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                new ServiceCollection().AddDatabase(new ServerOptions { DatabaseProvider = provider, DataDirectory = dir }));
+            Assert.Contains("DATABASE_PROVIDER", ex.Message);
+            Assert.Contains("sqlite", ex.Message);
+            Assert.Contains("postgres", ex.Message);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void Unknown_database_provider_stops_the_server()
+    {
+        using var factory = new ServerFactory();
+        factory.Settings["EmuSync:DatabaseProvider"] = "mongodb";
+        var ex = Assert.ThrowsAny<Exception>(() => factory.Client());
+        Assert.Contains("DATABASE_PROVIDER 'mongodb' is not supported", ex.ToString());
+    }
+
+    [Theory]
+    [InlineData("SQLite")]
+    [InlineData("sqlite")]
+    [InlineData("")] // unset or empty: the default
+    public void Database_provider_is_case_insensitive(string provider)
+    {
+        var dir = Directory.CreateTempSubdirectory("emusync-test-").FullName;
+        try
+        {
+            var services = new ServiceCollection().AddDatabase(new ServerOptions { DatabaseProvider = provider, DataDirectory = dir });
+            Assert.Contains(services, s => s.ServiceType == typeof(EmuSyncDbContext));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
     [Fact]
     public async Task Missing_data_directory_is_created()
     {

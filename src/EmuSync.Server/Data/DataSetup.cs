@@ -9,6 +9,11 @@ public static class DataSetup
     /// <summary>Registers <see cref="EmuSyncDbContext"/> backed by the configured provider.</summary>
     public static IServiceCollection AddDatabase(this IServiceCollection services, ServerOptions options)
     {
+        var provider = options.DatabaseProvider?.Trim() ?? "";
+        if (provider.Length > 0 && !provider.Equals("sqlite", StringComparison.OrdinalIgnoreCase)
+            && !provider.Equals("postgres", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"DATABASE_PROVIDER '{provider}' is not supported; use sqlite (the default) or postgres.");
         if (IsPostgres(options))
         {
             var connection = options.DatabaseConnection;
@@ -39,7 +44,7 @@ public static class DataSetup
     }
 
     private static bool IsPostgres(ServerOptions o) =>
-        string.Equals(o.DatabaseProvider, "postgres", StringComparison.OrdinalIgnoreCase);
+        string.Equals(o.DatabaseProvider?.Trim(), "postgres", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Design-time factories for `dotnet ef`; they never touch a real database.</summary>
