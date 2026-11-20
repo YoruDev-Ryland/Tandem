@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+.git/
+.superpowers/
+.vs/
+.idea/
+data/
+tests/
+docs/
+node_modules/
+web/node_modules/
+TestResults/
+*.md
+Dockerfile
+docker-compose.yml

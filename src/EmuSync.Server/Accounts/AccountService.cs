@@ -159,5 +159,15 @@ public sealed class AccountService(EmuSyncDbContext db, IOptions<ServerOptions> 
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>Sets a new password for the account with this email (admin CLI). Existing devices stay signed in.</summary>
+    public async Task ResetPassword(string email, string newPassword, CancellationToken ct)
+    {
+        CheckPassword(newPassword);
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email, ct)
+            ?? throw new ApiException(404, "user_not_found", $"No account with email {email}.");
+        user.PasswordHash = Hasher.HashPassword(user, newPassword);
+        await db.SaveChangesAsync(ct);
+    }
+
     private static string Clip(string s, int max) => s.Length > max ? s[..max] : s;
 }

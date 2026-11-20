@@ -313,9 +313,9 @@ public sealed class BackupTests : IDisposable
         Assert.True(File.Exists(stray));
 
         var usage = await Cli(withBlobs, "restore-backup");
-        Assert.Equal(2, usage.Code);
+        Assert.Equal(1, usage.Code);
         Assert.Contains("restore-backup <file>", usage.Error);
-        Assert.Equal(2, (await Cli(withBlobs, "no-such-command")).Code);
+        Assert.Equal(1, (await Cli(withBlobs, "no-such-command")).Code);
     }
 
     [DockerFact]
@@ -446,6 +446,55 @@ public sealed class BackupTests : IDisposable
         Assert.Null(run.Error);
         Assert.True(run.Bytes > 0);
         Assert.Single(BackupFiles(folder));
+    }
+
+    [Fact]
+    public async Task Running_is_exposed_and_a_second_run_or_scheduled_run_is_refused_while_one_runs()
+    {
+        var folder = NewFolder();
+        using var f = NewFactory();
+        var (admin, _, _) = await Seed(f);
+        await UseFolder(admin, folder);
+        Assert.False((await (await admin.GetAsync("/v1/admin/backup")).ReadAsync<BackupSettingsResponse>()).Running);
+
+        var maintenance = f.Services.GetRequiredService<MaintenanceLock>();
+        using (await maintenance.AcquireAsync()) // the started run waits here, still counted as running
+        {
+            Assert.Equal(HttpStatusCode.Accepted, (await admin.PostAsync("/v1/admin/backup/run", null)).StatusCode);
+            Assert.True((await (await admin.GetAsync("/v1/admin/backup")).ReadAsync<BackupSettingsResponse>()).Running);
+
+            var second = await admin.PostAsync("/v1/admin/backup/run", null);
+            Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+            Assert.Null(await Backups(f).RunIfDueAsync(CancellationToken.None)); // due (never ran), but one is running
+        }
+
+        for (var i = 0; i < 200 && Backups(f).IsRunning; i++) await Task.Delay(50);
+        Assert.False((await (await admin.GetAsync("/v1/admin/backup")).ReadAsync<BackupSettingsResponse>()).Running);
+        Assert.Single(BackupFiles(folder));
+    }
+
+    [Fact]
+    public void Concurrent_starts_start_exactly_one_run()
+    {
+        using var f = NewFactory();
+        f.Client();
+        var results = new bool[16];
+        Parallel.For(0, results.Length, i => results[i] = Backups(f).TryStartInBackground());
+        Assert.Equal(1, results.Count(r => r));
+    }
+
+    [Fact]
+    public async Task Startup_removes_stale_backup_temp_directories()
+    {
+        using var f = NewFactory();
+        var stale = Directory.CreateDirectory(Path.Combine(f.DataDirectory, "tmp", "backup-0123456789abcdef")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(stale, "users.jsonl"), "{\"passwordHash\":\"secret\"}");
+        var other = Directory.CreateDirectory(Path.Combine(f.DataDirectory, "tmp", "keep-me")).FullName;
+
+        f.Client(); // starts the server
+
+        Assert.False(Directory.Exists(stale));
+        Assert.True(Directory.Exists(other));
     }
 
     [Fact]

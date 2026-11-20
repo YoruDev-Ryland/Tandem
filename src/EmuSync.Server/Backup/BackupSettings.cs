@@ -101,8 +101,8 @@ public static class BackupEndpoints
     {
         var backup = app.MapGroup("/v1/admin/backup").RequireAuthorization(AuthSetup.AdminPolicy);
 
-        backup.MapGet("", async (EmuSyncDbContext db, CancellationToken ct) =>
-            BackupSettings.ToResponse(await BackupSettings.LoadAsync(db, ct)));
+        backup.MapGet("", async (EmuSyncDbContext db, BackupService backups, CancellationToken ct) =>
+            BackupSettings.ToResponse(await BackupSettings.LoadAsync(db, ct)) with { Running = backups.IsRunning });
 
         backup.MapPut("", async (EmuSyncDbContext db, BackupSettingsDto? body, CancellationToken ct) =>
             BackupSettings.ToResponse(await BackupSettings.SaveAsync(db, body, ct)));

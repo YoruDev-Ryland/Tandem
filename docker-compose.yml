@@ -1,0 +1,21 @@
+services:
+  emusync:
+    image: ghcr.io/<owner>/emusync:latest
+    # To build from source instead of pulling the image:
+    # build: .
+    container_name: emusync
+    restart: unless-stopped
+    environment:
+      # The address devices and browsers use to reach the server (needed for pairing QR codes and links).
+      PUBLIC_URL: https://emusync.example.com
+      # PUID: 1654
+      # PGID: 1654
+      # ALLOW_REGISTRATION: "false"
+      # SERVER_NAME: EmuSync
+    volumes:
+      - emusync-data:/data
+    ports:
+      - "8080:8080"
+
+volumes:
+  emusync-data:

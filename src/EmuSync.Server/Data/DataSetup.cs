@@ -31,7 +31,11 @@ public static class DataSetup
     public static void MigrateDatabase(this IServiceProvider services)
     {
         using var scope = services.CreateScope();
-        scope.ServiceProvider.GetRequiredService<EmuSyncDbContext>().Database.Migrate();
+        var db = scope.ServiceProvider.GetRequiredService<EmuSyncDbContext>();
+        // WAL (persistent in the database file): a backup's long export transaction then does not block writers, nor
+        // writers the export.
+        if (db.Database.IsSqlite()) db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
+        db.Database.Migrate();
     }
 
     private static bool IsPostgres(ServerOptions o) =>

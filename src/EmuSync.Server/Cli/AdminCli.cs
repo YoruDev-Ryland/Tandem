@@ -1,15 +1,19 @@
+using EmuSync.Server.Accounts;
 using EmuSync.Server.Backup;
 using EmuSync.Server.Data;
+using EmuSync.Server.Devices;
+using Microsoft.EntityFrameworkCore;
 
 namespace EmuSync.Server.Cli;
 
 /// <summary>
-/// Admin commands, run as <c>EmuSync.Server admin &lt;command&gt; [args]</c> (in Docker:
-/// <c>docker exec -it emusync ./EmuSync.Server admin …</c>, or a one-off container on the same volume/env). They use
+/// Admin commands, run as <c>EmuSync.Server admin &lt;command&gt; [args]</c> or with the bare command name
+/// (<c>EmuSync.Server create-user …</c>). In Docker each command name is a symlink to a script, so
+/// <c>docker exec emusync create-user me@x --admin</c> works; a one-off container on the same volume/env also does. They use
 /// the server's own configuration (DATA_DIR, DATABASE_PROVIDER, DATABASE_CONNECTION, …, from the environment), apply
 /// migrations, run the command, and exit without starting the web server or background services.
 /// <para>To add a command, add one entry to <see cref="Commands"/>.</para>
-/// Exit codes: 0 success, 1 the command failed, 2 usage error.
+/// Exit codes: 0 success, 1 anything else (the command failed, unknown command, bad arguments), with a message on stderr.
 /// </summary>
 public static class AdminCli
 {
@@ -22,15 +26,28 @@ public static class AdminCli
 
     public static readonly IReadOnlyList<Command> Commands =
     [
+        new("list-users", "list-users", "List the accounts (email, role, active devices).", ListUsersAsync),
+        new("create-user", "create-user <email> [--admin]", "Create an account with a generated password, which is printed.",
+            CreateUserAsync),
+        new("reset-password", "reset-password <email>", "Set a new generated password for an account and print it.",
+            ResetPasswordAsync),
+        new("revoke-device", "revoke-device <deviceId>", "Revoke a device: its key stops working.", RevokeDeviceAsync),
         new("restore-backup", "restore-backup <file> [--passphrase X]",
             $"Restore a backup file into an empty server (no users, empty blob directory). An encrypted backup needs its " +
             $"passphrase (or set {PassphraseEnvironment}).",
             RestoreBackupAsync),
     ];
 
-    public static bool IsAdminInvocation(string[] args) => args.Length > 0 && args[0] == Verb;
+    /// <summary>The command line (verb removed) when <paramref name="args"/> is <c>admin …</c> or starts with a known command
+    /// name; null otherwise, so any other first argument (<c>--urls</c>, …) goes to the normal server.</summary>
+    public static string[]? CommandArguments(string[] args)
+    {
+        if (args.Length == 0) return null;
+        if (args[0] == Verb) return args[1..];
+        return Commands.Any(c => c.Name == args[0]) ? args : null;
+    }
 
-    /// <summary>The process entry point for <c>admin …</c>: <paramref name="args"/> excludes the verb.</summary>
+    /// <summary>The process entry point for the commands: <paramref name="args"/> starts with the command name.</summary>
     public static async Task<int> MainAsync(string[] args)
     {
         // Command arguments are not configuration: build the host from the environment only.
@@ -58,8 +75,13 @@ public static class AdminCli
                 var code => code,
             };
         }
-        catch (BackupException ex)
+        catch (OperationCanceledException)
         {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // The message only, never a stack trace: this is for an operator at a terminal.
             await error.WriteLineAsync($"{command.Name}: {ex.Message}");
             return 1;
         }
@@ -76,13 +98,13 @@ public static class AdminCli
         error.WriteLine("Usage: EmuSync.Server admin <command> [args]");
         foreach (var c in Commands)
             error.WriteLine($"  {c.Usage}\n      {c.Summary}");
-        return 2;
+        return 1;
     }
 
     private static int Usage(TextWriter error, Command command)
     {
         error.WriteLine($"Usage: EmuSync.Server admin {command.Usage}");
-        return 2;
+        return 1;
     }
 
     /// <summary>Splits <c>--name value</c> options from positional arguments. Null when an option lacks its value or is unknown.</summary>
@@ -100,6 +122,60 @@ public static class AdminCli
             else positional.Add(args[i]);
         }
         return (positional, options);
+    }
+
+    private static async Task<int> ListUsersAsync(string[] args, IServiceProvider services, TextWriter output, CancellationToken ct)
+    {
+        if (args.Length != 0) return UsageError;
+        using var scope = services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<EmuSyncDbContext>();
+        var users = await db.Users.AsNoTracking().OrderBy(u => u.CreatedUtc).ThenBy(u => u.Email)
+            .Select(u => new { u.Email, u.IsAdmin, Devices = db.Devices.Count(d => d.UserId == u.Id && d.RevokedUtc == null) })
+            .ToListAsync(ct);
+        foreach (var u in users)
+            await output.WriteLineAsync($"{u.Email}\t{(u.IsAdmin ? "admin" : "user")}\t{u.Devices} device(s)");
+        return 0;
+    }
+
+    private static async Task<int> CreateUserAsync(string[] args, IServiceProvider services, TextWriter output, CancellationToken ct)
+    {
+        var admin = args.Contains("--admin");
+        var rest = args.Where(a => a != "--admin").ToArray();
+        if (rest.Length != 1 || rest[0].StartsWith("--", StringComparison.Ordinal)) return UsageError;
+        using var scope = services.CreateScope();
+        var accounts = scope.ServiceProvider.GetRequiredService<AccountService>();
+        var email = AccountService.NormalizeEmail(rest[0]);
+        var password = AccountService.GeneratePassword();
+        await accounts.CreateUser(email, password, admin, ct);
+        await output.WriteLineAsync($"Created {(admin ? "admin " : "")}account {email}");
+        await output.WriteLineAsync($"Password: {password}");
+        return 0;
+    }
+
+    private static async Task<int> ResetPasswordAsync(string[] args, IServiceProvider services, TextWriter output, CancellationToken ct)
+    {
+        if (args.Length != 1 || args[0].StartsWith("--", StringComparison.Ordinal)) return UsageError;
+        using var scope = services.CreateScope();
+        var accounts = scope.ServiceProvider.GetRequiredService<AccountService>();
+        var email = AccountService.NormalizeEmail(args[0]);
+        var password = AccountService.GeneratePassword();
+        await accounts.ResetPassword(email, password, ct);
+        await output.WriteLineAsync($"New password for {email}");
+        await output.WriteLineAsync($"Password: {password}");
+        return 0;
+    }
+
+    private static async Task<int> RevokeDeviceAsync(string[] args, IServiceProvider services, TextWriter output, CancellationToken ct)
+    {
+        if (args.Length != 1) return UsageError;
+        if (!Guid.TryParse(args[0], out var id)) throw new InvalidOperationException($"'{args[0]}' is not a device id.");
+        using var scope = services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<EmuSyncDbContext>();
+        var userId = await db.Devices.AsNoTracking().Where(d => d.Id == id).Select(d => (Guid?)d.UserId).FirstOrDefaultAsync(ct)
+            ?? throw new InvalidOperationException($"No device {id}.");
+        await scope.ServiceProvider.GetRequiredService<DeviceService>().Revoke(userId, id, ct);
+        await output.WriteLineAsync($"Revoked device {id}");
+        return 0;
     }
 
     private static async Task<int> RestoreBackupAsync(string[] args, IServiceProvider services, TextWriter output, CancellationToken ct)

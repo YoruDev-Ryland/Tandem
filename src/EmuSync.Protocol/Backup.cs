@@ -29,8 +29,9 @@ public sealed record BackupSettingsDto(bool Enabled, BackupTargetKind Kind, stri
 }
 
 /// <summary>The settings as returned: secrets are never sent back, only whether a passphrase is set.</summary>
+/// <param name="Running">A backup run is in progress right now (only set by <c>GET /v1/admin/backup</c>).</param>
 public sealed record BackupSettingsResponse(bool Enabled, BackupTargetKind Kind, string? FolderPath, S3Target? S3, int HourUtc, int Keep,
-    bool Encrypt, bool PassphraseSet);
+    bool Encrypt, bool PassphraseSet, bool Running = false);
 
 /// <summary>One backup run, newest first in the history.</summary>
 /// <param name="Utc">When the run started (the time in the backup's name).</param>

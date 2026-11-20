@@ -17,14 +17,18 @@ public static class EnvironmentAliases
         ("WEB_ROOT", "WebRoot"),
     ];
 
-    public static void Add(ConfigurationManager configuration)
+    /// <summary>Adds the aliases as the LOWEST-priority source, so an explicit <c>EmuSync__X</c> variable, a command-line
+    /// value or a host setting always wins over the plain name. <paramref name="getEnvironment"/> is for tests.</summary>
+    public static void Add(ConfigurationManager configuration, Func<string, string?>? getEnvironment = null)
     {
+        getEnvironment ??= Environment.GetEnvironmentVariable;
         var values = new Dictionary<string, string?>();
         foreach (var (env, key) in Map)
         {
-            var value = Environment.GetEnvironmentVariable(env);
+            var value = getEnvironment(env);
             if (!string.IsNullOrEmpty(value)) values[$"{ServerOptions.Section}:{key}"] = value;
         }
-        if (values.Count > 0) configuration.AddInMemoryCollection(values);
+        if (values.Count > 0)
+            configuration.Sources.Insert(0, new Microsoft.Extensions.Configuration.Memory.MemoryConfigurationSource { InitialData = values });
     }
 }

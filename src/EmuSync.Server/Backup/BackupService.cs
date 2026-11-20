@@ -32,6 +32,20 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
     private int _active;
     private CancellationToken _stopping = CancellationToken.None;
 
+    /// <summary>Removes the row-export directories (they hold password hashes) a crashed or killed run left under
+    /// DATA_DIR/tmp. Only for startup, when no run is in progress.</summary>
+    public static void SweepStaleTemps(string dataDirectory)
+    {
+        var dir = Path.Combine(dataDirectory, "tmp");
+        if (!Directory.Exists(dir)) return;
+        foreach (var d in Directory.EnumerateDirectories(dir, "backup-*"))
+        {
+            try { Directory.Delete(d, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
     public bool IsRunning => Volatile.Read(ref _active) > 0;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -71,16 +85,18 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
             if (!settings.Enabled) return null;
             last = await db.BackupRuns.AsNoTracking().OrderByDescending(r => r.Id).Select(r => (DateTimeOffset?)r.Utc).FirstOrDefaultAsync(ct);
         }
-        return IsDue(time.GetUtcNow(), settings.HourUtc, last) ? await RunOnceAsync(ct) : null;
+        if (!IsDue(time.GetUtcNow(), settings.HourUtc, last)) return null;
+        // A manual run already in progress counts as this slot's run: skip rather than queue a second one behind it.
+        return Interlocked.CompareExchange(ref _active, 1, 0) == 0 ? await RunClaimedAsync(ct) : null;
     }
 
     /// <summary>Starts a run on the thread pool unless one is already running.</summary>
     public bool TryStartInBackground()
     {
-        if (IsRunning) return false;
+        if (Interlocked.CompareExchange(ref _active, 1, 0) != 0) return false; // atomic start-if-idle
         _ = Task.Run(async () =>
         {
-            try { await RunOnceAsync(_stopping); }
+            try { await RunClaimedAsync(_stopping); }
             catch (OperationCanceledException) { }
             catch (Exception ex) { logger.LogError(ex, "Backup run failed"); }
         });
@@ -89,9 +105,15 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
 
     /// <summary>One backup run with the current settings (run regardless of <see cref="BackupSettingsDto.Enabled"/>).
     /// Failures are recorded and returned, not thrown; only cancellation throws.</summary>
-    public async Task<BackupRunInfo> RunOnceAsync(CancellationToken ct)
+    public Task<BackupRunInfo> RunOnceAsync(CancellationToken ct)
     {
         Interlocked.Increment(ref _active);
+        return RunClaimedAsync(ct);
+    }
+
+    /// <summary>The run itself; the caller has already counted it in <c>_active</c>, and this releases that.</summary>
+    private async Task<BackupRunInfo> RunClaimedAsync(CancellationToken ct)
+    {
         try
         {
             using (await maintenance.AcquireAsync(ct))

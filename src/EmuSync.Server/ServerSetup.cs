@@ -27,6 +27,7 @@ public static class ServerSetup
         EnvironmentAliases.Add(builder.Configuration);
         builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection(ServerOptions.Section));
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddOpenApi();
         builder.Services.AddDatabase(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
         builder.Services.AddEmuSyncAuth(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
         builder.Services.AddScoped<AccountService>();
@@ -63,7 +64,9 @@ public static class ServerSetup
     public static void Map(WebApplication app)
     {
         app.Services.MigrateDatabase();
-        WebEndpoints.SweepStaleUploads(app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServerOptions>>().Value.DataDirectory);
+        var dataDirectory = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServerOptions>>().Value.DataDirectory;
+        WebEndpoints.SweepStaleUploads(dataDirectory);
+        BackupService.SweepStaleTemps(dataDirectory);
         app.UseApiErrors();
         app.UseMiddleware<ProtocolVersionMiddleware>(); // before routing so unknown /v1 routes still get 426
 
@@ -73,6 +76,7 @@ public static class ServerSetup
         app.UseRateLimiter();
         app.UseAuthorization();
 
+        app.MapOpenApi("/v1/openapi.json");
         app.MapServerInfoEndpoints();
         app.MapAccountEndpoints();
         app.MapAdminEndpoints();
