@@ -42,6 +42,7 @@ class DeliveryApplierTest {
         var onGetBlob: (String) -> Unit = {}
         val saves = mutableListOf<SaveUploadRequest>()
         val configs = mutableListOf<ConfigUploadRequest>()
+        var saveStatus = SaveUploadStatus.Accepted
         private var n = 0
 
         override suspend fun register(email: String, password: String, deviceName: String) = error("unused")
@@ -57,7 +58,7 @@ class DeliveryApplierTest {
         }
         override suspend fun uploadSave(req: SaveUploadRequest): SaveUploadResponse {
             saves += req; n++
-            return SaveUploadResponse(SaveUploadStatus.Accepted, "item", "up$n", "up$n")
+            return SaveUploadResponse(saveStatus, "item", "up$n", "up$n")
         }
         override suspend fun uploadConfig(req: ConfigUploadRequest): ConfigUploadResponse {
             configs += req; n++
@@ -200,6 +201,20 @@ class DeliveryApplierTest {
         assertEquals(DeliveryResult.SkippedLocalChanged, ackOf("d1").result)
         assertEquals("mine", read("saves/G1/a.sav"))
         assertTrue(backupDirs("G1").isEmpty())
+    }
+
+    @Test fun after_superseded_upload_head_delivery_applies() = runBlocking {
+        put("saves/G1/a.sav", "losing")   // never synced
+        api.saveStatus = SaveUploadStatus.Superseded
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "head"))
+        val a = applier()
+        assertEquals(1, a.applyAll().skipped)
+        assertEquals(1, api.saves.size)
+        assertEquals("losing", read("saves/G1/a.sav"))
+        api.standing = listOf(saveDelivery("d2", "G1", "a.sav" to "head"))
+        val r = a.applyAll()
+        assertEquals(DeliveryResult.Applied, ackOf("d2").result)
+        assertEquals("head", read("saves/G1/a.sav"))
     }
 
     @Test fun local_change_against_known_hash_also_skips() = runBlocking {

@@ -237,6 +237,11 @@ class SyncEngine(
                     store.put(key, ItemState(v, hash, hash))
                     log("$name: ${r.status} $v")
                 }
+                SaveUploadStatus.Superseded -> {
+                    // content equals a version the user already decided against; adopt the matched version
+                    store.put(key, ItemState(r.versionId, hash, hash))
+                    log("$name: superseded by ${r.versionId}")
+                }
                 SaveUploadStatus.Conflict -> {
                     log("$name: conflict (head ${r.headVersionId})")
                     if (notified.add("$key|$hash"))
@@ -271,6 +276,10 @@ class SyncEngine(
                 SaveUploadStatus.Accepted, SaveUploadStatus.Unchanged -> {
                     store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash))
                     log("$name: ${r.status} ${r.versionId}")
+                }
+                SaveUploadStatus.Superseded -> {
+                    store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash))
+                    log("$name: superseded by ${r.versionId}")
                 }
                 SaveUploadStatus.Conflict -> {
                     log("$name: conflict")

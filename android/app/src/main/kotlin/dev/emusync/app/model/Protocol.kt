@@ -6,7 +6,7 @@ import kotlinx.serialization.json.Json
 val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
 @Serializable enum class ItemKind { Save, State }
-@Serializable enum class SaveUploadStatus { Accepted, Unchanged, Conflict }
+@Serializable enum class SaveUploadStatus { Accepted, Unchanged, Conflict, Superseded }
 @Serializable enum class DeliveryKind { Save, Config, Vault }
 @Serializable enum class DeliveryResult { Applied, SkippedLocalChanged, Failed }
 

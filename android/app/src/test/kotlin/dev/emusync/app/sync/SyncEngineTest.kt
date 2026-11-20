@@ -165,6 +165,16 @@ class SyncEngineTest {
         assertEquals("head1", store.get(saveKey("GAME1"))!!.knownVersionId)
     }
 
+    @Test fun superseded_response_stores_matched_version_without_conflict_notice() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.saveStatus = SaveUploadStatus.Superseded
+        engine().fullScan()
+        val s = store.get(saveKey("GAME1"))!!
+        assertEquals("v1", s.knownVersionId)
+        assertEquals(Manifests.hash(api.saves[0].manifest), s.knownManifestHash)
+        assertTrue(conflicts.isEmpty())
+    }
+
     @Test fun conflict_does_not_store_and_notifies() = runBlocking {
         put("saves/GAME1/a.sav", "hello")
         api.saveStatus = SaveUploadStatus.Conflict
