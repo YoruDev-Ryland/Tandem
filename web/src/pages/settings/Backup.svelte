@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getBackup, getBackupHistory, putBackup, runBackup } from "../../lib/api/endpoints";
-  import type { BackupRunInfo, BackupSettingsDto, BackupTargetKind } from "../../lib/api/types";
+  import type { BackupRunInfo, BackupSettingsDto, BackupSettingsResponse, BackupTargetKind } from "../../lib/api/types";
   import { formatSize, formatWhen } from "../../lib/format";
   import Button from "../../lib/ui/Button.svelte";
   import ErrorLine from "../../lib/ui/ErrorLine.svelte";
@@ -32,6 +32,7 @@
   let passphraseSet = $state(false);
   let running = $state(false);
   let history = $state<BackupRunInfo[] | null>(null);
+  let historyError = $state<unknown>(undefined);
   let busy = $state(false);
   let error = $state<string | null>(null);
   let done = $state(false);
@@ -45,24 +46,34 @@
     };
   }
 
-  async function load() {
+  function apply(b: BackupSettingsResponse) {
+    form = {
+      enabled: b.enabled, kind: b.kind, folderPath: b.folderPath ?? "", endpoint: b.s3?.endpoint ?? "", bucket: b.s3?.bucket ?? "",
+      prefix: b.s3?.prefix ?? "", accessKey: b.s3?.accessKey ?? "", region: b.s3?.region ?? "", secretKey: "",
+      hour: String(b.hourUtc), keep: String(b.keep), encrypt: b.encrypt, passphrase: "", clearPassphrase: false,
+    };
+    passphraseSet = b.passphraseSet;
+    baseline = JSON.stringify(form);
+  }
+  async function loadHistory() {
     try {
-      const b = await getBackup();
-      form = {
-        enabled: b.enabled, kind: b.kind, folderPath: b.folderPath ?? "", endpoint: b.s3?.endpoint ?? "", bucket: b.s3?.bucket ?? "",
-        prefix: b.s3?.prefix ?? "", accessKey: b.s3?.accessKey ?? "", region: b.s3?.region ?? "", secretKey: "",
-        hour: String(b.hourUtc), keep: String(b.keep), encrypt: b.encrypt, passphrase: "", clearPassphrase: false,
-      };
-      passphraseSet = b.passphraseSet;
-      running = b.running ?? false;
-      baseline = JSON.stringify(form);
-      loaded = true;
       history = await getBackupHistory();
+      historyError = undefined;
     } catch (e) {
-      if (!loaded) loadError = e;
+      historyError = e;
     }
   }
-  onMount(() => void load());
+  onMount(() => {
+    getBackup().then(
+      (b) => {
+        apply(b);
+        running = b.running ?? false;
+        loaded = true;
+      },
+      (e) => (loadError = e),
+    );
+    void loadHistory();
+  });
 
   const intIn = (v: string, lo: number, hi: number) => /^\d+$/.test(v) && Number(v) >= lo && Number(v) <= hi;
   const hourOk = $derived(intIn(form.hour, 0, 23));
@@ -81,8 +92,9 @@
       enabled: form.enabled,
       kind: form.kind,
       folderPath: form.kind === "Folder" ? form.folderPath.trim() || null : null,
+      // A Folder target still sends any stored S3 block: the server would otherwise discard it and its secret key.
       s3:
-        form.kind === "S3"
+        form.kind === "S3" || form.bucket || form.accessKey || form.endpoint || form.prefix || form.region || form.secretKey
           ? {
               endpoint: form.endpoint.trim() || null,
               bucket: form.bucket.trim(),
@@ -108,8 +120,7 @@
     error = null;
     done = false;
     try {
-      await putBackup(toDto());
-      await load();
+      apply(await putBackup(toDto()));
       done = true;
     } catch (err) {
       error = settingsError(err);
@@ -125,10 +136,11 @@
       await runBackup();
       started = true;
       running = true;
-      history = await getBackupHistory();
     } catch (err) {
       runError = settingsError(err);
+      return;
     }
+    await loadHistory();
   }
 </script>
 
@@ -186,11 +198,13 @@
     <h3>Backups</h3>
     <div class="actions">
       <Button onclick={runNow}>Run now</Button>
-      {#if running && !runError}<span class="note">A backup is running. It appears below when it finishes.</span>{/if}
-      {#if started && !running}<span class="note">Backup started.</span>{/if}
+      {#if started}<span class="note">Backup started.</span>
+      {:else if running}<span class="note">A backup is running. It appears below when it finishes.</span>{/if}
     </div>
     {#if runError}<p class="fault" role="alert">{runError}</p>{/if}
-    {#if history && history.length === 0}
+    {#if historyError}
+      <ErrorLine error={historyError} />
+    {:else if history && history.length === 0}
       <p class="note">No backups yet.</p>
     {:else if history}
       <ul class="rows" aria-label="Backup history">

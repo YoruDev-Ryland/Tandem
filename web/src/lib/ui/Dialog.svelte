@@ -8,9 +8,11 @@
     onclose?: () => void;
     /** Room for an editor: up to 960 px wide instead of 520. */
     wide?: boolean;
+    /** Esc and B do not close it (a request that must finish is in flight). */
+    locked?: boolean;
     children: Snippet;
   }
-  let { open = $bindable(false), title, onclose, wide = false, children }: Props = $props();
+  let { open = $bindable(false), title, onclose, wide = false, locked = false, children }: Props = $props();
 
   let el: HTMLDialogElement;
   /** Children render only while shown, so their action handlers stack above the dialog's. */
@@ -22,7 +24,7 @@
     opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Modal: B closes it, and nothing reaches the page underneath while it is open.
     offAction = onAction((a) => {
-      if (a === "b") open = false;
+      if (a === "b" && !locked) open = false;
       // Gamepad A presses the focused control (keyboard Enter does this natively).
       if (a === "a" && document.activeElement instanceof HTMLElement && document.activeElement !== el && el.contains(document.activeElement)) {
         document.activeElement.click();
@@ -57,11 +59,11 @@
 
   // Esc closes natively too; keep `open` in step.
   function closed() {
-    if (open) open = false;
+    if (open && !locked) open = false;
   }
 </script>
 
-<dialog bind:this={el} class:wide aria-label={title} onclose={closed} oncancel={(e) => { e.preventDefault(); open = false; }}>
+<dialog bind:this={el} class:wide aria-label={title} onclose={closed} oncancel={(e) => { e.preventDefault(); if (!locked) open = false; }}>
   {#if shown}
     <h2>{title}</h2>
     {@render children()}

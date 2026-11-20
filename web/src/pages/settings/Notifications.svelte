@@ -31,6 +31,8 @@
     removeToken: boolean;
     editingUrl: boolean;
     original: string;
+    /** The stored kind keeps its address secret. Decided on load so changing Kind cannot reveal it. */
+    secret: boolean;
   }
 
   let nextId = 0;
@@ -58,7 +60,7 @@
 
   function apply(s: NotifySettingsDto) {
     targets = s.targets.map((t) => ({
-      id: nextId++, kind: t.kind, url: t.url, token: "", tokenSet: !!t.tokenSet, removeToken: false, editingUrl: false, original: t.url,
+      id: nextId++, kind: t.kind, url: t.url, token: "", tokenSet: !!t.tokenSet, removeToken: false, editingUrl: false, original: t.url, secret: secretUrl(t.kind),
     }));
     events = { ...s.events };
     baseline = snapshot();
@@ -87,10 +89,12 @@
 
   const dirty = $derived(loaded && snapshot() !== baseline);
   const urlProblem = (t: Target) => (t.url.trim() === "" ? "Enter the address to send to." : !/^https?:\/\//i.test(t.url.trim()) ? "The address must start with http:// or https://." : null);
+  /** The server keeps a stored token only while the address is unchanged. */
+  const tokenLost = (t: Target) => t.url.trim() !== t.original;
   const valid = $derived(targets.every((t) => urlProblem(t) === null));
 
   function add() {
-    targets.push({ id: nextId++, kind: "Ntfy", url: "", token: "", tokenSet: false, removeToken: false, editingUrl: true, original: "" });
+    targets.push({ id: nextId++, kind: "Ntfy", url: "", token: "", tokenSet: false, removeToken: false, editingUrl: true, original: "", secret: false });
     done = false;
   }
   function edit(t: Target) {
@@ -150,7 +154,7 @@
           <legend>Destination {i + 1}</legend>
           <div class="grid">
             <Field label="Kind" options={KINDS} bind:value={t.kind} />
-            {#if secretUrl(t.kind) && !t.editingUrl}
+            {#if t.original && t.secret && !t.editingUrl}
               <div class="masked">
                 <span class="lbl">URL</span>
                 <span class="mono">{maskUrl(t.url)}</span>
@@ -158,20 +162,21 @@
               <Button onclick={() => edit(t)}>Edit URL</Button>
             {:else}
               <Field label="URL" type="url" mono bind:value={t.url} placeholder="https://" oninput={() => (done = false)} />
-              {#if t.original && secretUrl(t.kind)}<Button onclick={() => keepUrl(t)}>Keep current URL</Button>{/if}
+              {#if t.original && t.secret}<Button onclick={() => keepUrl(t)}>Keep current URL</Button>{/if}
             {/if}
           </div>
           {#if t.kind === "Ntfy"}
             <div class="grid token">
               <Field label="Token" type="password" autocomplete="off" placeholder="Leave empty to keep it" bind:value={t.token} disabled={t.removeToken} />
-              <span class="status ink2">{t.token !== "" ? "New token" : t.tokenSet && !t.removeToken ? "Token set" : "No token"}</span>
-              {#if t.tokenSet && !t.removeToken}
+              <span class="status ink2">{t.token !== "" ? "New token" : t.tokenSet && !t.removeToken && !tokenLost(t) ? "Token set" : "No token"}</span>
+              {#if t.tokenSet && !t.removeToken && !tokenLost(t)}
                 <Button onclick={() => { t.removeToken = true; t.token = ""; }}>Remove token</Button>
               {:else if t.removeToken}
                 <Button onclick={() => (t.removeToken = false)}>Keep token</Button>
               {/if}
             </div>
           {/if}
+          {#if t.tokenSet && tokenLost(t) && t.token === ""}<p class="note">Changing the address removes the saved token. Enter it again.</p>{/if}
           {#if urlProblem(t) && (t.editingUrl || t.url !== "")}<p class="fault">{urlProblem(t)}</p>{/if}
           <div class="actions"><Button onclick={() => { targets.splice(i, 1); done = false; }}>Remove destination</Button></div>
         </fieldset>

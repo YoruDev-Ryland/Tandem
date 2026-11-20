@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import Settings from "../../src/pages/Settings.svelte";
 import { router } from "../../src/lib/router.svelte";
+import { dispatch } from "../../src/lib/input/actions";
 import { session } from "../../src/lib/session.svelte";
 import type { NotifySettingsDto, BackupSettingsResponse } from "../../src/lib/api/types";
 
@@ -261,5 +262,93 @@ describe("Settings", () => {
     await fireEvent.change(await screen.findByLabelText("Target"), { target: { value: "S3" } });
     expect(screen.getByLabelText("Bucket")).toBeTruthy();
     expect((screen.getByLabelText("Secret key") as HTMLInputElement).value).toBe("");
+  });
+
+  it("keeps a stored Discord URL masked when its Kind is changed", async () => {
+    await open("Notifications");
+    await screen.findByText("discord.com/…");
+    const kinds = screen.getAllByLabelText("Kind");
+    await fireEvent.change(kinds[1]!, { target: { value: "Webhook" } });
+    expect(document.body.innerHTML).not.toContain("SECRETPART");
+    for (const el of Array.from(document.querySelectorAll("input"))) expect((el as HTMLInputElement).value).not.toContain("SECRETPART");
+    await fireEvent.change(kinds[1]!, { target: { value: "Ntfy" } });
+    expect(document.body.innerHTML).not.toContain("SECRETPART");
+    for (const el of Array.from(document.querySelectorAll("input"))) expect((el as HTMLInputElement).value).not.toContain("SECRETPART");
+  });
+
+  it("warns that changing an ntfy address removes the saved token", async () => {
+    await open("Notifications");
+    await screen.findByText("Token set");
+    await fireEvent.input(screen.getAllByLabelText("URL")[0]!, { target: { value: "https://ntfy.sh/other" } });
+    expect(screen.getByText("No token")).toBeTruthy();
+    expect(screen.getByText("Changing the address removes the saved token. Enter it again.")).toBeTruthy();
+  });
+
+  it("does not say Saved when the backup reload fails, and shows a history error in place", async () => {
+    await openWith("Backup", { "GET /v1/admin/backup/history": () => reply(500, { code: "boom", message: "x" }) });
+    await screen.findByText("Passphrase set");
+    expect((await screen.findAllByRole("alert"))[0]!.textContent).toMatch(/something went wrong/i);
+    await fireEvent.input(screen.getByLabelText("Keep"), { target: { value: "14" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved.");
+  });
+
+  it("shows a failed history refresh after Run now as a history problem, not a failed run", async () => {
+    let n = 0;
+    await openWith("Backup", { "GET /v1/admin/backup/history": () => (n++ === 0 ? reply(200, []) : reply(500, { code: "boom", message: "x" })) });
+    await fireEvent.click(await screen.findByRole("button", { name: "Run now" }));
+    await screen.findByText("Backup started.");
+    expect(await screen.findByText(/something went wrong/i)).toBeTruthy();
+  });
+
+  it("does not carry Copied into the next one-time password dialog", async () => {
+    Object.assign(navigator, { clipboard: { writeText: vi.fn(async () => {}) } });
+    await open("Users");
+    const create = async () => {
+      await fireEvent.click(await screen.findByRole("button", { name: "Add user" }));
+      await fireEvent.input(await screen.findByLabelText("Email"), { target: { value: "new@x.test" } });
+      await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+      await screen.findByText("Gen-Pass-1234");
+    };
+    await create();
+    await fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await screen.findByRole("button", { name: "Copied" });
+    await fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    await create();
+    expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
+  });
+
+  it("cannot cancel the create dialog while the request is in flight", async () => {
+    let release: (r: Response) => void = () => {};
+    const gate = new Promise<Response>((r) => (release = r));
+    await openWith("Users", { "POST /v1/admin/users": () => undefined as unknown as Response });
+    (fetch as any).mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url === "/v1/admin/users") return gate;
+      if (url === "/v1/admin/users") return reply(200, []);
+      if (url === "/v1/admin/settings") return reply(200, { allowRegistration: false });
+      return reply(200, {});
+    });
+    await fireEvent.click(await screen.findByRole("button", { name: "Add user" }));
+    await fireEvent.input(await screen.findByLabelText("Email"), { target: { value: "new@x.test" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    dispatch("b");
+    expect(screen.getByLabelText("Email")).toBeTruthy();
+    release(reply(200, { email: "new@x.test", password: "Gen-Pass-1234" }));
+    expect(await screen.findByText("Gen-Pass-1234")).toBeTruthy();
+  });
+
+  it("keeps the stored S3 block when saving with a Folder target", async () => {
+    const calls = await open("Backup");
+    await screen.findByText("Passphrase set");
+    await fireEvent.change(screen.getByLabelText("Target"), { target: { value: "S3" } });
+    await fireEvent.input(screen.getByLabelText("Bucket"), { target: { value: "mybucket" } });
+    await fireEvent.change(screen.getByLabelText("Target"), { target: { value: "Folder" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved.");
+    const put = calls.find((c) => c.method === "PUT")!.body;
+    expect(put.kind).toBe("Folder");
+    expect(put.s3.bucket).toBe("mybucket");
+    expect(put.s3.secretKey).toBeNull();
   });
 });

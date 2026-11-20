@@ -42,11 +42,13 @@
   let created = $state<CreatedUserResponse | null>(null);
   let createError = $state<string | null>(null);
   let creating = $state(false);
+  let copied = $state(false);
 
   function openCreate() {
     email = "";
     isAdmin = false;
     created = null;
+    copied = false;
     createError = null;
     createOpen = true;
   }
@@ -56,6 +58,7 @@
     creating = true;
     createError = null;
     try {
+      copied = false;
       created = await createUser({ email: email.trim(), isAdmin });
       users = await getUsers();
     } catch (err) {
@@ -69,7 +72,6 @@
     email = "";
   };
 
-  let copied = $state(false);
   async function copy() {
     try {
       await navigator.clipboard.writeText(created!.password);
@@ -132,7 +134,7 @@
   {/if}
 </div>
 
-<Dialog bind:open={createOpen} title={created ? "User created" : "Add user"} onclose={afterCreateClose}>
+<Dialog bind:open={createOpen} locked={creating} title={created ? "User created" : "Add user"} onclose={afterCreateClose}>
   {#if created}
     <div class="sec">
       <p class="note">Password for <span class="mono">{created.email}</span></p>
@@ -150,7 +152,7 @@
       {#if createError}<p class="fault" role="alert">{createError}</p>{/if}
       <div class="actions">
         <Button type="submit" variant="primary" disabled={creating || !email.trim()}>Create</Button>
-        <Button onclick={() => (createOpen = false)}>Cancel</Button>
+        <Button onclick={() => (createOpen = false)} disabled={creating}>Cancel</Button>
       </div>
     </form>
   {/if}
