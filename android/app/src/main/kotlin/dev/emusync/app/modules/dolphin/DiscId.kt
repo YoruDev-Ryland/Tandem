@@ -1,7 +1,7 @@
 package dev.emusync.app.modules.dolphin
 
 import dev.emusync.app.fs.Fs
-import java.io.IOException
+import dev.emusync.app.fs.FsUnavailableException
 import java.io.InputStream
 
 object DiscId {
@@ -29,7 +29,9 @@ object DiscId {
                 if (b.size < 6) return null
                 String(b, 0, 6, Charsets.US_ASCII).takeIf { idRe.matches(it) }
             }
-        } catch (e: IOException) { null }
+        } catch (e: FsUnavailableException) {
+            throw e
+        } catch (e: Exception) { null }   // one unreadable or odd image never aborts the scan
     }
 
     private fun skipFully(ins: InputStream, n: Long): Boolean {

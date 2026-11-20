@@ -30,7 +30,8 @@ data class SyncConflict(
  * called from any thread and only touches the event bookkeeping, which has its own lock.
  *
  * Errors: [FsUnavailableException] aborts the pass and is rethrown with no state written for the item in
- * flight; [ApiException] skips one item; [ModuleException] skips one module; [IOException] skips one item.
+ * flight; [ApiException] skips one item; [ModuleException] or any other unexpected exception from a module call skips
+ * one module; [IOException] skips one item (or the module, from a module call).
  */
 class SyncEngine(
     private val fs: Fs,
@@ -482,12 +483,19 @@ class SyncEngine(
 
     // ---- helpers ----
 
+    /** Runs one module call. Anything but shell loss and cancellation skips this module only (logged). */
     private fun <T> moduleCall(m: EmulatorModule, what: String, f: () -> T): T? = try {
         f()
+    } catch (e: FsUnavailableException) {
+        throw e
+    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+        throw e
     } catch (e: ModuleException) {
         log("${m.emulatorId}: $what failed, skipped (${e.message})"); null
     } catch (e: IOException) {
         log("${m.emulatorId}: $what read failed, skipped (${e.message})"); null
+    } catch (e: Exception) {
+        log("${m.emulatorId}: $what failed unexpectedly, skipped (${e.javaClass.simpleName}: ${e.message})"); null
     }
 
     private inline fun <T> apiCall(name: String, f: () -> T): T? = try {

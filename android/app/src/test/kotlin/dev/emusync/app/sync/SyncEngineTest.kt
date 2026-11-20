@@ -67,10 +67,12 @@ class SyncEngineTest {
     class FakeModule(val root: String, override val emulatorId: String = "fake") : EmulatorModule {
         override val packages = listOf("com.fake.emu", "com.fake.emu.duo")   // the variant is never detected
         var throwOnItems = false
+        var crashOnItems = false
         override fun detect(fs: Fs, settings: DeviceSettings): Detected? =
             if ("com.fake.emu" in fs.installedPackages()) Detected(emulatorId, "com.fake.emu", "", root) else null
         override fun saveItems(fs: Fs, d: Detected): List<LocalItem> {
             if (throwOnItems) throw ModuleException("broken")
+            if (crashOnItems) throw IllegalStateException("module bug")
             // "<game>@<core>" dirs give the same Save key with different cores (like RetroArch core folders).
             return fs.list("$root/saves").filter { it.isDir }.map { e ->
                 val n = e.path.substringAfterLast('/')
@@ -540,6 +542,24 @@ class SyncEngineTest {
         fs.alive.clear()
         engine(fs).fullScan()
         assertEquals(1, api.configs.size)
+    }
+
+    @Test fun unexpected_exception_in_one_module_does_not_block_another() = runBlocking {
+        val rootB = tmp.newFolder("emuB").path
+        val a = FakeModule(root, "aaa").apply { crashOnItems = true }
+        val b = FakeModule(rootB, "bbb")
+        put("saves/GA/a.sav", "a")
+        File(rootB, "saves/GB/b.sav").apply { parentFile.mkdirs(); writeText("b"); setLastModified(5_000) }
+        engine(modules = listOf(a, b)).fullScan()
+        assertEquals(listOf("bbb" to "GB"), api.saves.map { it.emulatorId to it.gameKey })
+        assertTrue(logs.any { it.startsWith("aaa: saveItems failed") })
+    }
+
+    @Test fun fs_unavailable_in_module_still_aborts_scan() = runBlocking {
+        val m = object : EmulatorModule by module {
+            override fun saveItems(fs: Fs, d: Detected): List<LocalItem> = throw FsUnavailableException("shell died")
+        }
+        try { engine(modules = listOf(m)).fullScan(); fail("expected FsUnavailableException") } catch (e: FsUnavailableException) {}
     }
 
     @Test fun config_conflict_does_not_store() = runBlocking {

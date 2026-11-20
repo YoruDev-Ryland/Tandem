@@ -1,5 +1,6 @@
 package dev.emusync.app.modules.dolphin
 
+import dev.emusync.app.fs.FsUnavailableException
 import dev.emusync.app.fs.LocalFs
 import java.io.File
 import org.junit.Assert.*
@@ -34,5 +35,13 @@ class DiscIdTest {
         assertEquals("GM8E01", DiscId.read(fs, p))
         val q = File(tmp.root, "Metroid Prime.wia").also { it.writeBytes(ByteArray(8)) }.path
         assertNull(DiscId.read(fs, q))
+    }
+
+    @Test fun unexpected_read_error_is_null_but_shell_loss_propagates() {
+        val p = file("a.iso", 0, "GM8E01")
+        val odd = object : LocalFs() { override fun openRead(path: String) = throw IllegalStateException("odd") }
+        assertNull(DiscId.read(odd, p))
+        val dead = object : LocalFs() { override fun openRead(path: String) = throw FsUnavailableException("dead") }
+        try { DiscId.read(dead, p); fail("expected FsUnavailableException") } catch (e: FsUnavailableException) {}
     }
 }

@@ -1,5 +1,6 @@
 package dev.emusync.app.modules.dolphin
 
+import dev.emusync.app.fs.FsUnavailableException
 import dev.emusync.app.fs.Fs
 import dev.emusync.app.model.InstalledGame
 import dev.emusync.app.model.ItemKind
@@ -37,7 +38,7 @@ class DolphinModule(private val internalRoot: String = "/storage/emulated/0") : 
             for (e in fs.list(dir)) {
                 val name = e.path.substringAfterLast('/')
                 if (e.isDir || !name.endsWith(".gci", true) || e.size < 0x40) continue
-                val head = try { fs.openRead(e.path).use { it.readNBytes(0x28) } } catch (_: java.io.IOException) { continue }
+                val head = try { fs.openRead(e.path).use { it.readNBytes(0x28) } } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
                 if (head.size < 0x28) continue
                 val key = String(head, 0, 6, Charsets.US_ASCII)
                 if (!gameIdRe.matches(key)) continue
@@ -151,7 +152,7 @@ class DolphinModule(private val internalRoot: String = "/storage/emulated/0") : 
         if (slot.isEmpty()) return null
         for (region in regions) for (e in fs.list(cardDir(d, region))) {
             if (e.isDir || !e.path.endsWith(".gci", true) || e.size < 0x40) continue
-            val head = try { fs.openRead(e.path).use { it.readNBytes(0x28) } } catch (_: java.io.IOException) { continue }
+            val head = try { fs.openRead(e.path).use { it.readNBytes(0x28) } } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
             if (head.size < 0x28) continue
             if (String(head, 0, 6, Charsets.US_ASCII) == gameKey &&
                 String(head, 8, 0x20, Charsets.ISO_8859_1).trim('\u0000') == slot) return region

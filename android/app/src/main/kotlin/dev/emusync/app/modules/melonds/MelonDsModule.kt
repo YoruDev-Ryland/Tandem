@@ -1,5 +1,6 @@
 package dev.emusync.app.modules.melonds
 
+import dev.emusync.app.fs.FsUnavailableException
 import dev.emusync.app.fs.Fs
 import dev.emusync.app.model.InstalledGame
 import dev.emusync.app.model.ItemKind
@@ -29,7 +30,7 @@ class MelonDsModule(
         val pkg = packages.firstOrNull { it in fs.installedPackages() } ?: return null
         val dirs = LinkedHashSet<String>()
         dirs += rooted("/sdcard/Games/nds")
-        for (e in try { fs.list(storageRoot) } catch (_: Exception) { emptyList() }) {
+        for (e in try { fs.list(storageRoot) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }) {
             if (e.isDir && sdRe.matches(e.path.substringAfterLast('/'))) dirs += "${e.path}/Games/nds"
         }
         for (r in settings.romDirs) {
@@ -51,12 +52,12 @@ class MelonDsModule(
 
     private fun romFiles(fs: Fs, dir: String): List<String> = try {
         fs.list(dir).filter { !it.isDir && ext(name(it.path)) in romExts }.map { name(it.path) }
-    } catch (_: Exception) { emptyList() }
+    } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }
 
     override fun saveItems(fs: Fs, d: Detected): List<LocalItem> {
         val out = LinkedHashMap<Triple<ItemKind, String, String>, LocalItem>()
         fun scan(dir: String) {
-            val entries = try { fs.list(dir) } catch (_: Exception) { return }
+            val entries = try { fs.list(dir) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { return }
             for (e in entries) {
                 try {
                     if (e.isDir) continue
@@ -69,7 +70,7 @@ class MelonDsModule(
                         else -> continue
                     }
                     out.putIfAbsent(Triple(kind, base, slot), LocalItem(kind, keyPrefix + base, slot, "", dir, listOf(n), base))
-                } catch (_: Exception) { continue }
+                } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
             }
         }
         romDirs(d).forEach(::scan)
@@ -93,7 +94,7 @@ class MelonDsModule(
     override fun configBundle(fs: Fs, d: Detected): ConfigBundleFiles {
         val out = sortedMapOf<String, String>()
         val root = d.extraRoots["export"] ?: return ConfigBundleFiles(out)
-        for (f in try { fs.walk(root) } catch (_: Exception) { emptyList() }) {
+        for (f in try { fs.walk(root) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }) {
             if (f.isDir) continue
             out["export/" + f.path.removePrefix("$root/")] = f.path
         }

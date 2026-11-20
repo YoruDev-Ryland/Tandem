@@ -1,5 +1,6 @@
 package dev.emusync.app.modules.retroarch
 
+import dev.emusync.app.fs.FsUnavailableException
 import dev.emusync.app.fs.Fs
 import dev.emusync.app.model.InstalledGame
 import dev.emusync.app.model.ItemKind
@@ -121,7 +122,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
                         val path = o["path"]?.jsonPrimitive?.contentOrNull ?: continue
                         out += PlaylistEntry(path, o["label"]?.jsonPrimitive?.contentOrNull, o["core_path"]?.jsonPrimitive?.contentOrNull)
                     }
-                } catch (_: Exception) { /* malformed playlist: skip */ }
+                } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { /* malformed playlist: skip */ }
             }
         }
         return out

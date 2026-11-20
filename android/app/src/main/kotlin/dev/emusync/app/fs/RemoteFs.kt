@@ -27,7 +27,7 @@ class RemoteFs(private val service: () -> IShellService) : Fs {
         try {
             return block(s)
         } catch (e: UnsupportedOperationException) {
-            val (code, msg) = ErrCodec.decode(e) ?: throw e
+            val (code, msg) = ErrCodec.decode(e) ?: throw IOException("shell call failed: ${e.message}", e)
             throw when (code) {
                 ErrCodec.NOT_FOUND -> FileNotFoundException(msg)
                 ErrCodec.PROBE -> FsUnavailableException("probe failed: $msg")
@@ -37,6 +37,12 @@ class RemoteFs(private val service: () -> IShellService) : Fs {
             throw FsUnavailableException("shell service died: ${e.message}")
         } catch (e: RemoteException) {
             throw FsUnavailableException("shell service error: ${e.message}")
+        } catch (e: java.util.concurrent.CancellationException) {
+            throw e
+        } catch (e: RuntimeException) {
+            // SecurityException and the other runtime exceptions binder carries (or a bad reply): an IO error for
+            // this one call, so callers skip the file or item instead of aborting the whole scan.
+            throw IOException("shell call failed: ${e.javaClass.simpleName}: ${e.message}", e)
         }
     }
 

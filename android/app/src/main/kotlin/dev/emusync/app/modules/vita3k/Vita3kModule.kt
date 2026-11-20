@@ -1,5 +1,6 @@
 package dev.emusync.app.modules.vita3k
 
+import dev.emusync.app.fs.FsUnavailableException
 import dev.emusync.app.fs.Fs
 import dev.emusync.app.model.InstalledGame
 import dev.emusync.app.model.ItemKind
@@ -34,7 +35,7 @@ class Vita3kModule(private val internalRoot: String = "/storage/emulated/0") : E
                     safePrefPath(v)?.let { return it }
                 }
             }
-        } catch (_: Exception) { }
+        } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { }
         return "${d.dataRoot}/vita"
     }
 
@@ -59,7 +60,7 @@ class Vita3kModule(private val internalRoot: String = "/storage/emulated/0") : E
                 val files = fs.walk(e.path).filter { !it.isDir }.map { it.path.removePrefix(e.path + "/") }.sorted()
                 if (files.isEmpty()) continue
                 out += LocalItem(ItemKind.Save, n, "", "", e.path, files)
-            } catch (_: Exception) { continue }
+            } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
         return out.sortedBy { it.gameKey }
     }

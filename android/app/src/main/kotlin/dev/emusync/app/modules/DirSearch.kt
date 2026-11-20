@@ -1,5 +1,6 @@
 package dev.emusync.app.modules
 
+import dev.emusync.app.fs.FsUnavailableException
 import dev.emusync.app.fs.Fs
 
 object DirSearch {
@@ -12,7 +13,7 @@ object DirSearch {
      */
     fun locate(fs: Fs, known: List<String>, walkStarts: List<String>, maxDepth: Int,
                rank: (String) -> Long = { 0L }, pred: (String) -> Boolean): String? {
-        fun ok(dir: String) = try { pred(dir) } catch (_: Exception) { false }
+        fun ok(dir: String) = try { pred(dir) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { false }
         for (k in known) if (ok(k.trimEnd('/'))) return k.trimEnd('/')
         var best: Pair<Long, String>? = null
         val seen = HashSet<String>()
@@ -21,7 +22,7 @@ object DirSearch {
             for (depth in 0..maxDepth) {
                 for (dir in level) {
                     if (!seen.add(dir) || !ok(dir)) continue
-                    val r = try { rank(dir) } catch (_: Exception) { 0L }
+                    val r = try { rank(dir) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { 0L }
                     if (best == null || r > best.first) best = r to dir
                 }
                 if (depth == maxDepth) break
@@ -29,7 +30,7 @@ object DirSearch {
                     try {
                         fs.list(dir).filter { it.isDir }.map { it.path }
                             .filter { val n = it.substringAfterLast('/'); n !in skipNames && !n.startsWith(".") }
-                    } catch (_: Exception) { emptyList() }
+                    } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }
                 }
                 if (level.isEmpty()) break
             }
@@ -41,5 +42,5 @@ object DirSearch {
 
     /** `<storageRoot>/XXXX-XXXX` volumes. */
     fun sdVolumes(fs: Fs, storageRoot: String): List<String> =
-        try { fs.list(storageRoot).filter { it.isDir && sdRe.matches(it.path.substringAfterLast('/')) }.map { it.path } } catch (_: Exception) { emptyList() }
+        try { fs.list(storageRoot).filter { it.isDir && sdRe.matches(it.path.substringAfterLast('/')) }.map { it.path } } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }
 }

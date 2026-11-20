@@ -6,9 +6,6 @@ import dev.emusync.app.fs.FileEntry
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.io.FileNotFoundException
-import java.io.IOException
-import java.nio.file.NoSuchFileException
 import kotlin.system.exitProcess
 
 /** Runs in the Shizuku UserService process (uid 2000). */
@@ -18,19 +15,14 @@ class ShellService() : IShellService.Stub() {
     private val json = Json
     private var watcher: Watcher? = null
 
-    /** Checked exceptions must not escape onTransact; map them to ErrCodec-coded exceptions. */
+    /**
+     * Checked exceptions must not escape onTransact, and runtime ones (SecurityException, ...) must not reach the
+     * app as anything but IO errors: everything is mapped to an ErrCodec-coded exception.
+     */
     private inline fun <T> guard(block: () -> T): T = try {
         block()
-    } catch (e: UnsupportedOperationException) {
-        throw e
-    } catch (e: FileNotFoundException) {
-        throw ErrCodec.encode(ErrCodec.NOT_FOUND, e.message)
-    } catch (e: NoSuchFileException) {
-        throw ErrCodec.encode(ErrCodec.NOT_FOUND, e.message)
-    } catch (e: ProbeException) {
-        throw ErrCodec.encode(ErrCodec.PROBE, e.message)
-    } catch (e: IOException) {
-        throw ErrCodec.encode(ErrCodec.IO, e.message)
+    } catch (e: Exception) {
+        throw ErrCodec.wrap(e)
     }
 
     override fun destroy() {
@@ -62,7 +54,13 @@ class ShellService() : IShellService.Stub() {
 
     override fun copy(src: String, dst: String) = guard { ShellFsCore.copy(src, dst) }
 
-    override fun isAnyProcessAlive(pkgs: Array<String>): Boolean = guard { ProcessProbe.isAnyProcessAlive(pkgs.toList()) }
+    override fun isAnyProcessAlive(pkgs: Array<String>): Boolean = guard {
+        try {
+            ProcessProbe.isAnyProcessAlive(pkgs.toList())
+        } catch (e: RuntimeException) {
+            throw ProbeException("process scan failed: ${e.javaClass.simpleName}: ${e.message}", e)   // fail closed
+        }
+    }
 
     override fun installedPackagesCsv(): String = guard { ProcessProbe.installedPackages().joinToString(",") }
 

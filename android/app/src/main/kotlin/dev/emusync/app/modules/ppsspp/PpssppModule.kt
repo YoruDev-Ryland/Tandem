@@ -1,5 +1,6 @@
 package dev.emusync.app.modules.ppsspp
 
+import dev.emusync.app.fs.FsUnavailableException
 import dev.emusync.app.fs.Fs
 import dev.emusync.app.model.InstalledGame
 import dev.emusync.app.model.ItemKind
@@ -64,7 +65,7 @@ class PpssppModule(
                 val files = fs.walk(e.path).filter { !it.isDir }.map { it.path.removePrefix(e.path + "/") }.sorted()
                 if (files.isEmpty()) continue
                 out += LocalItem(ItemKind.Save, n.substring(0, 9), slot, "", e.path, files)
-            } catch (_: Exception) { continue }
+            } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
         val states = LinkedHashMap<Pair<String, String>, LocalItem>()
         for (e in fs.list(stateDir(d))) {
@@ -73,7 +74,7 @@ class PpssppModule(
                 val m = stateRe.matchEntire(name(e.path)) ?: continue
                 states.putIfAbsent(m.groupValues[1] to m.groupValues[3],
                     LocalItem(ItemKind.State, m.groupValues[1], m.groupValues[3], "", stateDir(d), listOf(name(e.path))))
-            } catch (_: Exception) { continue }
+            } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
         return (out + states.values).sortedWith(compareBy({ it.kind }, { it.gameKey }, { it.slot }))
     }
@@ -84,7 +85,7 @@ class PpssppModule(
         val found = sortedSetOf<String>()
         saveItems(fs, d).filter { it.kind == ItemKind.Save }.mapTo(found) { it.gameKey }
         for (dir in settings.romDirs.map { rooted(it).trimEnd('/') }.distinct()) {
-            for (e in try { fs.list(dir) } catch (_: Exception) { emptyList() }) {
+            for (e in try { fs.list(dir) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }) {
                 val n = name(e.path)
                 if (e.isDir || n.substringAfterLast('.', "").lowercase() !in romExts) continue
                 idRe.find(n)?.let { found += it.value }

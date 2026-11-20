@@ -1,5 +1,6 @@
 package dev.emusync.app.modules.eden
 
+import dev.emusync.app.fs.FsUnavailableException
 import dev.emusync.app.fs.Fs
 import dev.emusync.app.model.InstalledGame
 import dev.emusync.app.model.ItemKind
@@ -134,7 +135,7 @@ class EdenModule(private val internalRoot: String = "/storage/emulated/0") : Emu
             val tik = names.firstOrNull { it.endsWith(".tik", true) && it.length >= 16 && hex16.matches(it.take(16)) }
             tik?.take(16)?.let { (it.take(13) + "000").uppercase() }
         }
-    } catch (e: java.io.IOException) { null }
+    } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { null }
 
     override fun configBundle(fs: Fs, d: Detected): ConfigBundleFiles {
         val cfg = "${d.dataRoot}/config"

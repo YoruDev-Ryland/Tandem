@@ -1,5 +1,6 @@
 package dev.emusync.app.modules.azahar
 
+import dev.emusync.app.fs.FsUnavailableException
 import dev.emusync.app.fs.Fs
 import dev.emusync.app.model.InstalledGame
 import dev.emusync.app.model.ItemKind
@@ -85,14 +86,14 @@ class AzaharModule(
                 val data = "$dir/data"
                 val files = fs.walk(data).filter { !it.isDir }.map { it.path.removePrefix("$data/") }.sorted()
                 if (files.isNotEmpty()) out += LocalItem(ItemKind.Save, key(low), "", "", data, files)
-            } catch (_: Exception) { continue }
+            } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
         for (e in fs.list("${d.dataRoot}/states")) {
             try {
                 if (e.isDir) continue
                 val m = stateRe.matchEntire(name(e.path)) ?: continue
                 out += LocalItem(ItemKind.State, m.groupValues[1].uppercase(), m.groupValues[2], "", "${d.dataRoot}/states", listOf(name(e.path)))
-            } catch (_: Exception) { continue }
+            } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
         return out.sortedWith(compareBy({ it.kind }, { it.gameKey }, { it.slot }))
     }
@@ -108,13 +109,13 @@ class AzaharModule(
         val dirs = LinkedHashSet<String>()
         dirs += rooted("/sdcard/Games/3ds"); dirs += d.dataRoot.substringBeforeLast('/')
         settings.romDirs.mapTo(dirs) { rooted(it).trimEnd('/') }
-        for (dir in dirs) for (e in try { fs.list(dir) } catch (_: Exception) { emptyList() }) {
+        for (dir in dirs) for (e in try { fs.list(dir) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }) {
             try {
                 if (e.isDir || name(e.path).substringAfterLast('.', "").lowercase() !in romExts) continue
                 val pid = fs.openRead(e.path).use { programId(it) } ?: continue
                 val hex = "%016X".format(pid)
                 if (hex.startsWith(appHigh)) found += hex
-            } catch (_: Exception) { continue }
+            } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
         return found.map { InstalledGame(it) }
     }

@@ -13,6 +13,19 @@ object ErrCodec {
 
     fun encode(code: Int, msg: String?) = UnsupportedOperationException("$PREFIX$code:${msg ?: ""}")
 
+    /**
+     * Maps anything the shell service throws to a coded exception, so only codes cross binder: missing files are
+     * NOT_FOUND, probe failures PROBE, and every other exception (IO, SecurityException, any other runtime
+     * exception) IO, named in the message. An already coded exception is returned as is.
+     */
+    fun wrap(e: Exception): UnsupportedOperationException = when {
+        e is UnsupportedOperationException && decode(e) != null -> e
+        e is java.io.FileNotFoundException || e is java.nio.file.NoSuchFileException -> encode(NOT_FOUND, e.message)
+        e is ProbeException -> encode(PROBE, e.message)
+        e is java.io.IOException -> encode(IO, e.message)
+        else -> encode(IO, "${e.javaClass.simpleName}: ${e.message}")
+    }
+
     /** Returns (code, message) or null if [e] is not one of ours. */
     fun decode(e: Throwable): Pair<Int, String>? {
         val m = e.message ?: return null
