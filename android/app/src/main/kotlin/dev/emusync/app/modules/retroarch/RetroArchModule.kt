@@ -23,11 +23,13 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
 
     private val saveExts = setOf("srm", "sav", "rtc", "mcr", "eep", "fla", "dsv", "bin")
     private val romExts = setOf("gba", "gbc", "gb", "nes", "sfc", "smc", "md", "gen", "n64", "z64", "nds", "zip", "7z", "chd", "cue", "iso", "pbp")
-    private val stateRe = Regex("^(.+)\\.state(?:([1-9])|\\.auto)?$")
+    private val stateRe = Regex("^(.+)\\.state(?:(\\d+)|\\.auto)?$")
+    private val maxPlaylist = 16L * 1024 * 1024
+    private val archiveSep = Regex("\\.(zip|7z|rar)#", RegexOption.IGNORE_CASE)
     private val maxConfigFile = 1_000_000L
     private val keyPrefix = "retroarch/"
 
-    private class Dirs(val root: String, val saves: String, val states: String, val config: String, val playlists: String,
+    private class Dirs(val saves: String, val states: String, val config: String, val playlists: String,
                        val sortSaves: Boolean, val sortStates: Boolean)
 
     private fun cfgPath(d: Detected) = "${d.dataRoot}/retroarch.cfg"
@@ -50,9 +52,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         val c = cfg ?: RaCfg.EMPTY
         fun dir(key: String, sub: String) = c.path(key, base)?.let { rooted(it).trimEnd('/') } ?: "$base/$sub"
         val config = dir("rgui_config_directory", "config")
-        // With a cfg the bundle root is the parent of the config dir; without one, the probed root.
-        val root = if (cfg != null) config.substringBeforeLast('/') else base
-        return Dirs(root, dir("savefile_directory", "saves"), dir("savestate_directory", "states"), config,
+        return Dirs(dir("savefile_directory", "saves"), dir("savestate_directory", "states"), config,
             dir("playlist_directory", "playlists"), c.bool("sort_savefiles_enable"), c.bool("sort_savestates_enable"))
     }
 
@@ -64,7 +64,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         extra["INTERNAL"] = internalRoot
         val base = Detected(emulatorId, pkg, "", dataRoot, extra)
         if (!fs.exists(cfgPath(base))) extra["cfgMissing"] = "1"
-        dirs(fs, base)?.let { extra["root"] = it.root }
+        dirs(fs, base)?.let { extra["config"] = it.config }
         return base.copy(extraRoots = extra)
     }
 
@@ -111,6 +111,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         for (sub in listOf(dir, "$dir/builtin")) {
             for (e in fs.list(sub).sortedBy { it.path }) {
                 if (e.isDir || !e.path.endsWith(".lpl", true)) continue
+                if (e.size > maxPlaylist) { System.err.println("RetroArch: skipping oversized playlist ${e.path} (${e.size} bytes)"); continue }
                 try {
                     val text = fs.openRead(e.path).bufferedReader().use { it.readText() }
                     val items = Json.parseToJsonElement(text).jsonObject["items"]?.jsonArray ?: continue
@@ -126,7 +127,8 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
     }
 
     private fun contentBase(path: String): String {
-        val inner = if (path.contains('#')) path.substringAfter('#') else path
+        val sep = archiveSep.findAll(path).lastOrNull()
+        val inner = if (sep != null) path.substring(sep.range.last + 1) else path
         return name(inner.replace('\\', '/')).substringBeforeLast('.')
     }
 
@@ -160,7 +162,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         val dirs = dirs(fs, d) ?: return ConfigBundleFiles(out)
         for (f in fs.walk(dirs.config)) {
             if (f.isDir || f.size > maxConfigFile) continue
-            out["root/config/" + f.path.removePrefix(dirs.config + "/")] = f.path
+            out["config/" + f.path.removePrefix(dirs.config + "/")] = f.path
         }
         return ConfigBundleFiles(out)
     }
@@ -172,6 +174,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         if (core.isNotEmpty()) Paths.requireSafeSegment(core)
         val dirs = dirs(fs, d) ?: throw ModuleException("RetroArch directories not found")
         val (root, sorted, fileName) = if (kind == ItemKind.State) {
+            if (slot != "" && slot != "auto" && !slot.all { it in '0'..'9' }) throw ModuleException("invalid RetroArch state slot: '$slot'")
             val suffix = when (slot) { "" -> "state"; "auto" -> "state.auto"; else -> "state$slot" }
             Triple(dirs.states, dirs.sortStates, "$base.$suffix")
         } else {
@@ -179,8 +182,9 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
             Triple(dirs.saves, dirs.sortSaves, "$base.$slot")
         }
         val preferred = if (sorted && core.isNotEmpty()) "$root/$core" else root
-        if (fs.exists("$preferred/$fileName")) return preferred
-        val existing = fs.walk(root).firstOrNull { !it.isDir && name(it.path) == fileName }
+        val matches = fs.walk(root).filter { !it.isDir && name(it.path).equals(fileName, true) }
+        if (matches.any { it.path.substringBeforeLast('/') == preferred }) return preferred
+        val existing = matches.firstOrNull()
         return existing?.path?.substringBeforeLast('/') ?: preferred
     }
 }

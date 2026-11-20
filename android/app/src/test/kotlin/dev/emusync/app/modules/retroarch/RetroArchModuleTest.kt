@@ -31,7 +31,7 @@ class RetroArchModuleTest {
         assertEquals(listOf(ItemKind.Save, ItemKind.State), items.map { it.kind }.sorted())
         assertEquals(ra("saves"), items.first { it.kind == ItemKind.Save }.baseDir)
         assertEquals(ra("states"), items.first { it.kind == ItemKind.State }.baseDir)
-        assertEquals(ra("cfgs/x.cfg"), m().configBundle(fs(), d).files["root/config/x.cfg"])
+        assertEquals(ra("cfgs/x.cfg"), m().configBundle(fs(), d).files["config/x.cfg"])
     }
 
     @Test fun cfg_explicit_dirs_used() {
@@ -39,7 +39,7 @@ class RetroArchModuleTest {
         put(ra("saves/mGBA/Pokemon - Emerald Version (USA).srm"))
         val d = detect()
         assertNull(d.extraRoots["cfgMissing"])
-        assertEquals(ra(""), d.extraRoots["root"]!! + "/")
+        assertEquals(ra("config"), d.extraRoots["config"])
         val i = m().saveItems(fs(), d).single()
         assertEquals("retroarch/Pokemon - Emerald Version (USA)", i.gameKey)
         assertEquals("srm", i.slot)
@@ -116,8 +116,8 @@ class RetroArchModuleTest {
         File(ra("config/big.bin")).writeBytes(ByteArray(1_100_000))
         val f = m().configBundle(fs(), detect()).files
         assertEquals(cfgPath(), f["data/retroarch.cfg"])
-        assertEquals(ra("config/mGBA/mGBA.opt"), f["root/config/mGBA/mGBA.opt"])
-        assertFalse(f.containsKey("root/config/big.bin"))
+        assertEquals(ra("config/mGBA/mGBA.opt"), f["config/mGBA/mGBA.opt"])
+        assertFalse(f.containsKey("config/big.bin"))
     }
 
     @Test fun target_dirs() {
@@ -131,6 +131,37 @@ class RetroArchModuleTest {
         assertEquals(ra("states/mGBA"), mod.targetDirFor(fs(), d, ItemKind.State, "retroarch/Game", "auto", "mGBA"))
         assertThrows(ModuleException::class.java) { mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/Game", "srm", "..") }
         assertThrows(ModuleException::class.java) { mod.targetDirFor(fs(), d, ItemKind.Save, "retroarch/a/b", "srm", "") }
+    }
+
+    @Test fun hash_in_filename_not_treated_as_archive_separator() {
+        withCfg()
+        put(ra("playlists/a.lpl"), """{"items":[{"path":"/roms/Game #1.gba"},{"path":"/roms/Pack.ZIP#In #2.gba"},{"path":"/roms/Zipped.zip"}]}""")
+        val keys = m().installedGames(fs(), detect(), none).map { it.gameKey }.toSet()
+        assertEquals(setOf("retroarch/Game #1", "retroarch/In #2", "retroarch/Zipped"), keys)
+    }
+
+    @Test fun oversized_playlist_skipped() {
+        withCfg()
+        put(ra("playlists/ok.lpl"), """{"items":[{"path":"/r/Ok.gba"}]}""")
+        File(ra("playlists/big.lpl")).writeText("""{"items":[{"path":"/r/Big.gba"}]}""" + " ".repeat(16 * 1024 * 1024 + 1))
+        assertEquals(listOf("retroarch/Ok"), m().installedGames(fs(), detect(), none).map { it.gameKey })
+    }
+
+    @Test fun state_slots_validated_and_wide() {
+        withCfg()
+        put(ra("states/mGBA/G.state12"))
+        val s = m().saveItems(fs(), detect()).single()
+        assertEquals("12", s.slot)
+        val d = detect()
+        assertEquals(ra("states/mGBA"), m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "12", "mGBA"))
+        assertThrows(ModuleException::class.java) { m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "../x", "mGBA") }
+        assertThrows(ModuleException::class.java) { m().targetDirFor(fs(), d, ItemKind.State, "retroarch/G", "1a", "mGBA") }
+    }
+
+    @Test fun existing_uppercase_srm_matched() {
+        withCfg()
+        put(ra("saves/Gambatte/Game.SRM"))
+        assertEquals(ra("saves/Gambatte"), m().targetDirFor(fs(), detect(), ItemKind.Save, "retroarch/Game", "srm", "mGBA"))
     }
 
     @Test fun cfg_parser() {
