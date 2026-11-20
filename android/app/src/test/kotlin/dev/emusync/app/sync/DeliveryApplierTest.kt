@@ -43,6 +43,8 @@ class DeliveryApplierTest {
         val saves = mutableListOf<SaveUploadRequest>()
         val configs = mutableListOf<ConfigUploadRequest>()
         var saveStatus = SaveUploadStatus.Accepted
+        var configStatus = SaveUploadStatus.Accepted
+        var uploadError: Exception? = null
         private var n = 0
 
         override suspend fun register(email: String, password: String, deviceName: String) = error("unused")
@@ -57,12 +59,14 @@ class DeliveryApplierTest {
             return ByteArrayInputStream(blobs[hash] ?: throw ApiException(404, "blob_not_found", "no blob"))
         }
         override suspend fun uploadSave(req: SaveUploadRequest): SaveUploadResponse {
+            uploadError?.let { throw it }
             saves += req; n++
             return SaveUploadResponse(saveStatus, "item", "up$n", "up$n")
         }
         override suspend fun uploadConfig(req: ConfigUploadRequest): ConfigUploadResponse {
+            uploadError?.let { throw it }
             configs += req; n++
-            return ConfigUploadResponse(SaveUploadStatus.Accepted, "bundle", "cup$n")
+            return ConfigUploadResponse(configStatus, "bundle", "cup$n")
         }
         override suspend fun deliveries(): List<DeliveryDto> {
             deliveryCalls++
@@ -203,18 +207,74 @@ class DeliveryApplierTest {
         assertTrue(backupDirs("G1").isEmpty())
     }
 
-    @Test fun after_superseded_upload_head_delivery_applies() = runBlocking {
+    @Test fun after_superseded_upload_delivery_stays_unacked_then_applies() = runBlocking {
         put("saves/G1/a.sav", "losing")   // never synced
         api.saveStatus = SaveUploadStatus.Superseded
         api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "head"))
         val a = applier()
         assertEquals(1, a.applyAll().skipped)
         assertEquals(1, api.saves.size)
+        assertTrue("superseded: not acked, re-evaluated next pass", api.acks.isEmpty())
         assertEquals("losing", read("saves/G1/a.sav"))
-        api.standing = listOf(saveDelivery("d2", "G1", "a.sav" to "head"))
-        val r = a.applyAll()
-        assertEquals(DeliveryResult.Applied, ackOf("d2").result)
+        val r = a.applyAll()             // local now equals the known (adopted) version: the delivery applies
+        assertEquals(1, r.applied)
+        assertEquals(DeliveryResult.Applied, ackOf("d1").result)
         assertEquals("head", read("saves/G1/a.sav"))
+        assertEquals(1, api.saves.size)
+    }
+
+    @Test fun after_unchanged_upload_delivery_stays_unacked() = runBlocking {
+        put("saves/G1/a.sav", "same-as-head")   // never synced
+        api.saveStatus = SaveUploadStatus.Unchanged
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "newer"))
+        assertEquals(1, applier().applyAll().skipped)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("same-as-head", read("saves/G1/a.sav"))
+    }
+
+    // ---- final review I3: no silent stall on a stale cache or a failed upload ----
+
+    @Test fun applier_invalidates_cache_before_upload() = runBlocking {
+        put("saves/G1/a.sav", "aaaa"); markSynced("G1")
+        val a = applier()
+        engine.fullScan()                                  // primes the cache with "aaaa" (= known)
+        put("saves/G1/a.sav", "bbbb")                      // same size and mtime: the cache would say unchanged
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "theirs"))
+        assertEquals(1, a.applyAll().skipped)
+        assertEquals(1, api.saves.size)
+        assertEquals(h("bbbb"), api.saves.single().manifest.single().hash)
+        assertEquals(DeliveryResult.SkippedLocalChanged, ackOf("d1").result)
+        assertEquals("bbbb", read("saves/G1/a.sav"))
+    }
+
+    @Test fun applier_invalidates_cache_before_config_upload() = runBlocking {
+        put("data/main.cfg", "aaaa"); markConfigSynced()
+        val a = applier()
+        engine.fullScan()
+        put("data/main.cfg", "bbbb")
+        api.standing = listOf(configDelivery("c1", "data/main.cfg" to "theirs"))
+        assertEquals(1, a.applyAll().skipped)
+        assertEquals(h("bbbb"), api.configs.single().files.single().hash)
+        assertEquals(DeliveryResult.SkippedLocalChanged, ackOf("c1").result)
+    }
+
+    @Test fun failed_upload_of_local_change_leaves_delivery_unacked() = runBlocking {
+        put("saves/G1/a.sav", "mine")
+        api.uploadError = IOException("network down")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "theirs"))
+        val r = applier().applyAll()
+        assertEquals(1, r.failed)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("mine", read("saves/G1/a.sav"))
+    }
+
+    @Test fun failed_config_upload_leaves_delivery_unacked() = runBlocking {
+        put("data/main.cfg", "mine")
+        api.uploadError = IOException("network down")
+        api.standing = listOf(configDelivery("c1", "data/main.cfg" to "theirs"))
+        assertEquals(1, applier().applyAll().failed)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("mine", read("data/main.cfg"))
     }
 
     @Test fun local_change_against_known_hash_also_skips() = runBlocking {

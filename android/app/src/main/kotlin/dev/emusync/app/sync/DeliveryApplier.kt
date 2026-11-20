@@ -202,9 +202,8 @@ class DeliveryApplier(
                 return Outcome.Applied
             }
             if (guardHash != known?.knownManifestHash) {
-                engine.upload(m, det, local)
-                ack(d, DeliveryResult.SkippedLocalChanged)
-                return Outcome.Skipped
+                engine.invalidate(localFiles.values)   // the guard read fresh content; the engine must not trust its cache
+                return uploadedFirst(d, engine.upload(m, det, local))
             }
         }
         val untrackedOk = checkUntracked(planned, name)
@@ -256,9 +255,8 @@ class DeliveryApplier(
                 return done()
             }
             if (guardHash != known?.knownManifestHash) {
-                engine.uploadConfig(m, det)
-                ack(d, DeliveryResult.SkippedLocalChanged)
-                return Outcome.Skipped
+                engine.invalidate(bundle.values)
+                return uploadedFirst(d, engine.uploadConfig(m, det))
             }
         }
         val untrackedOk = checkUntracked(planned, name)
@@ -292,6 +290,24 @@ class DeliveryApplier(
         notifier("Vault files ready in EmuSync/vault")
         ack(d, DeliveryResult.Applied)
         return Outcome.Applied
+    }
+
+    /**
+     * Settles a delivery after the local change was uploaded first. Accepted or Conflict: the server now has the local
+     * content, ack `SkippedLocalChanged`. Superseded or Unchanged: local content now equals a known server version,
+     * so leave it un-acked and let the next pass re-evaluate it against the updated state. Null (deferred, unreadable
+     * or failed): leave it un-acked so it's retried, never acked as if the local change had reached the server.
+     */
+    private suspend fun uploadedFirst(d: DeliveryDto, status: SaveUploadStatus?): Outcome = when (status) {
+        null -> throw NoAck("local change not uploaded yet")
+        SaveUploadStatus.Superseded, SaveUploadStatus.Unchanged -> {
+            log("delivery ${d.id}: local content matches a server version ($status); re-evaluated next pass")
+            Outcome.Skipped
+        }
+        SaveUploadStatus.Accepted, SaveUploadStatus.Conflict -> {
+            ack(d, DeliveryResult.SkippedLocalChanged)
+            Outcome.Skipped
+        }
     }
 
     /**
