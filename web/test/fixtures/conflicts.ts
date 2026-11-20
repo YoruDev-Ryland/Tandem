@@ -12,7 +12,7 @@ export function side(over: Partial<ConflictSide> & Pick<ConflictSide, "versionId
   };
 }
 
-export const thorSide = side({ versionId: "v-thor", deviceId: THOR, deviceName: "Thor" });
+export const thorSide = side({ versionId: "v-thor", deviceId: THOR, deviceName: "Thor", isHead: true });
 export const odinSide = side({
   versionId: "v-odin", deviceId: ODIN, deviceName: "Odin 3",
   receivedUtc: "2026-11-17T10:12:00Z", manifestHash: "3b7e08d5cafef00d",

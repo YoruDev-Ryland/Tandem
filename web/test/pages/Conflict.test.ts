@@ -160,4 +160,48 @@ describe("Conflict", () => {
     render(Conflict);
     await screen.findByText("Nothing to decide for this game.");
   });
+
+  it("acts on the second item when the cursor moves down to it", async () => {
+    const slot = row({
+      itemId: "item-slot", kind: "State", slot: "2",
+      sides: [{ ...thorSide, versionId: "slot-thor" }, { ...odinSide, versionId: "slot-odin" }],
+    });
+    const calls = serve([firstSync, slot]);
+    render(Conflict);
+    await screen.findByRole("heading", { name: "Two different saves" });
+    dispatch("down");
+    dispatch("right");
+    dispatch("a");
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0]!.url).toContain("item-slot");
+    expect(calls[0]!.body.keepVersionId).toBe("slot-odin");
+  });
+
+  it("Keep both on the second item sends that item and its side", async () => {
+    const slot = row({
+      itemId: "item-slot", kind: "State", slot: "2",
+      sides: [{ ...thorSide, versionId: "slot-thor" }, { ...odinSide, versionId: "slot-odin" }],
+    });
+    const calls = serve([firstSync, slot]);
+    render(Conflict);
+    await screen.findByRole("heading", { name: "Two different saves" });
+    await fireEvent.click(screen.getAllByRole("button", { name: "Keep both" })[1]!);
+    await fireEvent.click(await screen.findByRole("button", { name: "Keep both and continue" }));
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0]!.url).toContain("item-slot");
+    expect(calls[0]!.body).toEqual({ choice: "KeepBoth", keepVersionId: "slot-thor", variantName: "Odin 3 run" });
+  });
+
+  it("with three sides, Keep both lets the server label each kept-aside save and the dialog names them all", async () => {
+    const third = side({ versionId: "v-ayn", deviceId: AYN, deviceName: "Ayn", manifestHash: "aaaa1111bbbb" });
+    const calls = serve([row({ sides: [thorSide, odinSide, third] })]);
+    render(Conflict);
+    await screen.findByRole("heading", { name: "Thor" });
+    expect(screen.queryByLabelText("Name the other")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Keep both" }));
+    await screen.findByText(/Odin 3's and Ayn's stay on the server/);
+    await fireEvent.click(screen.getByRole("button", { name: "Keep both and continue" }));
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0]!.body).toEqual({ choice: "KeepBoth", keepVersionId: "v-thor", variantName: null });
+  });
 });

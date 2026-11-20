@@ -52,31 +52,41 @@ describe("Conflicts", () => {
     await screen.findByText("Nothing to decide.");
   });
 
-  it("with two devices, the bulk actions sit on X and Y and call bulkFirstSync for that device", async () => {
+  it("with two devices, X and Y act for that device: the head's device keeps the server copy, the other uploads its own", async () => {
     const calls = serve([firstSync, row({ itemId: "item-2", gameKey: "K2", displayName: "Two" }), concurrent]);
     render(Conflicts);
     await screen.findByText("Pokémon Brilliant Diamond");
+    // Thor's save is the head, so keeping it means telling the server to use its own for Odin 3's conflicting upload.
     dispatch("x");
     await waitFor(() => expect(calls.length).toBe(1));
     expect(calls[0]).toEqual({
       method: "POST",
       url: "/v1/conflicts/first-sync/resolve",
-      body: { deviceId: THOR, choice: "UseDevice", itemIds: ["item-bd", "item-2"] },
+      body: { deviceId: ODIN, choice: "UseServer", itemIds: ["item-bd", "item-2"] },
     });
-    await new Promise((r) => setTimeout(r, 0));
+    await screen.findByText("Kept Thor's save for 2 games");
     dispatch("y");
     await waitFor(() => expect(calls.length).toBe(2));
-    expect(calls[1]!.body.deviceId).toBe(ODIN);
+    expect(calls[1]!.body).toEqual({ deviceId: ODIN, choice: "UseDevice", itemIds: ["item-bd", "item-2"] });
+    await screen.findByText("Kept Odin 3's save for 2 games");
   });
 
   it("with more than two devices, the bulk actions are buttons", async () => {
     const third = side({ versionId: "v-ayn", deviceId: AYN, deviceName: "Ayn" });
-    const calls = serve([row({ sides: [thorSide, { ...thorSide, versionId: "v-o", deviceId: ODIN, deviceName: "Odin 3" }, third] })]);
+    const calls = serve([row({ sides: [thorSide, { ...thorSide, isHead: false, versionId: "v-o", deviceId: ODIN, deviceName: "Odin 3" }, third] })]);
     render(Conflicts);
     await screen.findByText("Pokémon Brilliant Diamond");
     await fireEvent.click(screen.getByRole("button", { name: "Use Ayn's for all first-sync games" }));
     await waitFor(() => expect(calls.length).toBe(1));
     expect(calls[0]!.body).toEqual({ deviceId: AYN, choice: "UseDevice", itemIds: ["item-bd"] });
+    await screen.findByText("Kept Ayn's save for 1 game");
+    await new Promise((r) => setTimeout(r, 0));
+    await fireEvent.click(screen.getByRole("button", { name: "Use Thor's for all first-sync games" }));
+    await waitFor(() => expect(calls.length).toBe(3));
+    expect(calls.slice(1).map((c) => c.body)).toEqual([
+      { deviceId: ODIN, choice: "UseServer", itemIds: ["item-bd"] },
+      { deviceId: AYN, choice: "UseServer", itemIds: ["item-bd"] },
+    ]);
   });
 
   it("offers no bulk action when no conflict is a first sync", async () => {

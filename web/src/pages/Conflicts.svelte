@@ -23,9 +23,12 @@
   const item = (r: ConflictRow) => (r.kind === "State" ? `Slot ${r.slot ?? ""}`.trim() : "Save");
   const names = (r: ConflictRow) => r.sides.map((s) => s.deviceName ?? "Unknown device").join(" and ");
 
+  type Bulk = { deviceId: string; name: string; itemIds: string[] };
+  type Call = { deviceId: string; choice: "UseDevice" | "UseServer"; itemIds: string[] };
+
   /** Devices with a side in a first-sync conflict, in the order they first appear, with their items. */
   const bulk = $derived.by(() => {
-    const by = new Map<string, { deviceId: string; name: string; itemIds: string[] }>();
+    const by = new Map<string, Bulk>();
     for (const r of rows) {
       if (r.reason !== "FirstSync") continue;
       for (const s of r.sides) {
@@ -37,6 +40,28 @@
     }
     return [...by.values()];
   });
+
+  /**
+   * Keeping a device's saves. Where its save is the server's current one, the server holds it already, so the other
+   * devices' uploads are the ones to set aside (UseServer for them); otherwise its own upload replaces the server's.
+   */
+  function plan(d: Bulk): Call[] {
+    const calls = new Map<string, Call>();
+    const add = (deviceId: string, choice: Call["choice"], itemId: string) => {
+      const k = `${deviceId}|${choice}`;
+      const c = calls.get(k) ?? { deviceId, choice, itemIds: [] };
+      c.itemIds.push(itemId);
+      calls.set(k, c);
+    };
+    for (const r of rows) {
+      if (r.reason !== "FirstSync" || !d.itemIds.includes(r.itemId)) continue;
+      const mine = r.sides.find((s) => s.deviceId === d.deviceId);
+      if (!mine) continue;
+      if (!mine.isHead) add(d.deviceId, "UseDevice", r.itemId);
+      else for (const o of r.sides) if (o.deviceId && !o.isHead) add(o.deviceId, "UseServer", r.itemId);
+    }
+    return [...calls.values()];
+  }
   const label = (name: string) => `Use ${name}'s for all first-sync games`;
   const pair = $derived(bulk.length === 2);
 
@@ -44,12 +69,16 @@
   let busy = $state(false);
   let failure = $state<unknown>(undefined);
 
-  async function useDevice(d: { deviceId: string; itemIds: string[] } | undefined) {
+  let done = $state("");
+
+  async function useDevice(d: Bulk | undefined) {
     if (!d || busy) return;
     busy = true;
     failure = undefined;
+    done = "";
     try {
-      await bulkFirstSync(d.deviceId, "UseDevice", d.itemIds);
+      for (const c of plan(d)) await bulkFirstSync(c.deviceId, c.choice, c.itemIds);
+      done = `Kept ${d.name}'s save for ${d.itemIds.length === 1 ? "1 game" : `${d.itemIds.length} games`}`;
       conflicts.reload();
     } catch (e) {
       failure = e;
@@ -108,6 +137,7 @@
       {/if}
       {#if failure}<div class="fail"><ErrorLine error={failure} /></div>{/if}
     {/if}
+    {#if done}<p class="done" role="status">{done}</p>{/if}
   </section>
 
   <HintBar
@@ -149,6 +179,12 @@
     margin-top: 24px;
     padding: 20px 16px 0;
     border-top: 1px solid var(--rule);
+  }
+  .done {
+    margin: 0;
+    padding: 16px 16px 0;
+    color: var(--ink2);
+    font-size: 15px;
   }
   .fail {
     padding: 12px 16px 0;

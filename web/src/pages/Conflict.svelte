@@ -36,6 +36,7 @@
       ? `${joinNames(r.sides.map(name))} each had a save before they first synced.`
       : "Both devices changed this save before syncing.";
   const heading = (r: ConflictRow) => (r.kind === "State" ? `Slot ${r.slot ?? ""}`.trim() : "Save");
+  const possessives = (sides: ConflictSide[]) => joinNames(sides.map((x) => `${name(x)}'s`));
   const files = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
 
   /** The cursor: which item, and which of its sides. */
@@ -74,14 +75,16 @@
   const keep = (r: ConflictRow, s: ConflictSide) => send(r.itemId, { choice: "KeepVersion", keepVersionId: s.versionId, variantName: null });
 
   /** Chosen when the dialog opens; a live reload must not change what Keep both acts on. */
-  let target = $state<{ itemId: string; versionId: string; keepName: string; otherName: string; variantName: string } | undefined>();
+  let target = $state<{ itemId: string; versionId: string; keepName: string; others: string; variantName: string | null } | undefined>();
   let confirming = $state(false);
   function openBoth() {
     const r = current;
     const s = focusSide;
     if (!r || !s || busy) return;
-    const o = otherOf(r, s);
-    target = { itemId: r.itemId, versionId: s.versionId, keepName: name(s), otherName: o ? name(o) : "the other", variantName: nameFor(r).trim() || defaultName(r, s) };
+    const others = r.sides.filter((x) => x.versionId !== s.versionId);
+    // With more than two saves the server labels each one "From {device}"; one typed name would stick to all of them.
+    const variantName = r.sides.length > 2 ? null : nameFor(r).trim() || defaultName(r, s);
+    target = { itemId: r.itemId, versionId: s.versionId, keepName: name(s), others: possessives(others), variantName };
     confirming = true;
   }
   function confirmBoth() {
@@ -181,12 +184,16 @@
               <div class="b">Keep both</div>
               <div class="m">The devices get the one you keep. The other stays on the server as a named copy you can restore later.</div>
             </div>
+            {#if r.sides.length > 2}
+              <p class="m">The others are kept as named copies.</p>
+            {:else}
             <Field
               inline
               label="Name the other"
               bind:value={() => nameFor(r), (v) => (typed[r.itemId] = v)}
               onfocus={() => (sec = i)}
             />
+            {/if}
             <Button
               glyph="x"
               disabled={busy}
@@ -204,7 +211,10 @@
 
   <Dialog bind:open={confirming} title="Keep both saves?">
     {#if target}
-      <p class="m">The devices get {target.keepName}'s save. {target.otherName}'s stays on the server as “{target.variantName}”, and you can restore it later.</p>
+      <p class="m">
+        The devices get {target.keepName}'s save.
+        {#if target.variantName}{target.others} stays on the server as “{target.variantName}”{:else}{target.others} stay on the server as named copies{/if}, and you can restore {target.variantName ? "it" : "them"} later.
+      </p>
       <div class="row">
         <Button variant="primary" onclick={confirmBoth}>Keep both and continue</Button>
         <Button onclick={() => (confirming = false)}>Cancel</Button>
