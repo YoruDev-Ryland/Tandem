@@ -6,6 +6,8 @@ using EmuSync.Server.Devices;
 using EmuSync.Server.Events;
 using EmuSync.Server.Http;
 using EmuSync.Server.Pairing;
+using EmuSync.Server.Saves;
+using System.Text.Json.Serialization;
 
 namespace EmuSync.Server;
 
@@ -25,6 +27,9 @@ public static class ServerSetup
         builder.Services.AddScoped<BlobService>();
         builder.Services.AddSingleton<IDomainEvents, DomainEvents>();
         builder.Services.AddScoped<DeviceService>();
+        builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+        builder.Services.AddSingleton<UserLocks>();
+        builder.Services.AddScoped<SaveService>();
     }
 
     /// <summary>Builds the pipeline and maps endpoints. Each feature adds one line here.</summary>
@@ -45,5 +50,6 @@ public static class ServerSetup
         app.MapDeviceEndpoints();
         app.MapPairingEndpoints();
         app.MapBlobEndpoints();
+        app.MapSaveEndpoints();
     }
 }

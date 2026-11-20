@@ -486,6 +486,9 @@ namespace EmuSync.Server.Data.Migrations.Postgres
                     b.Property<DateTimeOffset>("ReceivedUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool>("Resolved")
+                        .HasColumnType("boolean");
+
                     b.Property<int>("Seq")
                         .HasColumnType("integer");
 

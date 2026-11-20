@@ -1,5 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using EmuSync.Protocol;
 
 namespace EmuSync.Server.Tests.Infrastructure;
@@ -9,9 +11,15 @@ public static class TestApi
 {
     public const string Password = "correct horse battery";
 
+    /// <summary>The server's wire format: web defaults with enums as their declared names.</summary>
+    public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
+
     public static async Task<T> ReadAsync<T>(this HttpResponseMessage response)
     {
-        var value = await response.Content.ReadFromJsonAsync<T>();
+        var value = await response.Content.ReadFromJsonAsync<T>(Json);
         return value ?? throw new InvalidOperationException("Response body was empty.");
     }
 
@@ -55,5 +63,9 @@ public static class TestApi
     }
 
     public static Task<HttpResponseMessage> PatchAsJsonAsync<T>(this HttpClient client, string url, T body) =>
-        client.PatchAsync(url, JsonContent.Create(body));
+        client.PatchAsync(url, JsonContent.Create(body, options: Json));
+
+    /// <summary>POST with the server's wire format (enums as strings).</summary>
+    public static Task<HttpResponseMessage> PostJsonAsync<T>(this HttpClient client, string url, T body) =>
+        client.PostAsync(url, JsonContent.Create(body, options: Json));
 }
