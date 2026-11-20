@@ -23,10 +23,16 @@ private val OCTET = "application/octet-stream".toMediaType()
 @Serializable
 private data class ErrorBody(val code: String? = null, val message: String? = null)
 
+fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+    .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+    .writeTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+    .build()
+
 class ApiClient(
     private val baseUrl: String,
     private val deviceKey: String?,
-    private val http: OkHttpClient = OkHttpClient(),
+    private val http: OkHttpClient = defaultHttpClient(),
 ) : Api {
     private fun req(path: String): Request.Builder {
         val b = Request.Builder().url(baseUrl + path).header("EmuSync-Protocol", PROTOCOL_VERSION)

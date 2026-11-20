@@ -7,7 +7,7 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
 @Serializable enum class ItemKind { Save, State }
 @Serializable enum class SaveUploadStatus { Accepted, Unchanged, Conflict }
-@Serializable enum class DeliveryKind { Save, State, Config, Vault }
+@Serializable enum class DeliveryKind { Save, Config, Vault }
 @Serializable enum class DeliveryResult { Applied, SkippedLocalChanged, Failed }
 
 @Serializable data class RegisterRequest(val email: String, val password: String, val deviceName: String, val platform: String)
@@ -45,8 +45,8 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val emulatorId: String,
     val kind: ItemKind,
     val gameKey: String,
-    val slot: String? = null,
-    val core: String? = null,
+    val slot: String,
+    val core: String,
     val baseVersionId: String? = null,
     val manifest: List<ManifestEntry>,
     val displayName: String? = null,
@@ -82,6 +82,9 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val core: String? = null,
     val manifest: List<ManifestEntry> = emptyList(),
     val missingLocalKeys: List<String>? = null,
-)
+) {
+    val slotOrEmpty: String get() = slot ?: ""
+    val coreOrEmpty: String get() = core ?: ""
+}
 @Serializable data class DeliveryList(val items: List<DeliveryDto> = emptyList())
 @Serializable data class AckRequest(val result: DeliveryResult, val detail: String? = null)

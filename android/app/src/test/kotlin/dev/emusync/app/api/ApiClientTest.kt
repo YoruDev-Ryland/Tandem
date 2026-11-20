@@ -53,11 +53,21 @@ class ApiClientTest {
         server.enqueue(MockResponse.Builder().code(200).body(
             """{"status":"Accepted","itemId":"i","versionId":"v","headVersionId":"h","extra":1}""").build())
         val resp = ApiClient(base(), "k").uploadSave(
-            SaveUploadRequest("e", ItemKind.Save, "g", null, null, null, listOf(ManifestEntry("a", "h", 1)), null))
+            SaveUploadRequest("e", ItemKind.Save, "g", "", "", null, listOf(ManifestEntry("a", "h", 1)), null))
         assertEquals(SaveUploadStatus.Accepted, resp.status)
         val body = server.takeRequest().body!!.utf8()
         assertTrue(body, body.contains("\"kind\":\"Save\""))
         assertTrue(body, body.contains("\"manifest\""))
+    }
+
+    @Test fun uploadSave_sends_empty_slot_and_core() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(200).body(
+            """{"status":"Accepted","itemId":"i","versionId":"v","headVersionId":"h"}""").build())
+        ApiClient(base(), "k").uploadSave(
+            SaveUploadRequest("e", ItemKind.Save, "g", "", "", null, listOf(ManifestEntry("a", "h", 1)), null))
+        val body = server.takeRequest().body!!.utf8()
+        assertTrue(body, body.contains("\"slot\":\"\""))
+        assertTrue(body, body.contains("\"core\":\"\""))
     }
 
     @Test fun putBlob_streams_body_with_octet_stream() = runBlocking {
