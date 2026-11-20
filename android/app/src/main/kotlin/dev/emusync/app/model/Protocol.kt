@@ -21,7 +21,7 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 @Serializable data class EmulatorStatus(
     val emulatorId: String,
     val `package`: String,
-    val version: String? = null,
+    val version: String,                // required by the server; "unknown" when the package has no versionName
     val cores: List<String>? = null,
 )
 

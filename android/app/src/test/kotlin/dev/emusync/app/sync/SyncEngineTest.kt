@@ -422,11 +422,15 @@ class SyncEngineTest {
         )
     }
 
-    @Test fun status_without_sd_and_unknown_version_is_null() = runBlocking {
+    @Test fun status_without_sd_and_unknown_version_sends_unknown() = runBlocking {
         File(storage, "emulated/0").mkdirs()
         engine(versionOf = { null }).fullScan()
         assertFalse(api.statuses.single().roots.containsKey("{SD}"))
-        assertNull(api.statuses.single().emulators.single().version)
+        val st = api.statuses.single()
+        assertEquals("unknown", st.emulators.single().version)
+        // the server requires a non-null version: it must be on the wire
+        val wire = ProtocolJson.encodeToString(DeviceStatusRequest.serializer(), st)
+        assertTrue(wire, wire.contains("\"version\":\"unknown\""))
     }
 
     @Test fun duplicate_store_keys_upload_once_and_do_not_flip() = runBlocking {

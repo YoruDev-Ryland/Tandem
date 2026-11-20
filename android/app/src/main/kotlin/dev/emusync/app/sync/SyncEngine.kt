@@ -455,7 +455,9 @@ class SyncEngine(
 
     private suspend fun reportStatus(found: List<Pair<EmulatorModule, Detected>>) {
         val emulators = found.map { (m, d) ->
-            EmulatorStatus(m.emulatorId, d.pkg, versionOf(d.pkg), moduleCall(m, "cores") { m.cores(fs, d) })
+            // The server requires a version: send "unknown" rather than omitting it (which 400s the whole status).
+            EmulatorStatus(m.emulatorId, d.pkg, versionOf(d.pkg)?.takeIf { it.isNotBlank() } ?: UNKNOWN_VERSION,
+                moduleCall(m, "cores") { m.cores(fs, d) })
         }
         val roots = LinkedHashMap<String, String>()
         roots["{INTERNAL}"] = "$storageRoot/emulated/0"
@@ -514,6 +516,7 @@ class SyncEngine(
     private fun under(path: String, base: String) = path == base || path.startsWith("$base/")
 
     private companion object {
+        const val UNKNOWN_VERSION = "unknown"
         val sdName = Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")
     }
 }
