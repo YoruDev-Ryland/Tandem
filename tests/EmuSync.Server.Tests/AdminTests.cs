@@ -67,6 +67,27 @@ public class AdminTests
     }
 
     [Fact]
+    public async Task Deleting_a_user_removes_its_blob_directory()
+    {
+        using var factory = new ServerFactory();
+        factory.Settings["EmuSync:AllowRegistration"] = "true";
+        await factory.Register("admin@example.com");
+        var admin = await factory.WebLogin("admin@example.com");
+        var (user, userKey) = await factory.Register("user@example.com");
+        var (other, otherKey) = await factory.Register("other@example.com");
+        await Fixtures.Manifest(user, ("data.dat", "hello"u8.ToArray()));
+        await Fixtures.Manifest(other, ("data.dat", "hello"u8.ToArray()));
+        var userDir = Path.Combine(factory.DataDirectory, "blobs", userKey.UserId.ToString("N"));
+        var otherDir = Path.Combine(factory.DataDirectory, "blobs", otherKey.UserId.ToString("N"));
+        Assert.True(Directory.Exists(userDir));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"/v1/admin/users/{userKey.UserId}")).StatusCode);
+
+        Assert.False(Directory.Exists(userDir));
+        Assert.True(Directory.Exists(otherDir)); // only that user's files
+    }
+
+    [Fact]
     public async Task Admin_creates_lists_and_deletes_users()
     {
         using var factory = new ServerFactory();
