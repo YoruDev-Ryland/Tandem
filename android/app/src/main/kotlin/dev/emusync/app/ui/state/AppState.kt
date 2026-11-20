@@ -12,12 +12,11 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.stateIn
 
 enum class ServerConn { Connected, Offline, SignedOut }
 
-data class TopStatus(val deviceName: String?, val server: ServerConn, val shizuku: ShizukuState, val signedIn: Boolean)
+data class TopStatus(val deviceName: String?, val server: ServerConn, val shizuku: ShizukuState, val signedIn: Boolean, val lastSync: java.time.Instant? = null)
 
 sealed interface EmuRowState {
     data class Open(val waiting: Int) : EmuRowState
@@ -35,38 +34,44 @@ class AppState(
     private val store: StateStore,
     shizuku: Flow<ShizukuState>,
     scope: CoroutineScope,
-    deviceName: Flow<String?> = MutableStateFlow(null),
-    configGroups: Flow<Map<String, String>> = MutableStateFlow(emptyMap()),
+    server: ServerView,
     private val registry: ModuleRegistry = ModuleRegistry.default(),
 ) {
-    constructor(graph: AppGraph, store: StateStore, gate: ShizukuGate, scope: CoroutineScope) :
-        this(graph, store, gate.state, scope)
+    companion object {
+        /** Production wiring: the Shizuku gate and the shared [ServerRepo]. */
+        fun create(graph: AppGraph, store: StateStore, gate: ShizukuGate, scope: CoroutineScope, server: ServerRepo) =
+            AppState(graph, store, gate.state, scope, server)
+    }
 
     val waiting: StateFlow<List<WaitingDelivery>> = graph.waiting
     val running: StateFlow<Set<String>> = graph.running
 
-    val top: StateFlow<TopStatus> = combine(store.changes, shizuku, graph.snapshots, deviceName) { _, z, snap, name ->
+    val top: StateFlow<TopStatus> = combine(
+        store.changes, shizuku, graph.snapshots, server.deviceName, server.games,
+    ) { _, z, snap, name, games ->
         val key = store.deviceKey
         TopStatus(
             deviceName = name,
             server = when {
                 key == null -> ServerConn.SignedOut
-                snap.online -> ServerConn.Connected
+                games.offline -> ServerConn.Offline
+                snap.online || games.updatedAt != null -> ServerConn.Connected
                 else -> ServerConn.Offline
             },
             shizuku = z,
             signedIn = key != null,
+            lastSync = games.updatedAt,
         )
     }.stateIn(scope, SharingStarted.Eagerly, TopStatus(null, ServerConn.SignedOut, ShizukuState.NotRunning, false))
 
     val emulators: StateFlow<List<EmulatorRowUi>> =
-        combine(graph.snapshots, graph.waiting, configGroups) { snap, waits, groups ->
+        combine(graph.snapshots, graph.waiting, graph.running, server.configGroups) { snap, waits, run, groups ->
             val found = snap.emulators.associateBy { it.detected.emulatorId }
             registry.all().map { m ->
                 val info = found[m.emulatorId]
                 val n = waits.count { it.emulatorId == m.emulatorId }
                 val state = when {
-                    n > 0 -> EmuRowState.Open(n)
+                    n > 0 || m.emulatorId in run -> EmuRowState.Open(n)
                     info == null -> EmuRowState.NotSetUp
                     groups[m.emulatorId] != null -> EmuRowState.ConfigGroup(groups.getValue(m.emulatorId))
                     info.itemCount > 0 -> EmuRowState.Saves(info.itemCount)

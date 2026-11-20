@@ -105,4 +105,67 @@ class ServerRepoTest {
         assertFalse(r.games.value.offline); assertEquals(500, r.games.value.error?.status)
         assertNull(r.games.value.value)
     }
+
+    @Test fun serialization_failure_is_an_error_not_offline() = runTest {
+        val f = Fake().apply { down = true }
+        val r = ServerRepo({ api(f) { kotlinx.serialization.SerializationException("bad json") } }, backgroundScope)
+        r.start(); runCurrent()
+        assertFalse(r.games.value.offline)
+        assertNotNull(r.games.value.error)
+        assertFalse(r.games.value.error is OfflineError)
+    }
+
+    @Test fun io_failures_are_offline_with_marker() = runTest {
+        for (e in listOf<() -> Exception>({ java.net.SocketTimeoutException("t") }, { java.net.ConnectException("c") }, { java.net.UnknownHostException("u") })) {
+            val f = Fake().apply { down = true }
+            val r = ServerRepo({ api(f, e) }, backgroundScope)
+            r.start(); runCurrent()
+            assertTrue(r.games.value.offline)
+            assertTrue(r.games.value.error is OfflineError)
+        }
+    }
+
+    @Test fun signing_out_clears_everything() = runTest {
+        val f = Fake().apply { games = listOf(row)
+            groups = ConfigOverview(listOf(EmulatorConfigRow("dolphin",
+                listOf(GroupRow("g1", "H", listOf(DeviceRef("d1", "Deck")), null, false)), emptyList()))) }
+        var signedIn = true
+        val r = ServerRepo({ if (signedIn) api(f) else null }, backgroundScope, deviceId = { "d1" })
+        r.start(); runCurrent()
+        assertEquals(listOf(row), r.games.value.value)
+        signedIn = false
+        r.refresh(); runCurrent()
+        assertEquals(Loaded<List<GameRow>>(), r.games.value)
+        assertEquals(Loaded<List<ConflictRow>>(), r.conflicts.value)
+        assertTrue(r.configGroups.value.isEmpty()); assertNull(r.deviceName.value)
+    }
+
+    @Test fun burst_of_nudges_coalesces_to_one_running_plus_one_pending() = runTest {
+        val f = Fake(); val n = MutableStateFlow(0L)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val slow = object : Api by unused {
+            override suspend fun games(emulator: String?): List<GameRow> { f.gameCalls++; gate.await(); return emptyList() }
+            override suspend fun conflicts(): List<ConflictRow> = emptyList()
+            override suspend fun configs() = ConfigOverview(emptyList())
+            override suspend fun me() = DeviceSummary("d1", "Deck", "android", null, null, true)
+        }
+        val r = ServerRepo({ slow }, backgroundScope, n); r.start(); runCurrent()
+        for (i in 1..10) { n.value = i.toLong(); runCurrent() }
+        gate.complete(Unit); runCurrent()
+        assertEquals(2, f.gameCalls)   // the first (blocked) one plus a single pending
+    }
+
+    @Test fun offline_failure_short_circuits_remaining_calls() = runTest {
+        val f = Fake().apply { down = true }
+        var other = 0
+        val a = object : Api by unused {
+            override suspend fun games(emulator: String?): List<GameRow> = throw IOException("down")
+            override suspend fun conflicts(): List<ConflictRow> { other++; return emptyList() }
+            override suspend fun configs(): ConfigOverview { other++; return ConfigOverview(emptyList()) }
+            override suspend fun me(): DeviceSummary { other++; throw IOException() }
+        }
+        val r = ServerRepo({ a }, backgroundScope); r.start(); runCurrent()
+        assertEquals(0, other)
+        assertTrue(r.conflicts.value.offline)
+    }
 }

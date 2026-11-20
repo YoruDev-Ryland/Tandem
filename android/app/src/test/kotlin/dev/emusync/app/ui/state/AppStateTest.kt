@@ -2,7 +2,9 @@ package dev.emusync.app.ui.state
 
 import dev.emusync.app.fs.ShizukuGate
 import dev.emusync.app.fs.ShizukuState
+import dev.emusync.app.model.GameRow
 import dev.emusync.app.modules.Detected
+import java.time.Instant
 import dev.emusync.app.service.AppGraph
 import dev.emusync.app.service.EmulatorInfo
 import dev.emusync.app.service.ServiceSnapshot
@@ -31,9 +33,14 @@ class AppStateTest {
         AppGraph.snapshot.value = ServiceSnapshot()
     }
 
-    private fun TestScope.state(store: StateStore, names: MutableStateFlow<String?> = MutableStateFlow(null),
-                                groups: MutableStateFlow<Map<String, String>> = MutableStateFlow(emptyMap())) =
-        AppState(AppGraph, store, shizuku, backgroundScope + UnconfinedTestDispatcher(testScheduler), names, groups)
+    private class FakeServer(
+        override val deviceName: MutableStateFlow<String?> = MutableStateFlow(null),
+        override val configGroups: MutableStateFlow<Map<String, String>> = MutableStateFlow(emptyMap()),
+        override val games: MutableStateFlow<Loaded<List<GameRow>>> = MutableStateFlow(Loaded()),
+    ) : ServerView
+
+    private fun TestScope.state(store: StateStore, server: FakeServer = FakeServer()) =
+        AppState(AppGraph, store, shizuku, backgroundScope + UnconfinedTestDispatcher(testScheduler), server)
 
     private fun store() = StateStore(tmp.newFile("s.json").also { it.delete() })
 
@@ -44,8 +51,8 @@ class AppStateTest {
     }
 
     @Test fun top_follows_store_snapshot_and_name() = runTest {
-        val st = store(); val names = MutableStateFlow<String?>("Deck")
-        val s = state(st, names)
+        val st = store(); val srv = FakeServer(deviceName = MutableStateFlow("Deck"))
+        val s = state(st, srv)
         st.deviceKey = "k"
         assertEquals(ServerConn.Offline, s.top.value.server)
         AppGraph.snapshot.value = ServiceSnapshot(running = true, online = true)
@@ -62,7 +69,7 @@ class AppStateTest {
 
     @Test fun emulator_rows_cover_all_modules_and_states() = runTest {
         val groups = MutableStateFlow(emptyMap<String, String>())
-        val s = state(store(), groups = groups)
+        val s = state(store(), FakeServer(configGroups = groups))
         fun det(id: String) = Detected(id, "pkg", "1", "/d")
         AppGraph.snapshot.value = ServiceSnapshot(emulators = listOf(
             EmulatorInfo(det("eden"), 3), EmulatorInfo(det("dolphin"), 2), EmulatorInfo(det("retroarch"), 0),
@@ -92,5 +99,35 @@ class AppStateTest {
         AppGraph.sessionFlows.publishRunning(token, emptySet())
         assertEquals(EmuRowState.Saves(1), s.emulators.value.first { it.id == "eden" }.state)
         assertEquals(emptyList<WaitingDelivery>(), s.waiting.value)
+    }
+
+    @Test fun running_emulator_with_nothing_waiting_is_open_zero() = runTest {
+        val s = state(store())
+        AppGraph.snapshot.value = ServiceSnapshot(emulators = listOf(EmulatorInfo(Detected("eden", "p", "1", "/d"), 4)))
+        assertEquals(EmuRowState.Saves(4), s.emulators.value.first { it.id == "eden" }.state)
+        AppGraph.sessionFlows.publishRunning(token, setOf("eden"))
+        assertEquals(EmuRowState.Open(0), s.emulators.value.first { it.id == "eden" }.state)
+        AppGraph.sessionFlows.publishRunning(token, emptySet())
+        assertEquals(EmuRowState.Saves(4), s.emulators.value.first { it.id == "eden" }.state)
+    }
+
+    @Test fun connection_combines_sse_and_repo() = runTest {
+        val st = store(); val srv = FakeServer()
+        val s = state(st, srv)
+        assertEquals(ServerConn.SignedOut, s.top.value.server)
+        st.deviceKey = "k"
+        assertEquals(ServerConn.Offline, s.top.value.server)
+        val t = Instant.parse("2026-01-01T00:00:00Z")
+        // repo refresh succeeded while SSE is down: still connected
+        srv.games.value = Loaded(emptyList(), t)
+        assertEquals(ServerConn.Connected, s.top.value.server)
+        // repo reports offline: offline, with its last good time
+        srv.games.value = Loaded(emptyList(), t, dev.emusync.app.ui.state.OfflineError("x"), true)
+        assertEquals(ServerConn.Offline, s.top.value.server)
+        assertEquals(t, s.top.value.lastSync)
+        // SSE up, repo has not failed: connected
+        srv.games.value = Loaded()
+        AppGraph.snapshot.value = ServiceSnapshot(running = true, online = true)
+        assertEquals(ServerConn.Connected, s.top.value.server)
     }
 }

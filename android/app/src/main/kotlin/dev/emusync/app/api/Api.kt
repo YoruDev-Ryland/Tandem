@@ -3,7 +3,7 @@ package dev.emusync.app.api
 import dev.emusync.app.model.*
 import java.io.InputStream
 
-class ApiException(val status: Int, val code: String?, message: String?) : Exception(message)
+open class ApiException(val status: Int, val code: String?, message: String?) : Exception(message)
 
 interface Api {
     suspend fun register(email: String, password: String, deviceName: String): DeviceKeyResponse
