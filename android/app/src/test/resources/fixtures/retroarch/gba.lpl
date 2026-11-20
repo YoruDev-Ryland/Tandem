@@ -1,0 +1,172 @@
+{
+  "version": "1.5",
+  "default_core_path": "/data/user/0/com.retroarch.aarch64/cores/mgba_libretro_android.so",
+  "default_core_name": "Nintendo - Game Boy Advance (mGBA)",
+  "label_display_mode": 0,
+  "right_thumbnail_mode": 0,
+  "left_thumbnail_mode": 0,
+  "thumbnail_match_mode": 0,
+  "sort_mode": 0,
+  "items": [
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Castlevania - Aria of Sorrow.zip#Castlevania - Aria of Sorrow (USA).gba",
+      "label": "Castlevania - Aria of Sorrow (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "35536183|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Castlevania - Circle of the Moon.zip#Castlevania - Circle of the Moon (USA).gba",
+      "label": "Castlevania - Circle of the Moon (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "1CC059A4|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Castlevania - Harmony of Dissonance.zip#Castlevania - Harmony of Dissonance (USA).gba",
+      "label": "Castlevania - Harmony of Dissonance (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "88C1B562|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Castlevania Double Pack.zip#Castlevania Double Pack (USA).gba",
+      "label": "Castlevania Double Pack (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "DBCECC7D|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Final Fantasy I & II - Dawn of Souls.zip#Final Fantasy I & II - Dawn of Souls (USA).gba",
+      "label": "Final Fantasy I & II - Dawn of Souls (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "1B39CDAB|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Final Fantasy IV Advance.zip#Final Fantasy IV Advance (USA).gba",
+      "label": "Final Fantasy IV Advance (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "FEEEBDE4|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Final Fantasy Tactics Advance.zip#Final Fantasy Tactics Advance (USA).gba",
+      "label": "Final Fantasy Tactics Advance (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "5645E56C|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Final Fantasy V Advance.zip#Final Fantasy V Advance (USA).gba",
+      "label": "Final Fantasy V Advance (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "7A24AB0C|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Final Fantasy VI Advance.zip#Final Fantasy VI Advance (USA).gba",
+      "label": "Final Fantasy VI Advance (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "D708F5AB|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Golden Sun.zip#Golden Sun.gba",
+      "label": "Golden Sun (USA, Europe)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "E1FB68E8|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Golden Sun - The Lost Age.zip#Golden Sun - The Lost Age.gba",
+      "label": "Golden Sun - The Lost Age (USA, Europe)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "606A1C4D|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Metroid - Zero Mission.zip#Metroid - Zero Mission (USA).gba",
+      "label": "Metroid - Zero Mission (USA, Australia)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "5C61A844|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Metroid Fusion.zip#Metroid Fusion (USA).gba",
+      "label": "Metroid Fusion (USA)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "6C75479C|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Pokemon - Emerald Version.zip#Pokemon - Emerald Version (USA).gba",
+      "label": "Pokemon - Emerald Version (USA, Europe)",
+      "core_path": "/data/user/0/com.retroarch.aarch64/cores/mgba_libretro_android.so",
+      "core_name": "Nintendo - Game Boy Advance (mGBA)",
+      "crc32": "1F1C08FB|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Pokemon - FireRed Version.zip#Pokemon - FireRed Version (USA).gba",
+      "label": "Pokemon - FireRed Version (USA, Europe)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "DD88761C|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Pokemon - LeafGreen Version.zip#Pokemon - LeafGreen Version (USA).gba",
+      "label": "Pokemon - LeafGreen Version (USA, Europe)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "D69C96CC|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Pokemon - Ruby Version.zip#Pokemon - Ruby Version (USA).gba",
+      "label": "Pokemon - Ruby Version (USA, Europe)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "F0815EE7|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Pokemon - Sapphire Version.zip#Pokemon - Sapphire Version (USA).gba",
+      "label": "Pokemon - Sapphire Version (USA, Europe)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "554DEDC4|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Pokemon Mystery Dungeon - Red Rescue Team.zip#Pokemon Mystery Dungeon - Red Rescue Team.gba",
+      "label": "Pokemon Mystery Dungeon - Red Rescue Team (Europe) (En,Fr,De,Es,It)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "C1D18FE4|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    },
+    {
+      "path": "/storage/EFF6-FC92/Games/gba/Sword of Mana.zip#Sword of Mana (USA, Australia).gba",
+      "label": "Sword of Mana (USA, Australia)",
+      "core_path": "DETECT",
+      "core_name": "DETECT",
+      "crc32": "7F1EAC75|crc",
+      "db_name": "Nintendo - Game Boy Advance.lpl"
+    }
+  ]
+}
