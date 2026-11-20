@@ -18,10 +18,17 @@ data class ConfigState(
 )
 
 /**
+ * One target file of an in-progress apply. [deliveredHash] is what the apply writes there, or null for a local
+ * extra the apply deletes. [backupRel] is its copy under the marker's backupDir (null: the apply created it) and
+ * [backupHash] that copy's hash.
+ */
+@Serializable
+data class MarkerFile(val deliveredHash: String?, val backupRel: String?, val backupHash: String?)
+
+/**
  * A delivery write in progress for [storeKey]. Written before the first file write and cleared atomically with the
- * state update; a live marker means the item may be half-written and must be restored from [backupDir].
- * [restore] maps backup-relative paths to the absolute files they came from; [newFiles] are absolute paths the
- * delivery created.
+ * state update. A live marker means the item may be half-written: recovery undoes only the changes whose content
+ * is still what the apply wrote ([files], keyed by absolute path). [newFiles] are absolute paths the apply created.
  */
 @Serializable
 data class ApplyMarker(
@@ -31,7 +38,7 @@ data class ApplyMarker(
     val backupDir: String?,
     val targetDir: String,
     val newFiles: List<String>,
-    val restore: Map<String, String> = emptyMap(),
+    val files: Map<String, MarkerFile> = emptyMap(),
     val name: String = storeKey,
 )
 

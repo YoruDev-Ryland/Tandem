@@ -687,27 +687,117 @@ class DeliveryApplierTest {
         }
     }.apply { packages.add("com.fake.emu") }
 
-    @Test fun marker_recovered_on_next_pass() = runBlocking {
-        put("saves/G1/a.sav", "half-new"); put("saves/G1/b.sav", "created")
-        val bdir = File(backupRoot, "crash/a.sav").apply { parentFile.mkdirs(); writeText("old") }.parentFile.path
+    private fun h(text: String) = sha(text.toByteArray())
+    private fun backupFile(rel: String, text: String) =
+        File(backupRoot, "crash/$rel").apply { parentFile.mkdirs(); writeText(text) }
+    /** A marker as left by a crash mid-write for G1; [files] keyed by path relative to the G1 dir. */
+    private fun crashMarker(files: Map<String, MarkerFile>) {
         val abs = "$root/saves/G1"
-        store.putApplyMarker(ApplyMarker(saveKey("G1"), "fake", "d0", bdir, abs, listOf("$abs/b.sav"),
-            mapOf("a.sav" to "$abs/a.sav"), "Game G1"))
+        store.putApplyMarker(ApplyMarker(saveKey("G1"), "fake", "d0", File(backupRoot, "crash").path, abs,
+            files.filterValues { it.backupRel == null }.keys.map { "$abs/$it" },
+            files.mapKeys { "$abs/${it.key}" }, "Game G1"))
+    }
+
+    @Test fun marker_recovered_on_next_pass() = runBlocking {
+        put("saves/G1/a.sav", "new"); put("saves/G1/b.sav", "created")
+        backupFile("a.sav", "old")
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old")), "b.sav" to MarkerFile(h("created"), null, null)))
         applier().applyAll()
         assertEquals("old", read("saves/G1/a.sav"))
         assertFalse(File(root, "saves/G1/b.sav").exists())
         assertTrue(store.applyMarkers().isEmpty())
     }
 
+    @Test fun recovery_restores_file_we_wrote() = runBlocking {
+        put("saves/G1/a.sav", "new"); put("saves/G1/u.sav", "u")
+        backupFile("a.sav", "old"); backupFile("x.sav", "extra"); backupFile("u.sav", "u")
+        crashMarker(mapOf(
+            "a.sav" to MarkerFile(h("new"), "a.sav", h("old")),     // we wrote it -> restored
+            "x.sav" to MarkerFile(null, "x.sav", h("extra")),       // we deleted it -> restored
+            "u.sav" to MarkerFile(h("not yet"), "u.sav", h("u")),   // never written -> left
+        ))
+        applier().applyAll()
+        assertEquals("old", read("saves/G1/a.sav"))
+        assertEquals("extra", read("saves/G1/x.sav"))
+        assertEquals("u", read("saves/G1/u.sav"))
+        assertTrue(store.applyMarkers().isEmpty())
+        assertTrue(notes.none { it.startsWith("Restore failed") })
+    }
+
+    @Test fun recovery_deletes_only_unchanged_files_we_created() = runBlocking {
+        put("saves/G1/b.sav", "new-b"); put("saves/G1/c.sav", "user-c")
+        crashMarker(mapOf(
+            "b.sav" to MarkerFile(h("new-b"), null, null),   // ours, unchanged -> deleted
+            "c.sav" to MarkerFile(h("new-c"), null, null),   // user saved over it -> kept
+            "d.sav" to MarkerFile(h("new-d"), null, null),   // never written -> nothing to do
+        ))
+        applier().applyAll()
+        assertFalse(File(root, "saves/G1/b.sav").exists())
+        assertEquals("user-c", read("saves/G1/c.sav"))
+        assertFalse(File(root, "saves/G1/d.sav").exists())
+        assertTrue(store.applyMarkers().isEmpty())
+    }
+
+    @Test fun recovery_leaves_user_changed_file_and_lets_engine_upload_it() = runBlocking {
+        put("saves/G1/a.sav", "old"); markSynced("G1")
+        put("saves/G1/a.sav", "played")   // after the crash the user played and saved
+        backupFile("a.sav", "old")
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
+        val a = applier()
+        a.applyAll()
+        assertEquals("played", read("saves/G1/a.sav"))
+        assertTrue(store.applyMarkers().isEmpty())
+        val det = module.detect(fs(), none)!!
+        assertEquals(SaveUploadStatus.Accepted, engine.upload(module, det, module.saveItems(fs(), det)[0]))
+        assertEquals(listOf(h("played")), api.saves.single().manifest.map { it.hash })
+    }
+
+    @Test fun recovery_skipped_when_detect_fails() = runBlocking {
+        put("saves/G1/a.sav", "new"); backupFile("a.sav", "old")
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
+        applier(LocalFs()).applyAll()   // emulator package not detected
+        assertEquals("new", read("saves/G1/a.sav"))
+        assertEquals(1, store.applyMarkers().size)
+        assertTrue(notes.none { it.startsWith("Restore failed") })
+    }
+
+    @Test fun fs_unavailable_during_recovery_is_not_reported() = runBlocking {
+        put("saves/G1/a.sav", "new"); backupFile("a.sav", "old")
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
+        val fs = object : LocalFs() {
+            override fun copy(src: String, dst: String) = throw FsUnavailableException("binder died")
+        }.apply { packages.add("com.fake.emu") }
+        try { applier(fs).applyAll(); fail("expected FsUnavailableException") } catch (e: FsUnavailableException) {}
+        assertEquals(1, store.applyMarkers().size)
+        assertTrue(notes.none { it.startsWith("Restore failed") })
+    }
+
+    @Test fun fs_unavailable_during_inflow_restore_is_not_reported() = runBlocking {
+        put("saves/G1/a.sav", "old-a"); markSynced("G1")
+        api.standing = listOf(saveDelivery("d1", "G1", "a.sav" to "new-a", "c.sav" to "new-c"))
+        val fs = object : LocalFs() {
+            override fun writeAtomic(path: String, data: InputStream) {
+                if (path.endsWith("/c.sav")) throw IOException("disk full")
+                super.writeAtomic(path, data)
+            }
+            override fun copy(src: String, dst: String) {
+                if (src.startsWith(backupRoot)) throw FsUnavailableException("binder died")
+                super.copy(src, dst)
+            }
+        }.apply { packages.add("com.fake.emu") }
+        try { applier(fs).applyAll(); fail("expected FsUnavailableException") } catch (e: FsUnavailableException) {}
+        assertTrue(api.acks.isEmpty())
+        assertNotNull(store.applyMarker(saveKey("G1")))
+        assertTrue(notes.none { it.startsWith("Restore failed") })
+    }
+
     @Test fun marker_recovery_waits_while_emulator_runs() = runBlocking {
-        put("saves/G1/a.sav", "half-new")
-        val bdir = File(backupRoot, "crash/a.sav").apply { parentFile.mkdirs(); writeText("old") }.parentFile.path
-        val abs = "$root/saves/G1"
-        store.putApplyMarker(ApplyMarker(saveKey("G1"), "fake", "d0", bdir, abs, emptyList(), mapOf("a.sav" to "$abs/a.sav")))
+        put("saves/G1/a.sav", "new"); backupFile("a.sav", "old")
+        crashMarker(mapOf("a.sav" to MarkerFile(h("new"), "a.sav", h("old"))))
         val fs = fs().apply { alive.add("com.fake.emu") }
         val a = applier(fs)
         a.applyAll()
-        assertEquals("half-new", read("saves/G1/a.sav"))
+        assertEquals("new", read("saves/G1/a.sav"))
         assertEquals(1, store.applyMarkers().size)
         fs.alive.clear()
         a.onEmulatorExited("fake")

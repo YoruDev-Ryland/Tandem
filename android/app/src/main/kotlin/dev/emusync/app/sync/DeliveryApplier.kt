@@ -332,30 +332,43 @@ class DeliveryApplier(
         } catch (e: Exception) {
             throw Reject("backup failed: ${e.message}")
         }
+        // Hash the copies just taken: they re-verify the guard and let recovery tell our writes from the user's.
+        val copied: Map<String, Pair<String, Long>> = try {
+            if (backupDir == null) emptyMap()
+            else toBackup.keys.filter { fs.exists("$backupDir/$it") }.associateWith { sha("$backupDir/$it") }
+        } catch (e: IOException) {
+            fs.delete(backupDir!!)
+            throw NoAck("backup unreadable: ${e.message}")
+        }
         if (t.guardHash != null) {
-            // Re-verify against the copies just taken: the local files must still be what the guard saw.
-            val now = try {
-                if (backupDir == null) null else localHash(t.local.keys.associateWith { "$backupDir/$it" })
-            } catch (e: NoAck) { null }
+            val now = if (t.local.keys.all { it in copied })
+                Manifests.hash(t.local.keys.map { copied.getValue(it).let { (h, sz) -> ManifestEntry(it, h, sz) } }) else null
             if (now != t.guardHash) {
                 backupDir?.let { fs.delete(it) }
                 throw NoAck("local files changed during the download")
             }
         }
         val created = t.files.filter { it.abs !in existed }.map { it.abs }
-        store.putApplyMarker(ApplyMarker(t.markerKey, t.backupId, d.id, backupDir, t.targetDir, created, toBackup, t.name))
+        val relOf = toBackup.entries.associate { it.value to it.key }
+        fun backed(abs: String): Pair<String?, String?> = relOf[abs]?.let { it to copied[it]?.first } ?: (null to null)
+        val delivered = t.files.map { lower(it.rel) }.toSet()
+        val extras = t.deletable.filter { lower(it) !in delivered }.mapNotNull { t.local[it] }
+        val files = LinkedHashMap<String, MarkerFile>()
+        for (p in t.files) backed(p.abs).let { (rel, h) -> files[p.abs] = MarkerFile(p.entry.hash, rel, h) }
+        for (abs in extras) backed(abs).let { (rel, h) -> files[abs] = MarkerFile(null, rel, h) }
+        val marker = ApplyMarker(t.markerKey, t.backupId, d.id, backupDir, t.targetDir, created, files, t.name)
+        store.putApplyMarker(marker)
         try {
             for (p in t.files.sortedBy { it.rel }) {
                 File(dl, p.entry.hash).inputStream().buffered().use { fs.writeAtomic(p.abs, it) }
             }
-            val delivered = t.files.map { lower(it.rel) }.toSet()
-            for (rel in t.deletable.sorted()) {
-                if (lower(rel) in delivered) continue
-                val abs = t.local[rel] ?: continue
-                if (!fs.delete(abs) && fs.exists(abs)) throw IOException("could not delete $rel")
+            for (abs in extras.sorted()) {
+                if (!fs.delete(abs) && fs.exists(abs)) throw IOException("could not delete $abs")
             }
         } catch (e: Exception) {
-            if (restore(t.name, backupDir, toBackup, created, notify = true)) store.clearApplyMarker(t.markerKey)
+            // Throws FsUnavailableException (marker kept, retried later) without a "Restore failed" notification.
+            if (undo(marker)) store.clearApplyMarker(t.markerKey)
+            else notifier("Restore failed for ${t.name} — backup at ${backupDir ?: "none"}")
             if (e is FsUnavailableException) throw e
             throw Reject("write failed: ${e.message}")
         }
@@ -366,23 +379,33 @@ class DeliveryApplier(
         }
     }
 
-    /** Restores every live marker (skipping emulators that are running); keeps and reports markers that fail. */
+    /**
+     * Recovers every live marker, under the engine lock and only while its emulator is detected and not running
+     * (vault markers have no emulator). Keeps and reports markers that can't be fully recovered.
+     * [FsUnavailableException] propagates with the marker kept and nothing reported.
+     */
     private suspend fun recoverMarkers() {
         for (mk in store.applyMarkers().values) {
-            val pkg = registry.byId(mk.emulatorId)?.let { m ->
-                try { m.detect(fs, settings)?.pkg } catch (e: ModuleException) { null } catch (e: IOException) { null }
-            }
-            if (pkg != null && fs.isProcessAlive(pkg)) {
-                log("${mk.storeKey}: restore of interrupted write waits for ${mk.emulatorId} to close")
-                continue
+            if (mk.emulatorId != "vault") {
+                val pkg = registry.byId(mk.emulatorId)?.let { m ->
+                    try { m.detect(fs, settings)?.pkg } catch (e: ModuleException) { null } catch (e: IOException) { null }
+                }
+                if (pkg == null) {
+                    log("${mk.storeKey}: ${mk.emulatorId} not detected; recovery of interrupted write postponed")
+                    continue
+                }
+                if (fs.isProcessAlive(pkg)) {
+                    log("${mk.storeKey}: recovery of interrupted write waits for ${mk.emulatorId} to close")
+                    continue
+                }
             }
             val ok = engine.withLock {
-                val ok = restore(mk.name, mk.backupDir, mk.restore, mk.newFiles, notify = false)
+                val ok = undo(mk)
                 if (ok) store.clearApplyMarker(mk.storeKey)
                 ok
             }
             if (ok) {
-                log("${mk.storeKey}: interrupted write of delivery ${mk.deliveryId} restored")
+                log("${mk.storeKey}: interrupted write of delivery ${mk.deliveryId} recovered")
                 notifiedRecovery.remove(mk.storeKey)
             } else if (notifiedRecovery.add(mk.storeKey)) {
                 notifier("Restore failed for ${mk.name} — backup at ${mk.backupDir ?: "none"}")
@@ -390,20 +413,35 @@ class DeliveryApplier(
         }
     }
 
-    /** Copies backed-up files back and removes files the delivery created. Returns false (logged) on any error. */
-    private fun restore(name: String, backupDir: String?, backedUp: Map<String, String>, created: List<String>, notify: Boolean): Boolean {
+    /**
+     * Undoes only this apply's own changes, judged by current content: a file still holding what we wrote (or, for a
+     * file we deleted, still missing) is restored from the backup, or deleted when we created it. A file that is
+     * missing or still holds its backed-up content is left alone; so is any other content (the user changed it
+     * after the crash), which the engine later uploads as a local change. Returns true when every file is handled.
+     * [FsUnavailableException] propagates.
+     */
+    private fun undo(mk: ApplyMarker): Boolean {
         val errors = mutableListOf<String>()
-        if (backupDir != null) for ((rel, abs) in backedUp) {
-            try { fs.copy("$backupDir/$rel", abs) } catch (e: Exception) { errors += "$rel: ${e.message}" }
-        }
-        for (abs in created) {
+        for ((abs, f) in mk.files.toSortedMap()) {
             try {
-                if (!fs.delete(abs) && fs.exists(abs)) errors += "$abs: not deleted"
-            } catch (e: Exception) { errors += "$abs: ${e.message}" }
+                val exists = fs.exists(abs)
+                val current = if (exists) sha(abs).first else null
+                val ours = if (f.deliveredHash == null) !exists else current == f.deliveredHash
+                when {
+                    ours && f.backupRel != null ->
+                        if (mk.backupDir == null) errors += "$abs: no backup dir" else fs.copy("${mk.backupDir}/${f.backupRel}", abs)
+                    ours -> if (exists && !fs.delete(abs) && fs.exists(abs)) errors += "$abs: not deleted"
+                    !exists || current == f.backupHash -> {}
+                    else -> log("$abs: changed after the interrupted write of ${mk.deliveryId}; left alone")
+                }
+            } catch (e: FsUnavailableException) {
+                throw e
+            } catch (e: Exception) {
+                errors += "$abs: ${e.message}"
+            }
         }
         if (errors.isEmpty()) return true
-        log("!!! RESTORE FAILED for $name (backup at ${backupDir ?: "none"}): ${errors.joinToString("; ")}")
-        if (notify) notifier("Restore failed for $name — backup at ${backupDir ?: "none"}")
+        log("!!! RESTORE FAILED for ${mk.name} (backup at ${mk.backupDir ?: "none"}): ${errors.joinToString("; ")}")
         return false
     }
 
