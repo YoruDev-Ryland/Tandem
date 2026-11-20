@@ -1,6 +1,9 @@
 package dev.emusync.app.sync
 
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlinx.serialization.Serializable
@@ -66,7 +69,15 @@ private data class StateData(
     val signInForm: SignInForm = SignInForm(),
 )
 
-class StateStore(private val file: File) {
+/**
+ * Persistent agent state in one JSON file. Every change is written to `<file>.tmp`, fsynced ([fsync]), atomically
+ * renamed over the file, and then the directory is fsynced ([dirSync], best effort) so the rename survives a crash.
+ */
+class StateStore(
+    private val file: File,
+    private val fsync: (FileOutputStream) -> Unit = { it.fd.sync() },
+    private val dirSync: (File) -> Unit = ::syncDir,
+) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val lock = Any()
     private var data: StateData = load()
@@ -89,10 +100,16 @@ class StateStore(private val file: File) {
     private fun mutate(f: (StateData) -> StateData): Unit = synchronized(lock) {
         val next = f(data)
         file.absoluteFile.parentFile?.mkdirs()
-        val tmp = File(file.absoluteFile.parentFile, "${file.name}.tmp")
-        tmp.writeText(json.encodeToString(StateData.serializer(), next))
+        val dir = file.absoluteFile.parentFile
+        val tmp = File(dir, "${file.name}.tmp")
+        FileOutputStream(tmp).use { out ->
+            out.write(json.encodeToString(StateData.serializer(), next).toByteArray(Charsets.UTF_8))
+            out.flush()
+            fsync(out)
+        }
         Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         data = next
+        runCatching { dirSync(dir) }
     }
 
     fun get(itemKey: String): ItemState? = synchronized(lock) { data.items[itemKey] }
@@ -130,4 +147,9 @@ class StateStore(private val file: File) {
     var signInForm: SignInForm
         get() = synchronized(lock) { data.signInForm }
         set(v) = mutate { it.copy(signInForm = v) }
+}
+
+/** fsyncs a directory so a rename inside it is durable. Best effort: some file systems refuse to open a directory. */
+private fun syncDir(dir: File) {
+    FileChannel.open(dir.toPath(), StandardOpenOption.READ).use { it.force(true) }
 }

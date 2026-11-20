@@ -74,4 +74,28 @@ class StateStoreTest {
         assertNull(s.get("k2"))
         assertNotNull(s.get("k"))
     }
+
+    @Test fun state_write_fsyncs_tmp_before_rename_then_syncs_dir() {
+        val f = File(tmp.root, "state.json")
+        val events = mutableListOf<String>()
+        val s = StateStore(f,
+            fsync = { out ->
+                out.flush()
+                val tmpFile = File(tmp.root, "state.json.tmp")
+                events += "fsync tmp=${tmpFile.readText().contains("v1")} target=${f.exists()}"
+            },
+            dirSync = { dir -> events += "dir ${dir == tmp.root.absoluteFile} target=${f.readText().contains("v1")}" })
+        s.put("k", ItemState("v1", "mh", "uh"))
+        assertEquals(listOf("fsync tmp=true target=false", "dir true target=true"), events)
+        assertEquals(ItemState("v1", "mh", "uh"), StateStore(f).get("k"))
+    }
+
+    @Test fun failed_fsync_leaves_previous_state_intact() {
+        val f = File(tmp.root, "state.json")
+        StateStore(f).put("k", ItemState("v1", "mh", "uh"))
+        val s = StateStore(f, fsync = { throw java.io.IOException("eio") })
+        try { s.put("k", ItemState("v2", "mh", "uh")); fail("expected IOException") } catch (e: java.io.IOException) {}
+        assertEquals("v1", StateStore(f).get("k")!!.knownVersionId)
+        assertEquals("v1", s.get("k")!!.knownVersionId)   // in-memory state not advanced either
+    }
 }
