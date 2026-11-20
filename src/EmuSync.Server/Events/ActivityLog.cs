@@ -1,5 +1,6 @@
 using System.Text.Json;
 using EmuSync.Server.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace EmuSync.Server.Events;
 
@@ -10,26 +11,29 @@ public interface IActivityLog
     /// request that caused it.
     /// </summary>
     Task WriteAsync(Guid userId, string kind, string message, Guid? deviceId = null, string? emulatorId = null,
-        string? gameKey = null, object? data = null, CancellationToken ct = default);
+        string? gameKey = null, object? data = null);
 }
 
 public sealed class ActivityLog(EmuSyncDbContext db, IEventHub hub, TimeProvider time, ILogger<ActivityLog> logger) : IActivityLog
 {
     public async Task WriteAsync(Guid userId, string kind, string message, Guid? deviceId = null, string? emulatorId = null,
-        string? gameKey = null, object? data = null, CancellationToken ct = default)
+        string? gameKey = null, object? data = null)
     {
-        try
+        // Always runs after the action committed, so it deliberately ignores the request's cancellation.
+        var row = new ActivityEvent
         {
-            db.ActivityEvents.Add(new ActivityEvent
-            {
                 UserId = userId, Utc = time.GetUtcNow(), Kind = kind, DeviceId = deviceId, EmulatorId = emulatorId,
                 GameKey = gameKey, Message = message.Length > 500 ? message[..500] : message,
                 DataJson = data is null ? null : JsonSerializer.Serialize(data),
-            });
-            await db.SaveChangesAsync(ct);
+        };
+        try
+        {
+            db.ActivityEvents.Add(row);
+            await db.SaveChangesAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {
+            db.Entry(row).State = EntityState.Detached; // must not poison later SaveChanges in this scope
             logger.LogWarning(ex, "Could not write activity {Kind}", kind);
             return;
         }

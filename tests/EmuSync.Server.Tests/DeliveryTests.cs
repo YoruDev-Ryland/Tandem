@@ -743,7 +743,7 @@ public class DeliveryTests
 
         public void NotifyUser(Guid userId, string topic) { }
 
-        public IAsyncEnumerable<ServerEvent> Subscribe(Guid userId, Guid? deviceId, CancellationToken ct) =>
-            AsyncEnumerable.Empty<ServerEvent>();
+        public IEventSubscription Subscribe(Guid userId, Guid? deviceId, CancellationToken ct) =>
+            new NoOpEventHub().Subscribe(userId, deviceId, ct);
     }
 }

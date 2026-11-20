@@ -54,7 +54,7 @@ public sealed class PairingService(EmuSyncDbContext db, AccountService accounts,
             throw new ApiException(410, "code_used", "That pairing code has already been used.");
         var created = await accounts.CreateDevice(row.UserId, deviceName, platform, ct);
         var name = await db.Devices.AsNoTracking().Where(d => d.Id == created.DeviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "Device";
-        await activity.WriteAsync(row.UserId, "device_paired", $"{name} paired", created.DeviceId, ct: ct);
+        await activity.WriteAsync(row.UserId, "device_paired", $"{name} paired", created.DeviceId);
         return created;
     }
 }

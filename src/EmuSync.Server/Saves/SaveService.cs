@@ -101,10 +101,10 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             var device = await DeviceNameAsync(deviceId, ct);
             var what = request.Kind == ItemKind.Save ? "save" : "state";
             if (response.Status == SaveUploadStatus.Accepted)
-                await activity.WriteAsync(userId, "save_uploaded", $"{device} uploaded {what} for {label}", deviceId, request.EmulatorId, request.GameKey, ct: ct);
+                await activity.WriteAsync(userId, "save_uploaded", $"{device} uploaded {what} for {label}", deviceId, request.EmulatorId, request.GameKey);
             else
                 await activity.WriteAsync(userId, "conflict_opened", $"{device} uploaded {what} for {label}, which conflicts", deviceId, request.EmulatorId, request.GameKey,
-                    new { itemId = response.ItemId, versionId = response.VersionId }, ct);
+                    new { itemId = response.ItemId, versionId = response.VersionId });
         }
         return response;
     }
@@ -156,7 +156,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         }
 
         await events.Raise(evt, ct);
-        await activity.WriteAsync(userId, "conflict_resolved", $"Conflict resolved for {label}", null, emulatorId, gameKey, ct: ct);
+        await activity.WriteAsync(userId, "conflict_resolved", $"Conflict resolved for {label}", null, emulatorId, gameKey);
     }
 
     public async Task ResolveFirstSyncAsync(Guid userId, BulkFirstSyncRequest request, CancellationToken ct)
@@ -169,7 +169,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             throw new ApiException(404, "device_not_found", "Device not found.");
 
         var raised = new List<SaveHeadChanged>();
-        var resolved = new List<(string Emulator, string Game, string Label)>();
+        var resolved = new List<Guid>();
         using (await locks.Acquire(userId, ct))
         {
             await using var tx = await BeginAsync(ct);
@@ -202,7 +202,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
                 foreach (var v in mine) v.Resolved = true;
                 item.OpenConflict = open.Count > mine.Count;
                 raised.Add(new SaveHeadChanged(userId, item.Id, item.HeadVersionId!.Value));
-                resolved.Add((item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey));
+                resolved.Add(item.Id);
             }
 
             await db.SaveChangesAsync(ct);
@@ -210,8 +210,14 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         }
 
         foreach (var evt in raised) await events.Raise(evt, ct);
-        foreach (var (emulator, game, label) in resolved)
-            await activity.WriteAsync(userId, "conflict_resolved", $"First-sync conflict resolved for {label}", request.DeviceId, emulator, game, ct: ct);
+        if (resolved.Count > 0)
+        {
+            var device = await DeviceNameAsync(request.DeviceId, ct);
+            var whose = request.Choice == FirstSyncChoice.UseDevice ? "device's" : "server's";
+            var games = resolved.Count == 1 ? "1 game" : $"{resolved.Count} games";
+            await activity.WriteAsync(userId, "conflict_resolved", $"{device} first-sync: kept {whose} saves for {games}",
+                request.DeviceId, data: new { itemIds = resolved });
+        }
     }
 
     /// <summary>
@@ -267,7 +273,7 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
         if (evt is not null)
         {
             await events.Raise(evt, ct);
-            await activity.WriteAsync(userId, "save_uploaded", $"Restored an earlier version of {label}", request.DeviceId, emulatorId, gameKey, ct: ct);
+            await activity.WriteAsync(userId, "save_uploaded", $"Restored an earlier version of {label}", request.DeviceId, emulatorId, gameKey);
         }
         return response;
     }

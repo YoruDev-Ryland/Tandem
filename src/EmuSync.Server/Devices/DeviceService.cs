@@ -162,7 +162,7 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         device.RevokedUtc ??= time.GetUtcNow();
         await db.SaveChangesAsync(ct);
         if (firstRevoke)
-            await activity.WriteAsync(userId, "device_revoked", $"{device.Name} was revoked", device.Id, ct: ct);
+            await activity.WriteAsync(userId, "device_revoked", $"{device.Name} was revoked", device.Id);
     }
 
     private async Task<Device> Owned(Guid userId, Guid id, CancellationToken ct) =>

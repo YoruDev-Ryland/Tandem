@@ -499,6 +499,28 @@ public class SaveTests
     }
 
     [Fact]
+    public async Task Bulk_first_sync_writes_one_summary_activity_row()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("a@example.com");
+        var (b, bKey) = await factory.PairSecondDevice(a, "Bee");
+        var s1 = await Upload(a, Req(await Files(a, "s1"), null, game: "g1"));
+        await Upload(a, Req(await Files(a, "s2"), null, game: "g2"));
+        await Upload(b, Req(await Files(b, "d1"), null, game: "g1"));
+        await Upload(b, Req(await Files(b, "d2"), null, game: "g2"));
+        var before = (await (await a.GetAsync("/v1/activity?limit=200")).ReadAsync<ActivityPage>()).Items.Count;
+
+        (await a.PostJsonAsync("/v1/conflicts/first-sync/resolve",
+            new BulkFirstSyncRequest(bKey.DeviceId, FirstSyncChoice.UseServer, null))).EnsureSuccessStatusCode();
+
+        var items = (await (await a.GetAsync("/v1/activity?limit=200")).ReadAsync<ActivityPage>()).Items;
+        Assert.Equal(before + 1, items.Count);
+        Assert.Equal("conflict_resolved", items[0].Kind);
+        Assert.Equal("Bee first-sync: kept server's saves for 2 games", items[0].Message);
+        _ = s1;
+    }
+
+    [Fact]
     public async Task Bulk_first_sync_UseServer_keeps_head_and_respects_item_filter()
     {
         using var factory = NewFactory();

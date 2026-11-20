@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using EmuSync.Protocol;
+using EmuSync.Server.Events;
+using Microsoft.Extensions.DependencyInjection;
 using EmuSync.Server.Tests.Infrastructure;
 
 namespace EmuSync.Server.Tests;
@@ -200,5 +202,46 @@ public class EventsTests
         Assert.Equal("device_revoked", after.Items[0].Kind);
         Assert.Contains(after.Items, i => i.DeviceName == "Pocket");
         Assert.Equal(HttpStatusCode.BadRequest, (await a.GetAsync("/v1/activity?limit=0")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Disconnect_removes_subscriber()
+    {
+        using var factory = NewFactory();
+        var (device, _) = await factory.Register("e6@example.com");
+        var hub = (EventHub)factory.Services.GetRequiredService<IEventHub>();
+        using var cts = Timeout();
+        var sse = await Open(device, cts.Token);
+        await sse.Next(cts.Token);
+        Assert.Equal(1, hub.SubscriberCount);
+        await sse.DisposeAsync();
+        while (hub.SubscriberCount != 0)
+        {
+            cts.Token.ThrowIfCancellationRequested();
+            await Task.Delay(20);
+        }
+    }
+
+    [Fact]
+    public async Task Burst_of_changed_events_does_not_evict_deliveries()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var hub = new EventHub(time, Microsoft.Extensions.Options.Options.Create(new ServerOptions()));
+        var user = Guid.NewGuid();
+        var deviceId = Guid.NewGuid();
+        await using var sub = hub.Subscribe(user, deviceId, CancellationToken.None);
+        for (var i = 0; i < 1000; i++) hub.NotifyUser(user, "t" + (i % 6));
+        hub.NotifyDevice(deviceId);
+
+        using var cts = Timeout();
+        var got = new List<ServerEvent>();
+        await foreach (var e in sub.Events.WithCancellation(cts.Token))
+        {
+            got.Add(e);
+            if (got.Count == 7) break; // 6 topics + the one deliveries (the connect-time one is coalesced with it)
+        }
+        Assert.Single(got, e => e.Type == "deliveries");
+        Assert.Equal(6, got.Count(e => e.Type == "changed"));
+        Assert.Equal(got.Count, got.Distinct().Count());
     }
 }

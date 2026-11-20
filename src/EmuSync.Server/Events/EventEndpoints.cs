@@ -23,14 +23,14 @@ public static class EventEndpoints
         app.MapGet("/v1/events", async (HttpContext http, IEventHub hub) =>
         {
             var ct = http.RequestAborted;
-            var events = hub.Subscribe(http.User.UserId(), http.User.DeviceId(), ct); // registered before headers go out
+            await using var subscription = hub.Subscribe(http.User.UserId(), http.User.DeviceId(), ct); // registered before headers go out; disposed on any exit
             http.Response.Headers.ContentType = "text/event-stream";
             http.Response.Headers.CacheControl = "no-cache";
             http.Response.Headers["X-Accel-Buffering"] = "no";
-            await http.Response.Body.FlushAsync(ct);
             try
             {
-                await foreach (var evt in events.WithCancellation(ct))
+                await http.Response.Body.FlushAsync(ct);
+                await foreach (var evt in subscription.Events.WithCancellation(ct))
                 {
                     var json = JsonSerializer.Serialize(new { type = evt.Type, topic = evt.Topic }, Wire);
                     await http.Response.WriteAsync($"event: {evt.Type}\ndata: {json}\n\n", ct);

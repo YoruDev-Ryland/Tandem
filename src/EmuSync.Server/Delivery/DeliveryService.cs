@@ -133,7 +133,7 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
         if (request.Result == DeliveryResult.Applied)
         {
             var name = await db.Devices.AsNoTracking().Where(d => d.Id == deviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "A device";
-            await activity.WriteAsync(userId, "delivered", $"{name} received {label}", deviceId, emulatorId, gameKey, ct: ct);
+            await activity.WriteAsync(userId, "delivered", $"{name} received {label}", deviceId, emulatorId, gameKey);
         }
 
         if (request.Result == DeliveryResult.Failed && !wasSuperseded)
@@ -142,7 +142,7 @@ public sealed class DeliveryService(EmuSyncDbContext db, UserLocks locks, IDomai
             await events.Raise(new DeliveryFailed(userId, deviceId, deliveryId, detail), ct);
             var name = await db.Devices.AsNoTracking().Where(d => d.Id == deviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "A device";
             await activity.WriteAsync(userId, "delivery_failed", $"{name} failed to apply {label}", deviceId, emulatorId, gameKey,
-                new { deliveryId, detail }, ct);
+                new { deliveryId, detail });
         }
     }
 
