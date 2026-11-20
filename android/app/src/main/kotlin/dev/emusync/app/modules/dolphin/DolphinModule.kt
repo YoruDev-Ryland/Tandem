@@ -135,13 +135,27 @@ class DolphinModule(private val internalRoot: String = "/storage/emulated/0") : 
                     'P', 'D', 'F', 'S', 'I', 'H', 'X', 'Y', 'U', 'Z' -> "EUR"
                     else -> "USA"
                 }
-                cardDir(d, region)
+                existingRegion(fs, d, gameKey, slot)?.let { cardDir(d, it) } ?: cardDir(d, region)
             }
             wiiKeyRe.matches(gameKey) -> {
                 val hex = gameKey.toByteArray(Charsets.ISO_8859_1).joinToString("") { "%02x".format(it) }
-                "${wiiTitles(d)}/$hex/data"
+                val existing = fs.list(wiiTitles(d)).firstOrNull { it.isDir && it.path.substringAfterLast('/').equals(hex, true) }
+                "${existing?.path ?: "${wiiTitles(d)}/$hex"}/data"
             }
             else -> throw ModuleException("invalid Dolphin game key: '$gameKey'")
         }
+    }
+
+    /** Region folder already holding a GCI with this gameKey and slot, if any. */
+    private fun existingRegion(fs: Fs, d: Detected, gameKey: String, slot: String): String? {
+        if (slot.isEmpty()) return null
+        for (region in regions) for (e in fs.list(cardDir(d, region))) {
+            if (e.isDir || !e.path.endsWith(".gci", true) || e.size < 0x40) continue
+            val head = try { fs.openRead(e.path).use { it.readNBytes(0x28) } } catch (_: java.io.IOException) { continue }
+            if (head.size < 0x28) continue
+            if (String(head, 0, 6, Charsets.US_ASCII) == gameKey &&
+                String(head, 8, 0x20, Charsets.ISO_8859_1).trim('\u0000') == slot) return region
+        }
+        return null
     }
 }

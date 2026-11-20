@@ -93,6 +93,14 @@ class DolphinModuleTest {
         assertThrows(ModuleException::class.java) { m.targetDirFor(fs, d(), ItemKind.State, "A/B", "01", "") }
     }
 
+    @Test fun target_prefers_existing_region_and_wii_dir_case() {
+        gci("e.gci", "GM8E01", "SlotA", "EUR")
+        assertEquals("${root()}/GC/EUR/Card A", m.targetDirFor(fs, d(), ItemKind.Save, "GM8E01", "SlotA", ""))
+        assertEquals("${root()}/GC/USA/Card A", m.targetDirFor(fs, d(), ItemKind.Save, "GM8E01", "Other", ""))
+        put("${root()}/Wii/title/00010000/524D4345/data/a")
+        assertEquals("${root()}/Wii/title/00010000/524D4345/data", m.targetDirFor(fs, d(), ItemKind.Save, "RMCE", "", ""))
+    }
+
     @Test fun config_bundle_files() {
         put("${root()}/Config/Dolphin.ini"); put("${root()}/Config/GFX.ini"); put("${root()}/Config/x.txt")
         put("${root()}/GameSettings/GM8E01.ini")
