@@ -119,7 +119,7 @@ public class PairingTests
         Assert.Equal(HttpStatusCode.OK, (await web.GetAsync("/v1/account")).StatusCode);
 
         var devices = await (await device.GetAsync("/v1/devices")).ReadAsync<List<DeviceSummary>>();
-        Assert.Contains(devices, d => d.Name == "Web browser" && d.Platform == "web");
+        Assert.DoesNotContain(devices, d => d.Name == "Web browser"); // M-6: browser sign-in creates no device
 
         await AssertError(await web.PostAsJsonAsync("/v1/web/session", new WebSessionRequest(null, null, code.Code)),
             HttpStatusCode.Gone, "code_used");
