@@ -10,6 +10,9 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 @Serializable enum class DeliveryKind { Save, Config, Vault }
 @Serializable enum class DeliveryResult { Applied, SkippedLocalChanged, Failed }
 
+/** GET /v1/server-info: no key needed. [protocol] is the server's EmuSync-Protocol version. */
+@Serializable data class ServerInfo(val name: String, val protocol: Int, val registrationOpen: Boolean)
+
 @Serializable data class RegisterRequest(val email: String, val password: String, val deviceName: String, val platform: String)
 @Serializable data class LoginRequest(val email: String, val password: String, val deviceName: String, val platform: String)
 @Serializable data class RedeemPairingRequest(val code: String, val deviceName: String, val platform: String)

@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.RowScope
@@ -40,6 +41,7 @@ import dev.emusync.app.ui.screens.SettingsScreen
 import dev.emusync.app.ui.screens.actions
 import dev.emusync.app.ui.screens.gameUrl
 import dev.emusync.app.ui.screens.syncNow
+import dev.emusync.app.ui.setup.SetupFlow
 import dev.emusync.app.sync.StateStore
 import dev.emusync.app.ui.theme.EmuColors
 import dev.emusync.app.ui.theme.EmuTheme
@@ -99,14 +101,24 @@ class MainActivity : ComponentActivity() {
 private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
     var tab by rememberSaveable { mutableIntStateOf(TAB_DEVICE) }
     val status by vm.state.top.collectAsStateWithLifecycle()
+    val setupActive by vm.setup.active.collectAsStateWithLifecycle()
+    // Shizuku help is a later task; until then the fix opens Shizuku itself, when it is installed.
+    val shizuku = remember { activity.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE) }
+
+    // Signed out at launch, or opened from This device or Settings: the setup flow instead of the tabs.
+    if (setupActive) {
+        // The system back (gesture or key outside the scaffold) is B too: it never leaves the app mid-setup.
+        BackHandler { vm.setup.back() }
+        SetupFlow(vm.setup, status, openShizuku = shizuku?.let { i -> { activity.startActivity(i) } }, onDone = { tab = TAB_DEVICE })
+        return
+    }
+
     val device by vm.device.ui.collectAsStateWithLifecycle()
     val activityUi by vm.activity.ui.collectAsStateWithLifecycle()
     val log by LogBuffer.lines.collectAsStateWithLifecycle()
     val conflictsUi by vm.conflicts.ui.collectAsStateWithLifecycle()
     val settingsUi by vm.settings.ui.collectAsStateWithLifecycle()
     val openConflicts = conflictsUi.entries.size   // the ones this device is part of, as the tab lists them
-    // Shizuku help is a later task; until then the fix opens Shizuku itself, when it is installed.
-    val shizuku = remember { activity.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE) }
 
     val top: @Composable RowScope.() -> Unit = {
         TopBar(
@@ -124,8 +136,7 @@ private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
                 syncNow = { syncNow(activity) },
                 // Y: Settings › Emulators with the cursor on this emulator.
                 settings = { id -> vm.settings.focusEmulator(id); tab = TAB_SETTINGS },
-                // Setup is a later task; the debug screen holds sign-in until then.
-                setup = { activity.startActivity(Intent(activity, DebugActivity::class.java)) },
+                setup = { vm.setup.start(exitable = true) },
                 back = { activity.onBackPressedDispatcher.onBackPressed() },
             ),
         )
@@ -147,6 +158,7 @@ private fun EmuSyncRoot(vm: AppViewModel, activity: MainActivity) {
                 settingsUi, top,
                 vm.settings.actions(
                     diagnostics = { activity.startActivity(Intent(activity, DebugActivity::class.java)) },
+                    setUp = { vm.setup.start(exitable = true) },
                     back = { tab = TAB_DEVICE },
                 ),
             )

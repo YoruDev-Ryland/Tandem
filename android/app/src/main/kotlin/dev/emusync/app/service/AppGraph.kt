@@ -19,6 +19,10 @@ data class ServiceSnapshot(
     val online: Boolean = false,
     val emulators: List<EmulatorInfo> = emptyList(),
     val watchDirs: Int = 0,
+    /** A signed-in session finished its first scan and runs: [emulators] is what it detected. */
+    val live: Boolean = false,
+    /** Full scans finished in this process (monotonic), so a screen can wait for the scan it asked for. */
+    val scans: Long = 0,
 )
 
 /**
@@ -33,6 +37,9 @@ object AppGraph {
     val sessions = SessionRunner()
 
     val snapshot = MutableStateFlow(ServiceSnapshot())
+
+    /** Counts finished full scans across service instances; published as [ServiceSnapshot.scans]. */
+    internal val fullScans = java.util.concurrent.atomic.AtomicLong()
     val snapshots: StateFlow<ServiceSnapshot> get() = snapshot
 
     /** Written only by the live [SyncService] session (see [SessionFlows]). */

@@ -61,6 +61,9 @@ class ApiClient(
         }
     }
 
+    override suspend fun serverInfo(): ServerInfo =
+        call("GET", "/v1/server-info", null as KSerializer<Unit>?, null, ServerInfo.serializer())!!
+
     override suspend fun register(email: String, password: String, deviceName: String) =
         call("POST", "/v1/auth/register", RegisterRequest.serializer(),
             RegisterRequest(email, password, deviceName, "android"), DeviceKeyResponse.serializer())!!

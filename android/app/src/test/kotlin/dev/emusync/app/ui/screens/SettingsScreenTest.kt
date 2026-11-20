@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
@@ -88,7 +89,7 @@ class SettingsScreenTest {
                 colors(LocalEmu.current)
                 val ui by vm.ui.collectAsState()
                 val status by app.top.collectAsState()
-                SettingsScreen(ui, top = { TopBar(listOf("Settings"), 0, {}, status, null) }, actions = vm.actions({}, {}))
+                SettingsScreen(ui, top = { TopBar(listOf("Settings"), 0, {}, status, null) }, actions = vm.actions({}, {}, {}))
             }
         }
     }
@@ -133,6 +134,27 @@ class SettingsScreenTest {
         assertEquals(0, reloads)
         assertEquals(1, refreshed)
         compose.onNodeWithText("Signed out").assertIsDisplayed()
+    }
+
+    @Test fun accountOffersSetUpAgainOnXAndSetUpOnASignedOut() {
+        var setUps = 0
+        val st = store()
+        val vm = vm(st)
+        compose.setContent {
+            StoredTheme(st) {
+                val ui by vm.ui.collectAsState()
+                SettingsScreen(ui, top = {}, actions = vm.actions({}, { setUps++ }, {}))
+            }
+        }
+        r2(3)   // › Account
+        compose.key(KeyEvent.KEYCODE_BUTTON_X)
+        assertEquals(1, setUps)
+        assertEquals("secret-key", st.deviceKey)   // setting up again keeps the sign-in
+        vm.signOut()
+        compose.waitForIdle()
+        compose.onAllNodesWithText("Set up this device")[0].assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(2, setUps)
     }
 
     @Test fun cancellingTheSignOutSheetKeepsTheDeviceSignedIn() {
@@ -228,7 +250,7 @@ class SettingsScreenTest {
         compose.setContent {
             StoredTheme(st) {
                 val ui by vm.ui.collectAsState()
-                if (visible) SettingsScreen(ui, top = {}, actions = vm.actions({}, {}))
+                if (visible) SettingsScreen(ui, top = {}, actions = vm.actions({}, {}, {}))
             }
         }
         compose.onNodeWithText("org.ppsspp.ppssppgold").assertIsDisplayed()

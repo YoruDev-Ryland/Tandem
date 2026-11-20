@@ -13,6 +13,9 @@ import dev.emusync.app.ui.screens.ConflictsViewModel
 import dev.emusync.app.ui.screens.DeviceViewModel
 import dev.emusync.app.ui.screens.SettingsViewModel
 import android.content.pm.PackageManager
+import android.os.Build
+import androidx.lifecycle.SavedStateHandle
+import dev.emusync.app.ui.setup.SetupViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.map
@@ -24,7 +27,7 @@ import dev.emusync.app.ui.state.ServerRepo
  * The screens' state, kept across rotation: the server cache, the app state over it and each tab's model. The
  * server and key are read from the store on every refresh, so signing in or out takes effect on the next one.
  */
-class AppViewModel(app: Application) : AndroidViewModel(app) {
+class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewModel(app) {
     private val store = AppGraph.store(app)
     private var client: Triple<String, String, ApiClient>? = null
 
@@ -78,6 +81,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         stopSync = { SyncService.stop(app) },
         afterSignOut = { server.refresh() },   // no key: the server data clears
         scope = viewModelScope,
+    )
+
+    /** The first-run setup flow; its place and choices live in [handle], so process death resumes it. */
+    val setup = SetupViewModel(
+        handle = handle,
+        store = store,
+        modules = modules,
+        anon = { url -> ApiClient(url, null) },
+        api = ::api,
+        shizuku = AppGraph.gate(app).state,
+        askShizuku = { AppGraph.gate(app).requestPermission() },
+        snapshot = AppGraph.snapshots,
+        settings = settings,
+        service = { SyncService.tryStart(app, it) },
+        afterSignIn = { server.refresh() },
+        scope = viewModelScope,
+        running = state.running,
+        emulatorName = { emulatorNames[it] ?: it },
+        defaultDeviceName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android",
     )
 
     /** The server URL for links to the web app, or null when signed out. */

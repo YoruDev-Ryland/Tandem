@@ -50,7 +50,6 @@ import dev.emusync.app.ui.kit.BumperTabs
 import dev.emusync.app.ui.kit.Cell
 import dev.emusync.app.ui.kit.ConsoleScaffold
 import dev.emusync.app.ui.kit.CursorList
-import dev.emusync.app.ui.kit.EmptyLine
 import dev.emusync.app.ui.kit.EmuButton
 import dev.emusync.app.ui.kit.EmuRadius
 import dev.emusync.app.ui.kit.Fact
@@ -74,13 +73,15 @@ class SettingsActions(
     val setTheme: (ThemeMode) -> Unit = {},
     val signOut: () -> Unit = {},
     val diagnostics: () -> Unit = {},
+    /** Opens the setup flow (Account › Set up again). */
+    val setUp: () -> Unit = {},
     val back: () -> Unit = {},
 )
 
-fun SettingsViewModel.actions(diagnostics: () -> Unit, back: () -> Unit) = SettingsActions(
+fun SettingsViewModel.actions(diagnostics: () -> Unit, setUp: () -> Unit, back: () -> Unit) = SettingsActions(
     select = ::select, setAutoApply = ::setAutoApply, addRomDir = ::addRomDir, removeRomDir = ::removeRomDir,
     setOverride = ::setOverride, chooseVariant = ::chooseVariant, consumeFocus = ::consumeFocus, setTheme = ::setTheme, signOut = ::signOut,
-    diagnostics = diagnostics, back = back,
+    diagnostics = diagnostics, setUp = setUp, back = back,
 )
 
 const val AUTO_APPLY_COPY = "Apply newer saves automatically when the emulator is closed"
@@ -197,7 +198,8 @@ fun SettingsScreen(ui: SettingsUi, top: @Composable RowScope.() -> Unit, actions
                     listOf(Hint(Action.A, "Use this one") { chooseTheme(themeAt) }, back)
                 } else listOf(back)
             SettingsSection.Account ->
-                if (ui.signedIn) listOf(Hint(Action.A, "Sign out") { sheet = Sheet.SignOut }, back) else listOf(back)
+                if (ui.signedIn) listOf(Hint(Action.A, "Sign out") { sheet = Sheet.SignOut }, Hint(Action.X, SET_UP_AGAIN, actions.setUp), back)
+                else listOf(Hint(Action.A, SET_UP, actions.setUp), back)
             SettingsSection.Diagnostics -> listOf(Hint(Action.A, "Open", actions.diagnostics), back)
         }
     }
@@ -236,13 +238,13 @@ fun SettingsScreen(ui: SettingsUi, top: @Composable RowScope.() -> Unit, actions
                         Cell(meta, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.meta)
                         if (mode == ui.theme) Cell("active", tone = Tone.Ink2, style = EmuType.meta)
                     }
-                    SettingsSection.Account -> Account(ui) { sheet = Sheet.SignOut }
+                    SettingsSection.Account -> Account(ui, actions.setUp) { sheet = Sheet.SignOut }
                     SettingsSection.Diagnostics -> Diagnostics(actions.diagnostics)
                 }
             }
             when (open) {
                 Sheet.SignOut -> SheetFrame("Sign out?", SIGN_OUT_COPY, "Sign out", ::confirmSignOut, cancel.onClick) {}
-                is Sheet.Path -> PathSheet(open, pathText, pathError, ::submitPath, cancel.onClick)
+                is Sheet.Path -> PathSheet(open.title, open.detail, open.confirm, pathText, pathError, ::submitPath, cancel.onClick)
                 is Sheet.RemoveRomDir -> SheetFrame(
                     "Remove ${open.path}?", REMOVE_ROM_COPY, "Remove", { confirmRemove(open.path) }, keep.onClick,
                     cancelLabel = "Keep",
@@ -290,8 +292,11 @@ private fun Note(text: String) {
     BasicText(text, Modifier.padding(start = 12.dp, end = 12.dp, top = 14.dp), style = EmuType.meta.copy(color = LocalEmu.current.ink3))
 }
 
+const val SET_UP_AGAIN = "Set up again"
+const val SET_UP = "Set up this device"
+
 @Composable
-private fun Account(ui: SettingsUi, signOut: () -> Unit) {
+private fun Account(ui: SettingsUi, setUp: () -> Unit, signOut: () -> Unit) {
     Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
         Facts(
             listOf(
@@ -300,8 +305,14 @@ private fun Account(ui: SettingsUi, signOut: () -> Unit) {
             ),
             Modifier.padding(bottom = 16.dp),
         )
-        if (ui.signedIn) EmuButton("Sign out", glyph = Action.A, onClick = signOut)
-        else EmptyLine("Sign in from This device to start syncing again.", Modifier.padding(start = 0.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (ui.signedIn) {
+                EmuButton("Sign out", glyph = Action.A, onClick = signOut)
+                EmuButton(SET_UP_AGAIN, glyph = Action.X, onClick = setUp)
+            } else {
+                EmuButton(SET_UP, glyph = Action.A, onClick = setUp)
+            }
+        }
     }
 }
 
@@ -319,15 +330,23 @@ private fun Diagnostics(open: () -> Unit) {
 
 /** A folder path entered as text: the paths are read through Shizuku, not the system folder picker. */
 @Composable
-private fun PathSheet(s: Sheet.Path, text: TextFieldState, error: String?, submit: () -> Unit, cancel: () -> Unit) {
+internal fun PathSheet(
+    title: String,
+    detail: String,
+    confirmLabel: String,
+    text: TextFieldState,
+    error: String?,
+    submit: () -> Unit,
+    cancel: () -> Unit,
+) {
     val c = LocalEmu.current
     val focus = remember { FocusRequester() }
-    SheetFrame(s.title, s.detail, s.confirm, confirm = submit, cancel = cancel) {
+    SheetFrame(title, detail, confirmLabel, confirm = submit, cancel = cancel) {
         BasicTextField(
             text,
             Modifier
                 .testTag("settings-field")
-                .semantics { contentDescription = s.title }
+                .semantics { contentDescription = title }
                 .textEntry()
                 .focusRequester(focus)
                 .widthIn(max = 620.dp)
@@ -344,7 +363,7 @@ private fun PathSheet(s: Sheet.Path, text: TextFieldState, error: String?, submi
         )
         if (error != null) BasicText(error, Modifier.padding(top = 8.dp), style = EmuType.meta.copy(color = c.fault))
     }
-    LaunchedEffect(s) { focus.requestFocus() }
+    LaunchedEffect(title) { focus.requestFocus() }
 }
 
 /**

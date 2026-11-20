@@ -45,6 +45,7 @@ class DeliveryApplierTest {
         override suspend fun activity(device: String?, before: Long?, limit: Int): ActivityPage = error("unused")
         override suspend fun devices(): List<DeviceSummary> = error("unused")
         override suspend fun me(): DeviceSummary = error("unused")
+        override suspend fun serverInfo(): ServerInfo = error("unused")
 
         /** Each deliveries() call pops the next list; when empty, returns [standing]. */
         val pages = ArrayDeque<List<DeliveryDto>>()

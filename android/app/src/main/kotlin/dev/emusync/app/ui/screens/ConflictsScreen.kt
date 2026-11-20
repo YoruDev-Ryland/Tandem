@@ -154,10 +154,13 @@ fun ConflictsScreen(
 }
 
 /** How long a game the cursor moved to by itself is shown before a button decides it. */
-private const val SETTLE_MS = 500L
+internal const val SETTLE_MS = 500L
 
-/** When the focused game came on screen, and whether the user put the cursor there. */
-private class Seen {
+/**
+ * When the focused game came on screen, and whether the user put the cursor there. Also the setup flow's first-sync
+ * review, so both decide games under the same settle rule.
+ */
+internal class Seen {
     private var id: String? = null
     private var since = Long.MIN_VALUE
     private var picked: String? = null
@@ -251,7 +254,7 @@ private fun DetailPane(e: ConflictEntry, failure: Throwable?, portrait: Boolean)
  * and it covers the screen to touch, so nothing underneath can be chosen around it.
  */
 @Composable
-private fun ConfirmSheet(choice: BulkChoice, confirm: () -> Unit, cancel: () -> Unit) {
+internal fun ConfirmSheet(choice: BulkChoice, confirm: () -> Unit, cancel: () -> Unit) {
     val c = LocalEmu.current
     ActionLayer {
         OnAction { a ->

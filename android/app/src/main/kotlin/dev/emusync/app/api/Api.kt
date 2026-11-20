@@ -6,6 +6,8 @@ import java.io.InputStream
 open class ApiException(val status: Int, val code: String?, message: String?) : Exception(message)
 
 interface Api {
+    /** The server's name and whether it takes new accounts; asked before signing in. */
+    suspend fun serverInfo(): ServerInfo
     suspend fun register(email: String, password: String, deviceName: String): DeviceKeyResponse
     suspend fun login(email: String, password: String, deviceName: String): DeviceKeyResponse
     suspend fun redeemPairing(code: String, deviceName: String): DeviceKeyResponse

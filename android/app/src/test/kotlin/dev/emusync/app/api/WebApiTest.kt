@@ -152,6 +152,16 @@ class WebApiTest {
         assertEquals("""{"emulatorIds":["eden","ppsspp"]}""", r.body!!.utf8())
     }
 
+    @Test fun serverInfo_reads_name_and_registration_without_a_key() = runBlocking {
+        ok("""{"name":"Home server","protocol":1,"registrationOpen":true}""")
+        val info = ApiClient(server.url("/").toString().trimEnd('/'), null).serverInfo()
+        val r = server.takeRequest()
+        assertEquals("GET", r.method)
+        assertEquals("/v1/server-info", r.target)
+        assertNull(r.headers["Authorization"])
+        assertEquals(ServerInfo("Home server", 1, true), info)
+    }
+
     @Test fun keepOwn_posts_to_device_setup() = runBlocking {
         noContent()
         client().keepOwn("d1", "eden")

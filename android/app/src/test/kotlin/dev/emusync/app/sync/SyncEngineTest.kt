@@ -35,6 +35,7 @@ class SyncEngineTest {
         override suspend fun activity(device: String?, before: Long?, limit: Int): ActivityPage = error("unused")
         override suspend fun devices(): List<DeviceSummary> = error("unused")
         override suspend fun me(): DeviceSummary = error("unused")
+        override suspend fun serverInfo(): ServerInfo = error("unused")
 
         val statuses = mutableListOf<DeviceStatusRequest>()
         val installs = mutableListOf<Pair<String, List<InstalledGame>>>()

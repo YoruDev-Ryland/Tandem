@@ -146,7 +146,7 @@ class SyncService : Service() {
         log("service stopped")
         destroyed = true
         scope.cancel()
-        AppGraph.snapshot.value = ServiceSnapshot(running = false, status = "Not running")
+        AppGraph.snapshot.value = ServiceSnapshot(running = false, status = "Not running", scans = AppGraph.fullScans.get())
         AppGraph.sessionFlows.end(null)   // drops the live session's late writes too
         super.onDestroy()
     }
@@ -305,6 +305,8 @@ class SyncService : Service() {
         } catch (e: Throwable) {
             log("$w failed: ${e.javaClass.simpleName}: ${e.message}")
         } finally {
+            // Finished or failed, it is over: whoever waits for a scan must not wait for ever.
+            if (w == SyncWork.FullScan) AppGraph.fullScans.incrementAndGet()
             if (w != SyncWork.Tick && w != SyncWork.Monitor) publish()
         }
     }
@@ -400,6 +402,8 @@ class SyncService : Service() {
             online = online == true,
             emulators = e?.detectedEmulators()?.map { EmulatorInfo(it, counts[it.emulatorId] ?: 0) } ?: emptyList(),
             watchDirs = session?.watched?.size ?: 0,
+            live = session != null,
+            scans = AppGraph.fullScans.get(),
         )
         val prev = AppGraph.snapshot.value
         AppGraph.snapshot.value = next

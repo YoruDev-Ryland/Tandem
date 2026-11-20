@@ -41,11 +41,23 @@ fun describeError(error: Throwable): String = when (error) {
     else -> "Something went wrong. Try again."
 }
 
-/** A failed request, said in fault with what to do next. Announced when it appears. */
+// The web's config copy (describeConfigError): a config conflict is two versions, not two saves.
+private val CONFIG_TEXT = mapOf(
+    "conflict_open" to "This config has two versions waiting for a choice. Resolve that first.",
+    "stale_base" to "Someone changed this config since you opened it. Reload to see their change.",
+    "no_config" to "That device hasn't backed up this config yet. Open the emulator there once, then try again.",
+    "already_in_group" to "That device already follows a group. Take it out of the group first.",
+)
+
+/** Like [describeError], in config words. */
+fun describeConfigError(error: Throwable): String =
+    (error as? ApiException)?.code?.let { CONFIG_TEXT[it] } ?: describeError(error)
+
+/** A failed request, said in fault with what to do next ([text] words it). Announced when it appears. */
 @Composable
-fun ErrorLine(error: Throwable, modifier: Modifier = Modifier) {
+fun ErrorLine(error: Throwable, modifier: Modifier = Modifier, text: (Throwable) -> String = ::describeError) {
     BasicText(
-        describeError(error),
+        text(error),
         modifier.semantics { liveRegion = LiveRegionMode.Polite },
         style = EmuType.body.copy(color = LocalEmu.current.fault),
     )
