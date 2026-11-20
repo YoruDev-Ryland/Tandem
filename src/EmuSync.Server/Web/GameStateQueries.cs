@@ -16,7 +16,8 @@ public sealed class GameStateQueries(EmuSyncDbContext db, TimeProvider time)
     {
         var itemIds = items.Select(i => i.Id);
         var devices = await db.Devices.AsNoTracking().Where(d => d.UserId == userId)
-            .Select(d => new DeviceInfo(d.Id, d.Name, d.CreatedUtc, d.RevokedUtc == null, d.ShizukuOk, d.RunningEmulatorsJson))
+            .Select(d => new DeviceInfo(d.Id, d.Name, d.CreatedUtc,
+                d.RevokedUtc == null && d.Platform != DeviceService.LegacyWebPlatform, d.ShizukuOk, d.RunningEmulatorsJson))
             .ToListAsync(ct);
         var known = await db.DeviceItemStates.AsNoTracking().Where(s => itemIds.Contains(s.ItemId))
             .Select(s => new { s.DeviceId, s.ItemId, s.KnownVersionId }).ToListAsync(ct);
@@ -37,6 +38,7 @@ public sealed class GameStateQueries(EmuSyncDbContext db, TimeProvider time)
             conflicts.ToLookup(c => c.ItemId, c => c.DeviceId));
     }
 
+    /// <param name="Active">Shown in game rows: not revoked, and not a legacy browser device.</param>
     public sealed record DeviceInfo(Guid Id, string Name, DateTimeOffset CreatedUtc, bool Active, bool? ShizukuOk, string? RunningJson);
 }
 

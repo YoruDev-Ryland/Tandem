@@ -13,6 +13,9 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
     public const int MaxGames = 20000;
     public const int MaxCores = 500;
     public const int MaxRunningEmulators = 50;
+    /// <summary>The platform of devices an early build created when a browser signed in with a pairing code. They are
+    /// kept (never revoked automatically) but are not devices that sync, so device lists and game states leave them out.</summary>
+    public const string LegacyWebPlatform = "web";
     /// <summary>A device without a status report for this long is offline: its running emulators read as empty. Other
     /// requests (which refresh LastSeenUtc) do not count.</summary>
     public static readonly TimeSpan OnlineWindow = TimeSpan.FromMinutes(2);

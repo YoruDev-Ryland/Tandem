@@ -16,7 +16,9 @@ public sealed class WebQueryService(EmuSyncDbContext db, TimeProvider time, Game
     public const int ContinueCount = 10;
     public const int RecentCount = 10;
 
-    private IQueryable<Device> ActiveDevices(Guid userId) => db.Devices.AsNoTracking().Where(d => d.UserId == userId && d.RevokedUtc == null);
+    /// <summary>The user's devices that sync: not revoked, and not a legacy browser device.</summary>
+    private IQueryable<Device> ActiveDevices(Guid userId) => db.Devices.AsNoTracking()
+        .Where(d => d.UserId == userId && d.RevokedUtc == null && d.Platform != DeviceService.LegacyWebPlatform);
 
     // ---- Home ----
 

@@ -18,7 +18,7 @@ public static class DeviceEndpoints
             var current = http.User.DeviceId();
             var now = time.GetUtcNow();
             return (await db.Devices.AsNoTracking()
-                    .Where(d => d.UserId == userId && d.RevokedUtc == null)
+                    .Where(d => d.UserId == userId && d.RevokedUtc == null && d.Platform != DeviceService.LegacyWebPlatform)
                     .OrderBy(d => d.CreatedUtc)
                     .ToListAsync(ct))
                 .Select(d => DeviceService.Summary(d, current, now)).ToArray();
