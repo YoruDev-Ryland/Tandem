@@ -56,6 +56,19 @@ describe("session", () => {
     expect(router.path).toBe("/sign-in");
   });
 
+  it("signOut treats a 401 as success: the session is already gone", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json(401, { code: "unauthorized", message: "no" })));
+    router.go("/settings");
+    await expect(session.signOut()).resolves.toBeUndefined();
+    expect(session.account).toBeNull();
+    expect(router.path).toBe("/sign-in");
+  });
+
+  it("signOut still fails on a network error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    await expect(session.signOut()).rejects.toBeInstanceOf(ApiError);
+  });
+
   it("only accepts same-origin paths as a return target", () => {
     expect(safeReturnTo("/configs/retroarch?x=1")).toBe("/configs/retroarch?x=1");
     expect(safeReturnTo("//evil.com/x")).toBeNull();

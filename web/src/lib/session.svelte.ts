@@ -48,7 +48,12 @@ export const session = {
     router.go(to);
   },
   async signOut(): Promise<void> {
-    await endpoints.signOut();
+    try {
+      await endpoints.signOut();
+    } catch (e) {
+      // A 401 means the session is already gone, which is what signing out wants.
+      if (!(e instanceof ApiError && e.status === 401)) throw e;
+    }
     account = null;
     returnTo = null;
     router.go("/sign-in");

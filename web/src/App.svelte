@@ -17,6 +17,7 @@
   import Setup from "./pages/Setup.svelte";
   import Vault from "./pages/Vault.svelte";
   import Activity from "./pages/Activity.svelte";
+  import Settings from "./pages/Settings.svelte";
   import AppTopBar from "./lib/ui/AppTopBar.svelte";
 
   const titles: Record<string, string> = {
@@ -83,6 +84,8 @@
       <Vault />
     {:else if route.name === "activity"}
       <Activity />
+    {:else if route.name === "settings"}
+      <Settings />
     {:else}
     <main>
       {#if route.name === "not-found"}

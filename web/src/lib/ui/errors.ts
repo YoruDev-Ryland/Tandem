@@ -6,6 +6,12 @@ const TEXT: Record<string, string> = {
   rate_limited: "Too many attempts. Wait a minute and try again.",
   device_revoked: "This device was removed from your account. Pair it again to keep syncing.",
   invalid_code: "That code is not valid. Check it and try again.",
+  wrong_password: "The current password is incorrect.",
+  weak_password: "Use at least 8 characters for the new password.",
+  invalid_email: "Enter a valid email address.",
+  email_taken: "An account with this email already exists.",
+  cannot_delete_self: "You can't delete your own account.",
+  backup_running: "A backup is already running.",
   protocol_mismatch: "The server was updated. Reload the page to continue.",
 };
 
