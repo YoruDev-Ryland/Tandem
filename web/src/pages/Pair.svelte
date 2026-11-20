@@ -13,6 +13,7 @@
   let failure = $state<unknown>(undefined);
   let now = $state(Date.now());
   let fetching = false;
+  let alive = true;
 
   /** The library paints fixed colours; tag the two paints so the stylesheet can use the tokens. */
   function themed(svg: string): string {
@@ -25,24 +26,32 @@
     try {
       const c = await createPairingCode();
       const svg = themed(await QRCode.toString(c.qrPayload, { type: "svg", margin: 2 }));
+      if (!alive) return;
       shown = { code: c.code, svg, expires: Date.parse(c.expiresUtc) };
       failure = undefined;
     } catch (e) {
-      failure = e;
+      if (alive) failure = e;
     } finally {
       fetching = false;
-      now = Date.now();
+      if (alive) now = Date.now();
     }
   }
 
   $effect(() => {
+    alive = true;
     void fresh();
     const t = setInterval(() => {
       now = Date.now();
-      // A code that has run out is replaced without asking.
-      if (shown && now >= shown.expires) void fresh();
+      // A code that has run out is cleared and replaced once; a failed replacement waits for "Try again".
+      if (shown && now >= shown.expires) {
+        shown = undefined;
+        void fresh();
+      }
     }, 1000);
-    return () => clearInterval(t);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
   });
 
   const left = $derived(shown ? Math.max(0, Math.ceil((shown.expires - now) / 1000)) : 0);
@@ -69,11 +78,11 @@
       <p class="loading" aria-busy="true">— — —</p>
     {:else}
       <div class="pair">
-        <div class="qr" role="img" aria-label="QR code for pairing">{@html shown.svg}</div>
+        <div class="qr" data-theme="light" role="img" aria-label="QR code for pairing">{@html shown.svg}</div>
         <div>
           <p class="code" aria-label="Pairing code">{shown.code}</p>
           <p class="expires">Expires in {clock}</p>
-          <p class="how">Open EmuSync on the device, choose Sign in with a code, and enter this code or scan it.</p>
+          <p class="how">Open EmuSync on the device, choose Sign in with a code, and enter this code.</p>
           {#if failure}<ErrorLine error={failure} />{/if}
         </div>
       </div>

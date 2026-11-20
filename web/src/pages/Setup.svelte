@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { ComponentProps } from "svelte";
   import { getConfigs, getDevice, getSetup, keepOwn } from "../lib/api/endpoints";
   import { resource } from "../lib/api/resource.svelte";
   import type { DeviceRef, SetupStep, SetupStepKind } from "../lib/api/types";
@@ -8,11 +9,14 @@
   import { relativeTime } from "../lib/time";
   import ApplyDialog from "../lib/ui/ApplyDialog.svelte";
   import Button from "../lib/ui/Button.svelte";
+  import Dialog from "../lib/ui/Dialog.svelte";
   import Check from "../lib/ui/Check.svelte";
   import ErrorLine from "../lib/ui/ErrorLine.svelte";
+  import Field from "../lib/ui/Field.svelte";
   import HintBar from "../lib/ui/HintBar.svelte";
   import Ticks from "../lib/ui/Ticks.svelte";
 
+  const uid = $props.id();
   const { id } = router.params as { id: string };
   const topics = ["devices", "configs", "saves"] as const;
   const checklist = resource(() => getSetup(id), [...topics]);
@@ -37,8 +41,18 @@
   ];
   const groupOf = (kind: SetupStepKind) => steps.filter((s) => s.kind === kind);
 
-  /** "Install eden" reads "Install Eden". */
-  const label = (s: SetupStep) => s.label.replace(new RegExp(`\\b${s.emulatorId}\\b`), emulatorName(s.emulatorId));
+  /** Built from the kind and the emulator's name; the server's detail text rides alongside. */
+  function label(s: SetupStep): string {
+    const n = emulatorName(s.emulatorId);
+    switch (s.kind) {
+      case "InstallEmulator": return `Install ${n}`;
+      case "InstallCores": return s.done ? `Cores for ${n}` : `Install ${n} cores`;
+      case "GrantFolders": return `Grant folder access for ${n}`;
+      case "PlaceVault": return `Place ${n} system files`;
+      case "RestoreSaves": return `Restore ${n} saves`;
+      case "ChooseConfig": return `Choose a ${n} config`;
+    }
+  }
 
   const nextConfig = $derived(steps.find((s) => s.kind === "ChooseConfig" && !s.done));
 
@@ -59,44 +73,68 @@
     }
   }
 
-  interface ApplyTarget {
-    emulatorId: string;
-    emulatorName: string;
+  interface ConfigSource {
+    key: string;
     versionId: string;
-    label: string;
+    /** "Handhelds" or "Ayn". */
+    name: string;
     groupName: string | null;
     ownerName: string | null;
-    rollback: string[];
-    linkTargets: DeviceRef[];
-    copyTargets: DeviceRef[];
   }
-  /** Frozen when the dialog opens, so a live reload cannot change what Apply acts on. */
-  let applyTarget = $state<ApplyTarget>();
+  interface Picking {
+    emulatorId: string;
+    emulatorName: string;
+    /** This device, frozen when the dialog opens. */
+    me: DeviceRef;
+    mine: boolean;
+    sources: ConfigSource[];
+    chosen: string;
+  }
+  /** Frozen when the dialog opens, so a live reload cannot change what is applied. */
+  let picking = $state<Picking>();
+  let picked = $state(false);
+  let applyTarget = $state<(Omit<ComponentProps<typeof ApplyDialog>, "open" | "onapplied">) | undefined>();
   let applying = $state(false);
 
-  /** The config this device can take: a group's, else another device's own. */
-  function sourceFor(emulatorId: string): ApplyTarget | undefined {
+  /** Configs this device could take: groups it is not in, and other devices' own, for this emulator. */
+  function sourcesFor(emulatorId: string): { sources: ConfigSource[]; mine: boolean } {
     const row = configs.data?.emulators.find((e) => e.emulatorId === emulatorId);
-    if (!row) return undefined;
-    const me: DeviceRef = { id, name };
-    const group = row.groups.find((g) => g.headVersionId);
-    const solo = row.solo.find((s) => s.headVersionId && s.device.id !== id);
-    const mine = row.solo.some((s) => s.device.id === id);
-    const base = { emulatorId, emulatorName: emulatorName(emulatorId), rollback: [] as string[] };
-    if (group) {
-      const member = group.members.some((m) => m.id === id);
-      return { ...base, versionId: group.headVersionId!, label: `${group.name} config`, groupName: group.name, ownerName: null, linkTargets: member ? [] : [me], copyTargets: mine ? [me] : [] };
-    }
-    if (solo) {
-      return { ...base, versionId: solo.headVersionId!, label: `${solo.device.name}'s config`, groupName: null, ownerName: solo.device.name, linkTargets: [me], copyTargets: mine ? [me] : [] };
-    }
-    return undefined;
+    if (!row) return { sources: [], mine: false };
+    const sources: ConfigSource[] = [
+      ...row.groups
+        .filter((g) => g.headVersionId && !g.members.some((m) => m.id === id))
+        .map((g) => ({ key: `g/${g.id}`, versionId: g.headVersionId!, name: g.name, groupName: g.name, ownerName: null })),
+      ...row.solo
+        .filter((x) => x.headVersionId && x.device.id !== id)
+        .map((x) => ({ key: `d/${x.device.id}`, versionId: x.headVersionId!, name: x.device.name, groupName: null, ownerName: x.device.name })),
+    ];
+    return { sources, mine: row.solo.some((x) => x.device.id === id) };
   }
-  const canApply = (emulatorId: string) => sourceFor(emulatorId) !== undefined;
+  const canApply = (emulatorId: string) => sourcesFor(emulatorId).sources.length > 0;
   function openApply(emulatorId: string) {
-    const t = sourceFor(emulatorId);
-    if (!t) return;
-    applyTarget = t;
+    const { sources, mine } = sourcesFor(emulatorId);
+    if (sources.length === 0) return;
+    picking = { emulatorId, emulatorName: emulatorName(emulatorId), me: { id, name }, mine, sources, chosen: sources[0]!.key };
+    picked = true;
+  }
+  const pickTitle = $derived(picking ? `Use a ${picking.emulatorName} config on ${picking.me.name}` : "");
+  function proceed() {
+    const p = picking;
+    const src = p?.sources.find((x) => x.key === p.chosen);
+    if (!p || !src) return;
+    applyTarget = {
+      emulatorId: p.emulatorId,
+      emulatorName: p.emulatorName,
+      versionId: src.versionId,
+      label: `${src.name} · latest version`,
+      title: pickTitle,
+      groupName: src.groupName,
+      ownerName: src.ownerName,
+      rollback: [],
+      linkTargets: [p.me],
+      copyTargets: p.mine ? [p.me] : [],
+    };
+    picked = false;
     applying = true;
   }
 
@@ -146,15 +184,18 @@
               {#if rows.length > 0}
                 <h2 class:gap={i > 0}>{k.heading} <small>{rows.filter((r) => r.done).length} of {rows.length}</small></h2>
                 <ul>
-                  {#each rows as s (k.kind + "/" + s.emulatorId + "/" + s.label)}
+                  {#each rows as s, n (k.kind + "/" + s.emulatorId + "/" + n)}
                     <li>
                       <Check done={s.done} />
                       <span class:ink2={s.done}>{label(s)}</span>
                       {#if k.kind === "ChooseConfig" && !s.done}
                         <span class="acts">
                           <Button disabled={busy} onclick={() => keep(s.emulatorId)}>Keep this device's own</Button>
-                          <Button disabled={!canApply(s.emulatorId)} onclick={() => openApply(s.emulatorId)}>Use a config…</Button>
+                          <Button disabled={!canApply(s.emulatorId)} aria-describedby={canApply(s.emulatorId) ? undefined : `${uid}-${s.emulatorId}`} onclick={() => openApply(s.emulatorId)}>Use a config…</Button>
                         </span>
+                        {#if !canApply(s.emulatorId)}
+                          <span class="reason" id="{uid}-{s.emulatorId}">No other {emulatorName(s.emulatorId)} config to use yet.</span>
+                        {/if}
                       {:else if s.detail}
                         <span class="detail" class:mono={k.kind === "GrantFolders"}>{s.detail}</span>
                       {:else}
@@ -172,6 +213,18 @@
       {#if nextConfig}<p class="note">A config chosen here waits until its emulator is closed on {name}.</p>{/if}
     {/if}
   </section>
+
+  <Dialog bind:open={picked} title={pickTitle}>
+    {#if picking}
+      <form onsubmit={(e) => { e.preventDefault(); proceed(); }}>
+        <Field label="Config" options={picking.sources.map((x) => ({ value: x.key, label: `${x.name} · latest version` }))} bind:value={picking.chosen} />
+        <div class="actions">
+          <Button variant="primary" type="submit">Continue</Button>
+          <Button onclick={() => (picked = false)}>Cancel</Button>
+        </div>
+      </form>
+    {/if}
+  </Dialog>
 
   {#if applyTarget}
     <ApplyDialog
@@ -257,6 +310,17 @@
   }
   .detail.mono {
     font: 400 13px "JetBrains Mono", ui-monospace, monospace;
+  }
+  .reason {
+    grid-column: 2 / -1;
+    padding-bottom: 10px;
+    color: var(--ink3);
+    font-size: 14px;
+  }
+  .actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 22px;
   }
   .acts {
     display: flex;

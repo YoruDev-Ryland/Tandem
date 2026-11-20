@@ -16,7 +16,17 @@ class FakeEventSource {
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 
 const overview: ConfigOverview = {
-  emulators: [{ emulatorId: "eden", groups: [{ id: "g1", name: "Handhelds", members: [{ id: "d-thor", name: "Thor" }], headVersionId: "v9", openConflict: false }], solo: [{ device: { id: ODIN_ID, name: "Odin 3" }, bundleId: "b2", headVersionId: "v2", openConflict: false }] }],
+  emulators: [{
+    emulatorId: "eden",
+    groups: [
+      { id: "g1", name: "Handhelds", members: [{ id: "d-thor", name: "Thor" }], headVersionId: "v9", openConflict: false },
+      { id: "g2", name: "Mine already", members: [{ id: ODIN_ID, name: "Odin 3" }], headVersionId: "v8", openConflict: false },
+    ],
+    solo: [
+      { device: { id: ODIN_ID, name: "Odin 3" }, bundleId: "b2", headVersionId: "v2", openConflict: false },
+      { device: { id: "d-ayn", name: "Ayn" }, bundleId: "b3", headVersionId: "v3", openConflict: false },
+    ],
+  }],
 };
 
 function serve(list: SetupChecklist = checklist) {
@@ -94,7 +104,42 @@ describe("Setup", () => {
     render(Setup);
     await screen.findByText("Choose a Eden config");
     await fireEvent.click(screen.getByRole("button", { name: "Use a config…" }));
-    await screen.findByRole("heading", { name: "Apply Handhelds config to a device…" });
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Use a Eden config on Odin 3" })).toBeTruthy();
+    const options = within(dialog).getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["Handhelds · latest version", "Ayn · latest version"]);
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Use a Eden config on Odin 3" })).toBeTruthy());
+    const apply = (await screen.findAllByRole("dialog")).find((d) => within(d).queryByText("Linked"))!;
+    // The target is this device, frozen when the dialog opened.
+    expect(within(apply).getByRole("option", { name: "Odin 3" })).toBeTruthy();
+  });
+
+  it("disables 'Use a config' with a reason when no other config exists", async () => {
+    serve();
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
+      if (url.endsWith("/setup")) return json(checklist);
+      if (url.endsWith("/v1/web/configs")) return json({ emulators: [] });
+      return json(odinDetail);
+    });
+    render(Setup);
+    await screen.findByText("Choose a Eden config");
+    const btn = screen.getByRole("button", { name: "Use a config…" }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(screen.getByText("No other Eden config to use yet.")).toBeTruthy();
+  });
+
+  it("builds labels from the kind and the emulator name, with no regex on ids", async () => {
+    serve({ steps: [
+      { kind: "InstallEmulator", emulatorId: "a+b(", label: "Install a+b(", done: false, detail: null },
+      { kind: "InstallCores", emulatorId: "eden", label: "Install eden cores", done: false, detail: "mgba, gambatte" },
+      { kind: "PlaceVault", emulatorId: "eden", label: "Place eden system files", done: false, detail: "keys" },
+    ] });
+    render(Setup);
+    await screen.findByText("Install a+b(");
+    expect(screen.getByText("Install Eden cores")).toBeTruthy();
+    expect(screen.getByText("mgba, gambatte")).toBeTruthy();
+    expect(screen.getByText("Place Eden system files")).toBeTruthy();
   });
 
   it("reloads on the configs topic", async () => {

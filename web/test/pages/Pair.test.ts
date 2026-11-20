@@ -39,4 +39,39 @@ describe("Pair", () => {
     expect(f).toHaveBeenCalledTimes(2);
     expect(screen.getByText("WXYZ6789")).toBeTruthy();
   });
+
+  it("renders the QR on a light tile in either theme and drops the scan wording", async () => {
+    serve();
+    const { container } = render(Pair);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector('[data-theme="light"] svg')).toBeTruthy();
+    expect(screen.getByText("Open EmuSync on the device, choose Sign in with a code, and enter this code.")).toBeTruthy();
+  });
+
+  it("clears an expired code and does not retry every second when the refresh fails", async () => {
+    let n = 0;
+    const f = vi.fn(async () => {
+      n++;
+      if (n > 1) return new Response(JSON.stringify({ code: "boom" }), { status: 500, headers: { "Content-Type": "application/json" } });
+      return json({ code: "ABCD2345", qrPayload: "emusync://x", expiresUtc: new Date(Date.now() + 3000).toISOString() });
+    });
+    vi.stubGlobal("fetch", f);
+    render(Pair);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(f).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("ABCD2345")).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  it("stops fetching after unmount", async () => {
+    const f = serve();
+    const { unmount } = render(Pair);
+    await vi.advanceTimersByTimeAsync(0);
+    unmount();
+    await vi.advanceTimersByTimeAsync(200_000);
+    expect(f).toHaveBeenCalledTimes(1);
+  });
 });

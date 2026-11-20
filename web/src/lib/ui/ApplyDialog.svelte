@@ -14,8 +14,10 @@
     emulatorName: string;
     /** Frozen by the page when the dialog opens. */
     versionId: string;
-    /** "v7", for the title. */
+    /** "v7", for the default title. */
     label: string;
+    /** Replaces the default "Apply {label} to a device…". */
+    title?: string;
     /** The group the version belongs to; null for a device on its own. */
     groupName: string | null;
     /** For a device on its own: the device, which a Linked apply groups with the target. */
@@ -33,6 +35,7 @@
     emulatorName,
     versionId,
     label,
+    title,
     groupName,
     ownerName,
     rollback,
@@ -82,7 +85,7 @@
   }
 </script>
 
-<Dialog bind:open title={`Apply ${label} to a device…`}>
+<Dialog bind:open title={title ?? `Apply ${label} to a device…`}>
   <form onsubmit={(e) => { e.preventDefault(); void go(); }}>
     <fieldset>
       <legend>How</legend>
