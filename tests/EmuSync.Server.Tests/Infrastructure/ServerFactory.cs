@@ -13,7 +13,10 @@ public sealed class ServerFactory : WebApplicationFactory<Program>
         Directory.CreateTempSubdirectory("emusync-test-").FullName;
 
     /// <summary>Extra configuration, applied when the host is first built (set before calling Client()).</summary>
-    public Dictionary<string, string?> Settings { get; } = new();
+    public Dictionary<string, string?> Settings { get; } = new()
+    {
+        ["EmuSync:AuthRequestsPerMinute"] = "10000",
+    };
 
     public FakeTimeProvider Time { get; } = new(DateTimeOffset.Parse("2026-11-19T12:00:00Z"));
 

@@ -14,6 +14,7 @@ public sealed class ServerOptions
     public string? DatabaseConnection { get; set; }
     public bool TrustForwardedHeaders { get; set; }
     public string? WebRoot { get; set; }
+    public int AuthRequestsPerMinute { get; set; } = 10;
 
     public string ServerName
     {
