@@ -28,6 +28,9 @@ object AppGraph {
     @Volatile private var storeRef: StateStore? = null
     @Volatile private var gateRef: ShizukuGate? = null
 
+    /** The one sync supervisor of this process (see [SessionRunner]). */
+    val sessions = SessionRunner()
+
     val snapshot = MutableStateFlow(ServiceSnapshot())
     val snapshots: StateFlow<ServiceSnapshot> get() = snapshot
 

@@ -26,6 +26,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
@@ -35,6 +36,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -60,17 +62,11 @@ class SyncService : Service() {
         private const val MONITOR_MS = 5_000L
         private const val FULL_SCAN_MS = 15 * 60_000L
         private const val RESTART_DELAY_MS = 5_000L
+        private const val BIND_TIMEOUT_MS = 30_000L
 
         fun start(context: Context, action: String? = null) {
             context.startForegroundService(Intent(context, SyncService::class.java).setAction(action))
         }
-    }
-
-    private sealed interface Work {
-        data object FullScan : Work
-        data object Tick : Work
-        data object ApplyAll : Work
-        data object Monitor : Work
     }
 
     /** The objects of one Shizuku-ready session. */
@@ -78,7 +74,8 @@ class SyncService : Service() {
         val fs: RemoteFs,
         val engine: SyncEngine,
         val applier: DeliveryApplier,
-        val queue: WorkQueue<Work>,
+        val queue: WorkQueue<SyncWork>,
+        val planner: WorkPlanner,
         val exits: ExitDetector = ExitDetector(),
         var watched: List<String> = emptyList(),
     )
@@ -87,7 +84,9 @@ class SyncService : Service() {
     private val reloads = MutableStateFlow(0)
     @Volatile private var session: Session? = null
     @Volatile private var online: Boolean? = null   // server event stream; null until the first connect attempt
-    @Volatile private var lastStatus: DeviceStatusRequest? = null
+    /** The last status the server accepted, with the server and key it was sent with. */
+    private class SentStatus(val url: String, val key: String, val req: DeviceStatusRequest)
+    @Volatile private var lastStatus: SentStatus? = null
     @Volatile private var destroyed = false
 
     private lateinit var notifier: Notifier
@@ -105,14 +104,16 @@ class SyncService : Service() {
         gate   // starts the Shizuku listeners on the main thread
         goForeground()
         log("service started (app ${BuildConfig.VERSION_NAME})")
-        scope.launch { supervise() }
+        AppGraph.sessions.start(scope) { supervise() }   // joins a previous instance's supervisor first
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         goForeground()   // required after every startForegroundService
         when (intent?.action) {
-            ACTION_SCAN -> session?.queue?.offer(Work.FullScan) ?: log("scan requested, but sync isn't running")
-            ACTION_APPLY -> session?.queue?.offer(Work.ApplyAll) ?: log("apply requested, but sync isn't running")
+            ACTION_SCAN -> session?.let { s -> s.planner.explicitScan().forEach { s.queue.offer(it) } }
+                ?: log("scan requested, but sync isn't running")
+            ACTION_APPLY -> session?.let { s -> s.planner.explicitApply().forEach { s.queue.offer(it) } }
+                ?: log("apply requested, but sync isn't running")
             ACTION_RELOAD -> { log("settings changed, restarting sync"); reloads.value++ }
         }
         return START_STICKY
@@ -135,7 +136,8 @@ class SyncService : Service() {
                 startForeground(Notifier.ID_STATUS, n)
             }
         } catch (e: Exception) {
-            log("startForeground failed: ${e.message}")
+            log("startForeground failed, stopping: ${e.message}")
+            stopSelf()
         }
     }
 
@@ -176,10 +178,17 @@ class SyncService : Service() {
             publish()
             awaitCancellation()
         }
-        val shell = withContext(Dispatchers.Main) { gate.bind() }
+        val shell = try {
+            withContext(Dispatchers.Main) { withTimeout(BIND_TIMEOUT_MS) { gate.bind() } }
+        } catch (e: TimeoutCancellationException) {
+            log("shell bind timed out after ${BIND_TIMEOUT_MS / 1000} s")
+            throw FsUnavailableException("shell bind timed out")
+        }
         val fs = RemoteFs(shell)
-        val api = StatusRecordingApi(ApiClient(url, key)) { lastStatus = it }
-        val s = settingsOf(store)
+        val api = StatusRecordingApi(ApiClient(url, key)) { lastStatus = SentStatus(url, key, it) }
+        val stored = store.settings
+        val s = DeviceSettings(stored.romDirs, stored.overrides)
+        val planner = WorkPlanner(stored.autoApply)
         val engine = SyncEngine(
             fs, api, store, registry, s,
             clock = System::currentTimeMillis,   // compared with file mtimes: must be wall-clock time
@@ -192,35 +201,34 @@ class SyncService : Service() {
         val applier = DeliveryApplier(
             fs, api, store, registry, engine, notifier::alert, s, cacheDir, log = log,
         )
-        val sess = Session(fs, engine, applier, WorkQueue())
-        log("sync session starting ($url)")
+        val sess = Session(fs, engine, applier, WorkQueue(), planner)
+        log("sync session starting ($url, auto-apply ${if (stored.autoApply) "on" else "off"})")
 
         // Initial pass before anything else is queued.
-        handle(sess, Work.FullScan)
+        handle(sess, SyncWork.FullScan)
         session = sess
         publish()
 
-        var opens = 0
+        fun offer(work: List<SyncWork>) = work.forEach { sess.queue.offer(it) }
+        val opens = java.util.concurrent.atomic.AtomicInteger(0)
         val events = EventStream(
             defaultHttpClient(), url, key,
-            onDeliveries = { sess.queue.offer(Work.ApplyAll) },
+            onDeliveries = { offer(planner.deliveriesEvent()) },
             onState = { up ->
                 if (up != online) log(if (up) "server events connected" else "server events disconnected")
                 online = up
-                if (up) {
-                    if (opens++ > 0) sess.queue.offer(Work.FullScan)   // reconnect: catch up on what was missed
-                    sess.queue.offer(Work.ApplyAll)
-                }
+                // A reconnect rescans to catch up on what was missed.
+                if (up) offer(planner.streamOpened(reconnect = opens.getAndIncrement() > 0))
                 publish()
             },
         )
         try {
             launch { sess.queue.consume { handle(sess, it) } }
-            launch { every(TICK_MS) { sess.queue.offer(Work.Tick) } }
-            launch { every(MONITOR_MS) { sess.queue.offer(Work.Monitor) } }
-            launch { every(SyncConfig.pollMillis) { sess.queue.offer(Work.ApplyAll) } }
-            launch { every(FULL_SCAN_MS) { sess.queue.offer(Work.FullScan) } }
-            sess.queue.offer(Work.ApplyAll)
+            launch { every(TICK_MS) { offer(planner.tick()) } }
+            launch { every(MONITOR_MS) { offer(planner.monitor()) } }
+            launch { every(SyncConfig.pollMillis) { offer(planner.poll()) } }
+            launch { every(FULL_SCAN_MS) { offer(planner.periodicScan()) } }
+            offer(planner.sessionStarted())
             events.start()
             awaitCancellation()
         } finally {
@@ -240,20 +248,20 @@ class SyncService : Service() {
     }
 
     /** Runs one work item. Everything but [FsUnavailableException] and cancellation is logged and swallowed. */
-    private suspend fun handle(s: Session, w: Work) {
+    private suspend fun handle(s: Session, w: SyncWork) {
         try {
             when (w) {
-                Work.FullScan -> {
+                SyncWork.FullScan -> {
                     s.engine.fullScan()
                     rewatch(s)
                 }
-                Work.Tick -> s.engine.tick()
-                Work.ApplyAll -> {
+                SyncWork.Tick -> s.engine.tick()
+                SyncWork.ApplyAll -> {
                     val r = s.applier.applyAll()
                     if (r.applied + r.failed + r.waitingForEmulator > 0)
                         log("deliveries: ${r.applied} applied, ${r.skipped} skipped, ${r.failed} failed, ${r.waitingForEmulator} waiting")
                 }
-                Work.Monitor -> monitor(s)
+                SyncWork.Monitor -> monitor(s)
             }
         } catch (e: CancellationException) {
             throw e
@@ -262,7 +270,7 @@ class SyncService : Service() {
         } catch (e: Throwable) {
             log("$w failed: ${e.javaClass.simpleName}: ${e.message}")
         } finally {
-            if (w != Work.Tick && w != Work.Monitor) publish()
+            if (w != SyncWork.Tick && w != SyncWork.Monitor) publish()
         }
     }
 
@@ -275,8 +283,10 @@ class SyncService : Service() {
             if (!s.exits.observe(d.emulatorId, alive)) continue
             log("${d.emulatorId} exited")
             s.engine.onEmulatorExited(d.emulatorId)
-            val r = s.applier.onEmulatorExited(d.emulatorId)
-            if (r.applied + r.failed > 0) log("${d.emulatorId}: ${r.applied} applied, ${r.failed} failed after exit")
+            if (s.planner.applyOnExit()) {
+                val r = s.applier.onEmulatorExited(d.emulatorId)
+                if (r.applied + r.failed > 0) log("${d.emulatorId}: ${r.applied} applied, ${r.failed} failed after exit")
+            }
             rewatch(s)
             publish()
         }
@@ -293,13 +303,14 @@ class SyncService : Service() {
 
     /** Best effort: tells the server Shizuku is off, resending the last emulator list so it isn't wiped. */
     private suspend fun reportShizukuOff() {
-        val last = lastStatus ?: return
+        val sent = lastStatus ?: return
         val url = store.serverUrl?.trimEnd('/') ?: return
         val key = store.deviceKey ?: return
-        if (!last.shizukuOk) return
+        if (sent.url != url || sent.key != key || !sent.req.shizukuOk) return   // only for the same server and device
         try {
-            withTimeoutOrNull(20_000) { ApiClient(url, key).putStatus(last.copy(shizukuOk = false)) }
-            lastStatus = last.copy(shizukuOk = false)
+            val off = sent.req.copy(shizukuOk = false)
+            withTimeoutOrNull(20_000) { ApiClient(url, key).putStatus(off) } ?: return
+            lastStatus = SentStatus(url, key, off)
             log("reported Shizuku off to the server")
         } catch (e: CancellationException) {
             throw e
@@ -327,6 +338,7 @@ class SyncService : Service() {
         )
     }
 
+    @Synchronized
     private fun publish() {
         if (destroyed) return   // a cancelled session's last publish must not re-post the notification
         val text = currentText()
@@ -344,10 +356,6 @@ class SyncService : Service() {
         if (prev.status != text || !prev.running) notifier.updateStatus(text)
     }
 }
-
-/** Reads the device settings the modules need from the store. */
-private fun settingsOf(store: StateStore): DeviceSettings =
-    store.settings.let { DeviceSettings(it.romDirs, it.overrides) }
 
 /** Passes calls through and remembers the last status the server accepted (for the Shizuku-off report). */
 private class StatusRecordingApi(private val inner: Api, private val onStatus: (DeviceStatusRequest) -> Unit) : Api by inner {

@@ -43,7 +43,16 @@ data class ApplyMarker(
 )
 
 @Serializable
-data class DeviceSettingsData(val romDirs: List<String> = emptyList(), val overrides: Map<String, String> = emptyMap())
+data class DeviceSettingsData(
+    val romDirs: List<String> = emptyList(),
+    val overrides: Map<String, String> = emptyMap(),
+    /** When false (the default) deliveries are applied only on an explicit request from the debug screen. */
+    val autoApply: Boolean = false,
+)
+
+/** What the debug screen's sign-in form last held (never the password). Not used for syncing. */
+@Serializable
+data class SignInForm(val serverUrl: String? = null, val email: String? = null)
 
 @Serializable
 private data class StateData(
@@ -54,6 +63,7 @@ private data class StateData(
     val deviceId: String? = null,
     val settings: DeviceSettingsData = DeviceSettingsData(),
     val applying: Map<String, ApplyMarker> = emptyMap(),
+    val signInForm: SignInForm = SignInForm(),
 )
 
 class StateStore(private val file: File) {
@@ -117,4 +127,7 @@ class StateStore(private val file: File) {
     var settings: DeviceSettingsData
         get() = synchronized(lock) { data.settings }
         set(v) = mutate { it.copy(settings = v) }
+    var signInForm: SignInForm
+        get() = synchronized(lock) { data.signInForm }
+        set(v) = mutate { it.copy(signInForm = v) }
 }

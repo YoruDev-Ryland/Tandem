@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -23,6 +24,7 @@ import dev.emusync.app.service.AppGraph
 import dev.emusync.app.service.LogBuffer
 import dev.emusync.app.service.SyncService
 import dev.emusync.app.sync.DeviceSettingsData
+import dev.emusync.app.sync.SignInForm
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -62,6 +64,8 @@ class DebugActivity : Activity() {
     private lateinit var azaharRoot: EditText
     private lateinit var ppssppMemstick: EditText
     private lateinit var edenPackage: EditText
+    private lateinit var autoApply: CheckBox
+    private lateinit var pending: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -120,9 +124,10 @@ class DebugActivity : Activity() {
         root.addView(button("Request Shizuku permission") { requestShizuku() })
 
         header("Server and sign-in")
-        server = field("Server URL", store.serverUrl ?: DEFAULT_SERVER, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        val form = store.signInForm
+        server = field("Server URL", form.serverUrl ?: store.serverUrl ?: DEFAULT_SERVER, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         deviceName = field("Device name", Build.MODEL ?: "Android")
-        email = field("Email", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
+        email = field("Email", form.email ?: "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
         password = field("Password", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
         row(
             button("Register") { signIn("register") { c, n -> c.register(email.value(), password.value(), n) } },
@@ -133,6 +138,16 @@ class DebugActivity : Activity() {
 
         header("Detected emulators")
         emulators = text()
+
+        header("Deliveries")
+        autoApply = CheckBox(this).apply {
+            text = "Auto-apply deliveries"
+            isChecked = settings.autoApply
+            setOnCheckedChangeListener { _, on -> setAutoApply(on) }
+        }.also { root.addView(it) }
+        text().text = "Off: deliveries are applied only with \"Apply deliveries now\"."
+        root.addView(button("Refresh pending deliveries") { loadPending() })
+        pending = text().apply { text = "Not loaded." }
 
         header("Settings")
         romDirs = field("ROM folders (comma-separated)", settings.romDirs.joinToString(", "))
@@ -155,6 +170,7 @@ class DebugActivity : Activity() {
 
     private fun signIn(what: String, call: suspend (ApiClient, String) -> DeviceKeyResponse) {
         val url = server.value().trimEnd('/')
+        saveForm()
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             toast("Server URL must start with http:// or https://")
             return
@@ -187,11 +203,52 @@ class DebugActivity : Activity() {
             "ppsspp.memstick" to ppssppMemstick.value(),
             "eden.package" to edenPackage.value(),
         ).filterValues { it.isNotBlank() }
-        val overrides = (store.settings.overrides - EDITED_OVERRIDES) + edited   // keep keys this screen doesn't edit
-        store.settings = DeviceSettingsData(dirs, overrides)
+        val current = store.settings
+        val overrides = (current.overrides - EDITED_OVERRIDES) + edited   // keep keys this screen doesn't edit
+        store.settings = DeviceSettingsData(dirs, overrides, autoApply.isChecked)
+        saveForm()
         LogBuffer.add("settings saved: ${dirs.size} ROM folders, overrides ${overrides.keys}")
         if (AppGraph.snapshot.value.running) SyncService.start(this, SyncService.ACTION_RELOAD)
         toast("Saved")
+    }
+
+    /** Persists the server URL and email of the form. Never the password. */
+    private fun saveForm() {
+        store.signInForm = SignInForm(server.value().trimEnd('/').ifBlank { null }, email.value().ifBlank { null })
+    }
+
+    private fun setAutoApply(on: Boolean) {
+        if (store.settings.autoApply == on) return
+        store.settings = store.settings.copy(autoApply = on)
+        LogBuffer.add("auto-apply ${if (on) "on" else "off"}")
+        if (AppGraph.snapshot.value.running) SyncService.start(this, SyncService.ACTION_RELOAD)
+    }
+
+    private fun loadPending() {
+        val url = store.serverUrl
+        val key = store.deviceKey
+        if (url.isNullOrBlank() || key.isNullOrBlank()) {
+            pending.text = "Sign in first."
+            return
+        }
+        pending.text = "Loading..."
+        ui.launch {
+            pending.text = try {
+                val list = ApiClient(url, key).deliveries()
+                if (list.isEmpty()) "No pending deliveries."
+                else "${list.size} pending:\n" + list.joinToString("\n") { d ->
+                    listOf(
+                        d.kind.name, d.emulatorId, d.itemKind?.name, d.gameKey,
+                        d.slot?.takeIf { it.isNotEmpty() }?.let { "slot $it" },
+                        d.core?.takeIf { it.isNotEmpty() }, "${d.manifest.size} files",
+                    ).filterNotNull().joinToString(" / ")
+                }
+            } catch (e: ApiException) {
+                "Failed: ${e.status} ${e.code ?: e.message ?: ""}"
+            } catch (e: Exception) {
+                "Failed: ${e.javaClass.simpleName}: ${e.message}"
+            }
+        }
     }
 
     private fun requestShizuku() {

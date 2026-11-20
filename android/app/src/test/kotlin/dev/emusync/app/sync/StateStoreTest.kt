@@ -25,6 +25,19 @@ class StateStoreTest {
         assertFalse(File(tmp.root, "state.json.tmp").exists())
     }
 
+    @Test fun auto_apply_defaults_off_for_old_files_and_persists() {
+        val f = File(tmp.root, "state.json")
+        f.writeText("""{"settings":{"romDirs":["/r"],"overrides":{}}}""")
+        val s = StateStore(f)
+        assertFalse(s.settings.autoApply)
+        s.settings = s.settings.copy(autoApply = true)
+        s.signInForm = SignInForm("http://x", "a@b")
+        val r = StateStore(f)
+        assertTrue(r.settings.autoApply)
+        assertEquals(SignInForm("http://x", "a@b"), r.signInForm)
+        assertFalse(f.readText().contains("password"))
+    }
+
     @Test fun missing_file_starts_empty() {
         val s = StateStore(File(tmp.root, "none.json"))
         assertNull(s.deviceKey); assertNull(s.get("k"))
