@@ -116,7 +116,7 @@ public static class BackupEndpoints
 
         backup.MapGet("/history", async (TandemDbContext db, CancellationToken ct) =>
             await db.BackupRuns.AsNoTracking().OrderByDescending(r => r.Id).Take(BackupService.HistoryShown)
-                .Select(r => new BackupRunInfo(r.Utc, r.Ok, r.Bytes, r.Error)).ToListAsync(ct));
+                .Select(r => new BackupRunInfo(r.Utc, r.Ok, r.Bytes, r.Error, r.Partial)).ToListAsync(ct));
         return app;
     }
 }

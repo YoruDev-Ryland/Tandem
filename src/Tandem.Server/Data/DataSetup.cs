@@ -55,8 +55,43 @@ public static class DataSetup
         var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
         // WAL (persistent in the database file): a backup's long export transaction then does not block writers, nor
         // writers the export.
-        if (db.Database.IsSqlite()) db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
+        if (db.Database.IsSqlite())
+        {
+            db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
+            SnapshotBeforeMigrations(db);
+        }
         db.Database.Migrate();
+    }
+
+    public const int SnapshotsKept = 3;
+
+    /// <summary>
+    /// SQLite only: before pending migrations change an existing database, copies it with <c>VACUUM INTO</c> to
+    /// <c>tandem.db.pre-&lt;last applied migration id&gt;</c> beside it (a consistent copy even in WAL mode), and keeps the
+    /// newest <see cref="SnapshotsKept"/> such copies. Nothing happens for a new database or when nothing is pending.
+    /// Returns the snapshot's path, or null.
+    /// </summary>
+    public static string? SnapshotBeforeMigrations(TandemDbContext db)
+    {
+        if (!db.Database.IsSqlite()) return null;
+        var applied = db.Database.GetAppliedMigrations().ToList();
+        if (applied.Count == 0 || !db.Database.GetPendingMigrations().Any()) return null;
+        var source = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(db.Database.GetConnectionString()).DataSource;
+        if (string.IsNullOrEmpty(source) || source.Equals(":memory:", StringComparison.OrdinalIgnoreCase)) return null;
+
+        var file = Path.GetFullPath(source);
+        var snapshot = $"{file}.pre-{applied[^1]}";
+        if (!File.Exists(snapshot))
+        {
+            var sql = "VACUUM INTO '" + snapshot.Replace("'", "''", StringComparison.Ordinal) + "'";
+            db.Database.ExecuteSqlRaw(sql);
+        }
+        // Migration ids start with their timestamp, so the names sort oldest to newest.
+        var dir = Path.GetDirectoryName(file)!;
+        foreach (var old in Directory.EnumerateFiles(dir, Path.GetFileName(file) + ".pre-*")
+                     .OrderByDescending(Path.GetFileName, StringComparer.Ordinal).Skip(SnapshotsKept))
+            File.Delete(old);
+        return snapshot;
     }
 
     private static bool IsPostgres(ServerOptions o) =>

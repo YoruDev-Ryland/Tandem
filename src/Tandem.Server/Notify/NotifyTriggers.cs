@@ -42,7 +42,7 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
         events.Subscribe<ConflictOpened>((e, _) => Enqueue(e));
         events.Subscribe<ConfigConflictOpened>((e, _) => Enqueue(e));
         events.Subscribe<DeliveryFailed>((e, _) => Enqueue(e));
-        events.Subscribe<BackupFinished>((e, _) => e.Ok ? Task.CompletedTask : Enqueue(e));
+        events.Subscribe<BackupFinished>((e, _) => e.Ok && !e.Partial ? Task.CompletedTask : Enqueue(e));
         return base.StartAsync(cancellationToken);
     }
 
@@ -248,8 +248,12 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
             case BackupFinished e:
             {
                 var admins = await db.Users.AsNoTracking().Where(u => u.IsAdmin).Select(u => u.Id).ToListAsync(ct);
-                var message = new NotifyMessage("Tandem: backup failed",
-                    string.IsNullOrWhiteSpace(e.Error) ? "The scheduled backup failed." : $"The backup failed: {e.Error}", NotifyEventNames.BackupFailed);
+                var message = e.Ok
+                    ? new NotifyMessage("Tandem: backup incomplete", $"The backup was written, but it is incomplete: {e.Error}",
+                        NotifyEventNames.BackupFailed)
+                    : new NotifyMessage("Tandem: backup failed",
+                        string.IsNullOrWhiteSpace(e.Error) ? "The scheduled backup failed." : $"The backup failed: {e.Error}",
+                        NotifyEventNames.BackupFailed);
                 foreach (var admin in admins) await SendAsync(admin, NotifyEventNames.BackupFailed, "backup", message, ct);
                 break;
             }

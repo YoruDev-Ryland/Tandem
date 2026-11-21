@@ -355,11 +355,18 @@ public class NotifyTests
         Assert.Equal("https://hooks.example.com/admin", sent.Url);
         Assert.Contains("Disk is full.", sent.Body);
 
+        // A partial run (written, some blob files missing) notifies too.
+        f.Time.Advance(TimeSpan.FromMinutes(11));
+        await events.Raise(new BackupFinished(true, "1 blob file was missing", Partial: true), default);
+        await Flush(f);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Contains("incomplete", handler.Requests.Last().Body);
+
         await Configure(admin, new NotifyEvents(BackupFailed: false), new NotifyTarget(NotifyKind.Webhook, "https://hooks.example.com/admin"));
         f.Time.Advance(TimeSpan.FromMinutes(11));
         await events.Raise(new BackupFinished(false, "Disk is full."), default);
         await Flush(f);
-        Assert.Single(handler.Requests);
+        Assert.Equal(2, handler.Requests.Count);
     }
 
     [Fact]

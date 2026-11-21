@@ -139,6 +139,9 @@ public static class BackupRestore
         }
         expectedBlobs ??= (await db.UserBlobs.AsNoTracking().Select(b => new { b.UserId, b.Hash }).ToListAsync(ct))
             .Select(b => (b.UserId, b.Hash)).ToHashSet();
+        // A partial backup lists the blobs whose files were already missing on the server: their rows come back as they were.
+        foreach (var m in manifest.MissingBlobs ?? [])
+            expectedBlobs.Remove(ParseBlobName(BackupFormat.BlobDir + m));
         if (restored.Count != manifest.Blobs || expectedBlobs.Count != restored.Count)
             throw new BackupException(
                 $"The backup should hold {manifest.Blobs} blobs ({expectedBlobs.Count} recorded) but holds {restored.Count}; it is truncated or damaged.");

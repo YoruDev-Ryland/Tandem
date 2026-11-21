@@ -509,7 +509,7 @@ public sealed class BackupTests : IDisposable
     }
 
     [Fact]
-    public async Task Missing_blob_file_fails_the_run_and_writes_nothing()
+    public async Task Missing_blob_file_makes_a_partial_backup_that_lists_it_and_still_restores()
     {
         var folder = NewFolder();
         using var f = NewFactory();
@@ -523,12 +523,31 @@ public sealed class BackupTests : IDisposable
 
         var run = await Backups(f).RunOnceAsync(CancellationToken.None);
 
-        Assert.False(run.Ok);
-        Assert.Contains(hash, run.Error);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(folder));
+        Assert.True(run.Ok);
+        Assert.True(run.Partial);
+        Assert.Contains("1 blob file was missing", run.Error);
+        var file = Assert.Single(BackupFiles(folder));
         var e = Assert.Single(finished);
-        Assert.False(e.Ok);
+        Assert.True(e.Ok);
+        Assert.True(e.Partial);
         Assert.Equal(run.Error, e.Error);
+        Assert.True(Assert.Single((await (await admin.GetAsync("/v1/admin/backup/history")).ReadAsync<List<BackupRunInfo>>())).Partial);
+
+        // The manifest names the missing blob; the rest restores into an empty server.
+        await using (var archive = File.OpenRead(Path.Combine(folder, file)))
+        await using (var gzip = new System.IO.Compression.GZipStream(archive, System.IO.Compression.CompressionMode.Decompress))
+        await using (var tar = new System.Formats.Tar.TarReader(gzip))
+        {
+            var entry = (await tar.GetNextEntryAsync())!;
+            var manifest = (await System.Text.Json.JsonSerializer.DeserializeAsync<BackupManifest>(entry.DataStream!, BackupFormat.ManifestJson))!;
+            Assert.Equal([$"{key.UserId:N}/{hash}"], manifest.MissingBlobs);
+        }
+        using var fresh = NewFactory();
+        await fresh.Client().GetAsync("/healthz");
+        var (code, _, error) = await Cli(fresh, "restore-backup", Path.Combine(folder, file));
+        Assert.True(code == 0, error);
+        Assert.Equal(await Counts(f), await Counts(fresh));
+        File.Delete(Path.Combine(folder, file));
 
         // Unconfigured target: also a recorded failure, not an exception.
         await PutSettings(admin, new BackupSettingsDto(false, BackupTargetKind.Folder, Path.Combine(folder, "not-mounted"), null, 3, 7, false, null));

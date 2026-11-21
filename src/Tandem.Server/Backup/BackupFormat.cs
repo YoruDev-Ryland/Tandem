@@ -62,8 +62,11 @@ public static partial class BackupFormat
 }
 
 /// <param name="Tables">Row count per table file name.</param>
+/// <param name="Blobs">Blob files in the archive.</param>
+/// <param name="MissingBlobs">Recorded blobs whose files were missing from the server when the backup ran
+/// ("userId/hash", userId as 32 hex digits); their rows are in the backup, their files are not.</param>
 public sealed record BackupManifest(int Format, string ServerVersion, DateTimeOffset CreatedUtc, string Provider,
-    Dictionary<string, long> Tables, long Blobs, long BlobBytes);
+    Dictionary<string, long> Tables, long Blobs, long BlobBytes, IReadOnlyList<string>? MissingBlobs = null);
 
 /// <summary>The logical, provider-independent export and import of every table.</summary>
 public static class BackupDatabase
@@ -72,7 +75,9 @@ public static class BackupDatabase
 
     public sealed record TableFile(string Table, string Path, long Rows);
 
-    public sealed record Export(List<TableFile> Tables, List<(Guid UserId, string Hash, long Size)> Blobs, string Provider);
+    /// <param name="Missing">Recorded blobs left out because their files are missing (set by the backup run).</param>
+    public sealed record Export(List<TableFile> Tables, List<(Guid UserId, string Hash, long Size)> Blobs, string Provider,
+        List<(Guid UserId, string Hash, long Size)>? Missing = null);
 
     /// <summary>Every entity type in foreign-key-safe order (principals first; ties by table name).</summary>
     public static List<IEntityType> OrderedEntityTypes(IModel model)
