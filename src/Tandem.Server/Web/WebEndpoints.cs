@@ -111,6 +111,23 @@ public static class WebEndpoints
             foreach (var e in Manifests.FromJson(r.ManifestJson).OrderBy(e => e.Path, StringComparer.Ordinal))
                 items.Add(new ZipItem(prefix + ZipExport.SanitizePath(e.Path), e.Hash));
         }
+
+        // Config bundle heads: configs/<emulatorId>/<device or group name>/<path>.
+        var configs = await (from b in db.ConfigBundles.AsNoTracking()
+                join v in db.ConfigVersions.AsNoTracking() on b.HeadVersionId equals v.Id
+                join d in db.Devices.AsNoTracking() on b.OwnerDeviceId equals d.Id into owners
+                from d in owners.DefaultIfEmpty()
+                join g in db.SyncGroups.AsNoTracking() on b.GroupId equals g.Id into groups
+                from g in groups.DefaultIfEmpty()
+                where b.UserId == userId && (string.IsNullOrEmpty(emulator) || b.EmulatorId == emulator)
+                select new { b.EmulatorId, Owner = g != null ? g.Name : d != null ? d.Name : "config", v.ManifestJson })
+            .ToListAsync(ct);
+        foreach (var c in configs.OrderBy(c => c.EmulatorId, StringComparer.Ordinal).ThenBy(c => c.Owner, StringComparer.Ordinal))
+        {
+            var prefix = $"configs/{ZipExport.SanitizeSegment(c.EmulatorId)}/{ZipExport.SanitizeSegment(c.Owner)}/";
+            foreach (var e in Manifests.FromJson(c.ManifestJson).OrderBy(e => e.Path, StringComparer.Ordinal))
+                items.Add(new ZipItem(prefix + ZipExport.SanitizePath(e.Path), e.Hash));
+        }
         var name = string.IsNullOrEmpty(emulator) ? "tandem-export.zip" : $"tandem-{emulator}.zip";
         return Results.Stream(s => ZipExport.WriteAsync(s, userId, items, store, ct, tolerateMissing: true), "application/zip", name);
     }
