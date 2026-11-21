@@ -19,3 +19,8 @@ TestResults/
 Dockerfile
 docker-compose.yml
 web/dist/
+android/
+design/
+.claude/
+.interface-design/
+PRODUCT.md

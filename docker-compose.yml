@@ -1,5 +1,6 @@
 services:
   tandem:
+    # <owner> is the GitHub account or organisation you install from (the owner of the repo that publishes the image).
     image: ghcr.io/<owner>/tandem:latest
     # To build from source instead of pulling the image:
     # build: .
@@ -10,12 +11,28 @@ services:
       PUBLIC_URL: https://tandem.example.com
       # PUID: 1654
       # PGID: 1654
+      # ALLOW_ROOT: "true"           # needed only if you set PUID/PGID to 0
       # ALLOW_REGISTRATION: "false"
       # SERVER_NAME: Tandem
+      # TRUST_FORWARDED_HEADERS: "true"  # when behind a reverse proxy
+      # KNOWN_PROXIES: 172.18.0.0/16     # the proxy addresses to trust (comma-separated); narrower than trusting all
+      # ADMIN_EMAIL: you@example.com     # who gets admin-only notices
+      # SILENT_DEVICE_HOURS: 72          # flag a device not seen for this long
+      # Tandem__MinFreeBytes: 1073741824 # refuse uploads below this much free disk (default 1 GiB)
     volumes:
       - tandem-data:/data
     ports:
+      # Behind a reverse proxy on the same host, publish on loopback only so plain http is not reachable from the LAN:
+      # - "127.0.0.1:8080:8080"
       - "8080:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # The entrypoint needs these to chown /data and drop to PUID:PGID; everything else is dropped.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
 
 volumes:
   tandem-data:
