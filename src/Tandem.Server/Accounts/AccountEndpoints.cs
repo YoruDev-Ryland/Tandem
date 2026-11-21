@@ -14,8 +14,8 @@ public static class AccountEndpoints
         app.MapPost("/v1/auth/register", (RegisterRequest request, AccountService accounts, CancellationToken ct) =>
             accounts.Register(request, ct)).RequireRateLimiting(AuthSetup.AuthRateLimit);
 
-        app.MapPost("/v1/auth/login", (LoginRequest request, AccountService accounts, CancellationToken ct) =>
-            accounts.Login(request, ct)).RequireRateLimiting(AuthSetup.AuthRateLimit);
+        app.MapPost("/v1/auth/login", (LoginRequest request, HttpContext http, AccountService accounts, CancellationToken ct) =>
+            accounts.Login(request, AuthSetup.PartitionKey(http.Connection.RemoteIpAddress), ct)).RequireRateLimiting(AuthSetup.AuthRateLimit);
 
         app.MapPost("/v1/web/session", async (WebSessionRequest request, HttpContext http, AccountService accounts, PairingService pairing, TandemDbContext db, TimeProvider time, CancellationToken ct) =>
         {
@@ -30,7 +30,7 @@ public static class AccountEndpoints
             }
             if (request.Email is null || request.Password is null)
                 throw new ApiException(400, "invalid_request", "Email and password are required.");
-            var user = await accounts.Authenticate(request.Email, request.Password, ct);
+            var user = await accounts.Authenticate(request.Email, request.Password, AuthSetup.PartitionKey(http.Connection.RemoteIpAddress), ct);
             var token = await accounts.CreateWebSession(user.Id, null, ct);
             WebSessionCookie.Append(http, token, time);
             return new AccountInfo(user.Id, user.Email, user.IsAdmin);

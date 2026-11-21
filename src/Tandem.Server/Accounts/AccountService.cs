@@ -104,26 +104,26 @@ public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> o
         return user;
     }
 
-    public async Task<DeviceKeyResponse> Login(LoginRequest request, CancellationToken ct)
+    public async Task<DeviceKeyResponse> Login(LoginRequest request, string client, CancellationToken ct)
     {
-        var user = await Authenticate(request.Email, request.Password, ct);
+        var user = await Authenticate(request.Email, request.Password, client, ct);
         return await CreateDevice(user.Id, request.DeviceName, request.Platform, ct);
     }
 
     /// <summary>Verifies email and password; every failure is the same 401. After repeated failures for one email the
-    /// account must wait (429 too_many_attempts, see <see cref="LoginThrottle"/>).</summary>
-    public async Task<User> Authenticate(string? email, string? password, CancellationToken ct)
+    /// account must wait from that <paramref name="client"/> bucket (429 too_many_attempts, see <see cref="LoginThrottle"/>).</summary>
+    public async Task<User> Authenticate(string? email, string? password, string client, CancellationToken ct)
     {
         var normalized = (email ?? "").Trim().ToLowerInvariant();
-        throttle.Check(normalized);
+        throttle.Check(normalized, client);
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == normalized, ct);
         var result = Hasher.VerifyHashedPassword(user ?? DummyUser, user?.PasswordHash ?? DummyHash, password ?? "");
         if (user is null || result == PasswordVerificationResult.Failed)
         {
-            throttle.Failed(normalized);
+            throttle.Failed(normalized, client);
             throw new ApiException(401, "invalid_credentials", "Wrong email or password.");
         }
-        throttle.Succeeded(normalized);
+        throttle.Succeeded(normalized, client);
         if (result == PasswordVerificationResult.SuccessRehashNeeded)
         {
             user.PasswordHash = Hasher.HashPassword(user, password!);
@@ -198,6 +198,7 @@ public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> o
         user.PasswordHash = Hasher.HashPassword(user, newPassword);
         await db.SaveChangesAsync(ct);
         await db.WebSessions.Where(s => s.UserId == user.Id).ExecuteDeleteAsync(ct);
+        throttle.Clear(user.Email);
     }
 
     /// <summary>True when <paramref name="password"/> is the user's current password.</summary>

@@ -53,6 +53,74 @@ public class HardeningTests
         Assert.Equal(HttpStatusCode.TooManyRequests, (await Login(f, "nobody@example.com", "x")).StatusCode);
     }
 
+    private static async Task<HttpStatusCode> LoginAs(ServerFactory f, string from, string email, string password)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/v1/auth/login")
+        {
+            Content = JsonContent.Create(new LoginRequest(email, password, "d", "android")),
+        };
+        request.Headers.Add("X-Forwarded-For", from);
+        return (await f.Client().SendAsync(request)).StatusCode;
+    }
+
+    [Fact]
+    public async Task Failures_from_another_address_never_block_the_right_password_from_mine()
+    {
+        using var f = new ServerFactory();
+        f.Settings["Tandem:KnownProxies"] = "172.18.0.0/16";
+        f.ConfigureExtraServices = s => s.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(new RemoteAddress("172.18.0.3"));
+        await f.Register("a@example.com");
+        for (var i = 0; i < LoginThrottle.FreeFailures + 1; i++)
+            await LoginAs(f, "203.0.113.66", "a@example.com", "guess");
+        Assert.Equal(HttpStatusCode.TooManyRequests, await LoginAs(f, "203.0.113.66", "a@example.com", TestApi.Password));
+        Assert.Equal(HttpStatusCode.OK, await LoginAs(f, "198.51.100.7", "a@example.com", TestApi.Password));
+        // An attacker rotating within one IPv6 /64 stays in one bucket.
+        for (var i = 0; i < LoginThrottle.FreeFailures; i++)
+            await LoginAs(f, $"2001:db8:1:2::{i + 1}", "a@example.com", "guess");
+        Assert.Equal(HttpStatusCode.TooManyRequests, await LoginAs(f, "2001:db8:1:2::99", "a@example.com", "guess"));
+    }
+
+    [Fact]
+    public async Task The_wait_is_capped_at_five_minutes()
+    {
+        using var f = new ServerFactory();
+        await f.Register("a@example.com");
+        Assert.Equal(TimeSpan.FromMinutes(5), LoginThrottle.MaxDelay);
+        for (var i = 0; i < 40; i++)
+        {
+            await Login(f, "a@example.com", "wrong password");
+            f.Time.Advance(LoginThrottle.MaxDelay);
+        }
+        await Login(f, "a@example.com", "wrong password");
+        f.Time.Advance(LoginThrottle.MaxDelay);
+        Assert.Equal(HttpStatusCode.OK, (await Login(f, "a@example.com", TestApi.Password)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_password_reset_clears_the_wait()
+    {
+        using var f = new ServerFactory();
+        f.Settings["Tandem:AllowRegistration"] = "true";
+        await f.Register("admin@example.com");
+        var (_, user) = await f.Register("user@example.com");
+        for (var i = 0; i < LoginThrottle.FreeFailures; i++) await Login(f, "user@example.com", "wrong password");
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await Login(f, "user@example.com", TestApi.Password)).StatusCode);
+
+        // The admin web reset.
+        var admin = await f.WebLogin("admin@example.com");
+        var reset = await admin.PostAsync($"/v1/admin/users/{user.UserId}/reset-password", null);
+        var password = (await reset.ReadAsync<ResetPasswordResponse>()).Password;
+        Assert.Equal(HttpStatusCode.OK, (await Login(f, "user@example.com", password)).StatusCode);
+
+        // The CLI reset (same service call, by email).
+        for (var i = 0; i < LoginThrottle.FreeFailures; i++) await Login(f, "user@example.com", "wrong password");
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await Login(f, "user@example.com", password)).StatusCode);
+        using (var scope = f.Services.CreateScope())
+            await scope.ServiceProvider.GetRequiredService<Tandem.Server.Accounts.AccountService>()
+                .ResetPassword("user@example.com", "a brand new password", CancellationToken.None);
+        Assert.Equal(HttpStatusCode.OK, (await Login(f, "user@example.com", "a brand new password")).StatusCode);
+    }
+
     [Theory]
     [InlineData("203.0.113.7", "203.0.113.7")]
     [InlineData("::ffff:203.0.113.7", "203.0.113.7")]
