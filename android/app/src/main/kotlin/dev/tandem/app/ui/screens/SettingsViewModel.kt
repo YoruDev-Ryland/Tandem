@@ -155,9 +155,11 @@ class SettingsViewModel(
         if (url.equals(store.serverUrl?.trimEnd('/'), ignoreCase = true)) {
             serverChange.value = ServerChange.Failed("That is the address in use already."); return
         }
+        // A second press on the same plain-http address, after its warning, is the confirm.
+        val confirmed = (serverChange.value as? ServerChange.ConfirmInsecure)?.url == url
         serverChange.value = ServerChange.Checking
         scope.launch {
-            val r = checkNewServer(url, store.deviceId, anon, keyed)
+            val r = checkNewServer(url, store.serverUrl, store.deviceId, anon, keyed, insecureConfirmed = confirmed)
             if (r is ServerChange.Done) {
                 store.changeServer(url)
                 reload()

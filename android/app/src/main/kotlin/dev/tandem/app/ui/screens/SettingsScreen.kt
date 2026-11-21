@@ -122,6 +122,7 @@ const val CHANGE_SERVER = "Change server address"
 const val CHANGE_SERVER_COPY =
     "The same Tandem server at a new address, such as a new domain or proxy. Tandem checks that it answers for this " +
         "device before it switches, and keeps everything it knows; nothing syncs again from scratch."
+const val INSECURE_CONFIRM = "Press A again to switch anyway."
 const val LICENCES = "Open-source licences"
 const val REMOVE_ROM_COPY = "Games found only in this folder stop receiving saves on this device."
 const val SIGN_OUT_COPY = "This device stops syncing until you sign in again. Nothing on it is deleted."
@@ -477,12 +478,15 @@ private fun About(ui: SettingsUi, licences: () -> Unit) {
 @Composable
 private fun ServerSheet(text: TextFieldState, state: ServerChange, submit: () -> Unit, cancel: () -> Unit) {
     val error = (state as? ServerChange.Failed)?.message
+    val confirming = state is ServerChange.ConfirmInsecure && state.url == dev.tandem.app.ui.setup.normalizeUrl(text.text.toString())
     val note = when {
         state == ServerChange.Checking -> "Checking the new address…" to false
+        confirming -> "$INSECURE_URL_WARNING $INSECURE_CONFIRM" to true
         insecureUrl(text.text.toString()) -> INSECURE_URL_WARNING to true
         else -> null
     }
-    PathSheet(CHANGE_SERVER, CHANGE_SERVER_COPY, "Check and switch", text, error, submit, note = note, cancel = cancel)
+    PathSheet(CHANGE_SERVER, CHANGE_SERVER_COPY, if (confirming) "Switch anyway" else "Check and switch", text, error, submit,
+        note = note, cancel = cancel)
 }
 
 /** About › Open-source licences, over the section: the text scrolls with Up and Down; B closes it. */

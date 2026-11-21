@@ -29,6 +29,17 @@ fun insecureUrl(url: String?): Boolean {
     return true
 }
 
+/**
+ * Whether switching to [url] from [current] sends this device's key over plain http somewhere it doesn't go already:
+ * [url] is insecure ([insecureUrl]) and [current] isn't plain http to that same host.
+ */
+fun needsInsecureConfirm(url: String, current: String?): Boolean {
+    if (!insecureUrl(url)) return false
+    val c = current?.trim() ?: return true
+    if (!c.startsWith("http://", ignoreCase = true)) return true
+    return !hostOf(c.substring(7)).equals(hostOf(url.trim().substring(7)), ignoreCase = true)
+}
+
 private fun hostOf(rest: String): String {
     val authority = rest.substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
     return if (authority.startsWith("[")) authority.substringBefore(']') + "]" else authority.substringBefore(':')
@@ -39,19 +50,31 @@ sealed interface ServerChange {
     data object Idle : ServerChange
     data object Checking : ServerChange
     data class Failed(val message: String) : ServerChange
+    /** The address answered as a Tandem server, but over plain http: the key goes there only after a second press. */
+    data class ConfirmInsecure(val url: String) : ServerChange
     data class Done(val url: String) : ServerChange
 }
 
 /**
  * Checks that [url] is the same Tandem server under another address before this device switches to it: it must answer
- * /v1/server-info with this app's protocol ([anon]), and this device's key must work there ([keyed], GET
- * /v1/devices/me) as the same device ([deviceId], when known). Returns the outcome; nothing is stored here.
+ * /v1/server-info with this app's protocol ([anon], no key sent), and only then this device's key must work there
+ * ([keyed], GET /v1/devices/me) as the same device ([deviceId], when known). A plain-http [url] the key doesn't already
+ * travel to from [current] ([needsInsecureConfirm]) stops at [ServerChange.ConfirmInsecure] before the key is sent,
+ * until asked again with [insecureConfirmed]. Returns the outcome; nothing is stored here.
  */
-suspend fun checkNewServer(url: String, deviceId: String?, anon: (String) -> Api, keyed: (String) -> Api): ServerChange {
+suspend fun checkNewServer(
+    url: String,
+    current: String?,
+    deviceId: String?,
+    anon: (String) -> Api,
+    keyed: (String) -> Api,
+    insecureConfirmed: Boolean = false,
+): ServerChange {
     try {
         val info = anon(url).serverInfo()
         if (info.protocol.toString() != PROTOCOL_VERSION)
             return ServerChange.Failed("That server speaks another version of Tandem. Update the app or the server first.")
+        if (!insecureConfirmed && needsInsecureConfirm(url, current)) return ServerChange.ConfirmInsecure(url)
         val me = keyed(url).me()
         if (deviceId != null && me.id != deviceId)
             return ServerChange.Failed("That server knows this key as another device. Check the address.")

@@ -42,17 +42,41 @@ class ServerAddressTest {
 
     @Test fun theNewAddressMustBeTheSameServerWithTheSameDevice() = runBlocking {
         val asked = mutableListOf<String>()
-        val ok = checkNewServer("https://t.example", "d1", { asked += "anon $it"; server() }, { asked += "keyed $it"; server() })
+        val ok = checkNewServer("https://t.example", "https://old.example", "d1", { asked += "anon $it"; server() }, { asked += "keyed $it"; server() })
         assertEquals(ServerChange.Done("https://t.example"), ok)
         assertEquals(listOf("anon https://t.example", "keyed https://t.example"), asked)
 
-        val other = checkNewServer("https://t.example", "d1", { server() }, { server(meId = "d2") })
+        val other = checkNewServer("https://t.example", "https://old.example", "d1", { server() }, { server(meId = "d2") })
         assertTrue(other is ServerChange.Failed)
-        val proto = checkNewServer("https://t.example", "d1", { server(protocol = 2) }, { server() })
+        val proto = checkNewServer("https://t.example", "https://old.example", "d1", { server(protocol = 2) }, { server() })
         assertTrue(proto is ServerChange.Failed)
-        val unknown = checkNewServer("https://t.example", "d1", { server() }, { server(me = { throw ApiException(401, "unauthorized", "no") }) })
+        val unknown = checkNewServer("https://t.example", "https://old.example", "d1", { server() }, { server(me = { throw ApiException(401, "unauthorized", "no") }) })
         assertTrue((unknown as ServerChange.Failed).message.contains("doesn't know this device"))
-        val offline = checkNewServer("https://t.example", "d1", { throw java.io.IOException("down") }, { server() })
+        val offline = checkNewServer("https://t.example", "https://old.example", "d1", { throw java.io.IOException("down") }, { server() })
         assertTrue((offline as ServerChange.Failed).message.startsWith("Couldn't reach"))
+    }
+
+    @Test fun plainHttpToANewHostIsVerifiedWithoutTheKeyAndNeedsASecondPress() = runBlocking {
+        val asked = mutableListOf<String>()
+        val anon = { u: String -> asked += "anon $u"; server() }
+        val keyed = { u: String -> asked += "keyed $u"; server() }
+        val first = checkNewServer("http://tandem.example.com", "https://t.example", "d1", anon, keyed)
+        assertEquals(ServerChange.ConfirmInsecure("http://tandem.example.com"), first)
+        assertEquals("the key is not sent before the confirm", listOf("anon http://tandem.example.com"), asked)
+        asked.clear()
+        val second = checkNewServer("http://tandem.example.com", "https://t.example", "d1", anon, keyed, insecureConfirmed = true)
+        assertEquals(ServerChange.Done("http://tandem.example.com"), second)
+        assertEquals(listOf("anon http://tandem.example.com", "keyed http://tandem.example.com"), asked)
+        // An address that isn't a Tandem server is refused before any confirm is asked for.
+        val notTandem = checkNewServer("http://tandem.example.com", "https://t.example", "d1", { throw java.io.IOException("down") }, keyed)
+        assertTrue(notTandem is ServerChange.Failed)
+    }
+
+    @Test fun plainHttpNeedsNoConfirmWhereTheKeyAlreadyGoesThatWay() {
+        assertFalse(needsInsecureConfirm("http://192.168.1.20:5200", "http://192.168.1.20:5100"))
+        assertTrue(needsInsecureConfirm("http://192.168.1.21:5100", "http://192.168.1.20:5100"))
+        assertTrue(needsInsecureConfirm("http://192.168.1.20:5100", "https://192.168.1.20"))
+        assertFalse(needsInsecureConfirm("https://new.example", "http://192.168.1.20:5100"))
+        assertFalse(needsInsecureConfirm("http://nas.tail1234.ts.net:5100", "https://t.example"))
     }
 }
