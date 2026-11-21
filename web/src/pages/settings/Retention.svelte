@@ -36,7 +36,7 @@
   });
 
   const fromDto = (r: RetentionSettingsDto) => ({
-    saves: String(r.saveVersions), configs: String(r.configVersions), vault: String(r.vaultVersions), age: String(r.stateMaxAgeDays ?? 90),
+    saves: String(r.saveVersions), configs: String(r.configVersions), vault: String(r.vaultVersions), age: String(r.stateMaxAgeDays ?? 0),
   });
   const validAge = (v: string) => /^\d+$/.test(v) && Number(v) <= AGE_MAX;
   const valid = (v: string) => /^\d+$/.test(v) && Number(v) >= MIN && Number(v) <= MAX;
@@ -79,7 +79,7 @@
       {/each}
       <div>
         <Field label="Drop older save states after (days)" type="number" min={0} max={AGE_MAX} step={1} mono bind:value={form.age} oninput={() => (done = false)} />
-        {#if !validAge(form.age)}<p class="fault">Enter a whole number from 0 to {AGE_MAX}.</p>{:else}<p class="note">The newest state is always kept. 0 keeps them all.</p>{/if}
+        {#if !validAge(form.age)}<p class="fault">Enter a whole number from 0 to {AGE_MAX}.</p>{:else}<p class="note">0, the default, keeps every state. Otherwise the newest state is always kept.</p>{/if}
       </div>
       {#if error}<p class="fault" role="alert">{error}</p>{/if}
       {#if done}<p class="done" role="status">Saved.</p>{/if}

@@ -2,8 +2,9 @@ namespace Tandem.Protocol;
 
 /// <summary>How many versions to keep per save/state item, config bundle and vault item (each 1-1000).</summary>
 /// <param name="StateMaxAgeDays">0-3650: save-state versions older than this many days go even when among the newest N,
-/// unless they are a head, pinned, labelled or part of a conflict. 0 turns the age rule off. Default 90.</param>
-public sealed record RetentionSettingsDto(int SaveVersions, int ConfigVersions, int VaultVersions, int StateMaxAgeDays = 90);
+/// unless they are a head, pinned, labelled or part of a conflict. 0 (the default) turns the age rule off; a stored
+/// setting without it reads as 0.</param>
+public sealed record RetentionSettingsDto(int SaveVersions, int ConfigVersions, int VaultVersions, int StateMaxAgeDays = 0);
 
 /// <summary>Bytes of unique blobs. <see cref="EmulatorId"/> is "" for vault items not tied to an emulator;
 /// <see cref="GameKey"/> and <see cref="DisplayName"/> are set only on game rows.</summary>

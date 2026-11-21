@@ -151,6 +151,8 @@ describe("Settings", () => {
   it("validates the retention range and saves", async () => {
     const calls = await open("Retention");
     expect(await screen.findByText("Conflict versions and pinned versions are never removed.")).toBeTruthy();
+    expect((screen.getByLabelText("Drop older save states after (days)") as HTMLInputElement).value).toBe("0");
+    expect(screen.getByText("0, the default, keeps every state. Otherwise the newest state is always kept.")).toBeTruthy();
     const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     const games = screen.getByLabelText("Save versions per game") as HTMLInputElement;
@@ -163,7 +165,7 @@ describe("Settings", () => {
     expect(save.disabled).toBe(false);
     await fireEvent.click(save);
     await screen.findByText("Saved.");
-    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ saveVersions: 25, configVersions: 5, vaultVersions: 3, stateMaxAgeDays: 90 });
+    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ saveVersions: 25, configVersions: 5, vaultVersions: 3, stateMaxAgeDays: 0 });
   });
 
   it("lists storage in mono", async () => {

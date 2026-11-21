@@ -87,6 +87,7 @@ public class TablePruneTests
     {
         using var f = new ServerFactory();
         var (a, _) = await f.Register("a@example.com");
+        (await a.PutAsJsonAsync("/v1/settings/retention", new RetentionSettingsDto(30, 30, 5, 90), TestApi.Json)).EnsureSuccessStatusCode();
         async Task<SaveUploadResponse> State(string content, Guid? baseId)
         {
             var manifest = await Fixtures.Manifest(a, ("s.state", System.Text.Encoding.UTF8.GetBytes(content)));
@@ -105,14 +106,21 @@ public class TablePruneTests
         await f.Services.GetRequiredService<Pruner>().RunOnceAsync(CancellationToken.None);
         var states = await InDb(f, db => db.SaveVersions.Where(v => v.ItemId == s1.ItemId).Select(v => v.Id).ToListAsync());
         Assert.Equal([s3.VersionId], states);
+        
         Assert.Equal(2, await InDb(f, db => db.SaveVersions.CountAsync(v => v.ItemId == save1.ItemId)));
     }
 
     [Fact]
-    public async Task The_state_age_rule_can_be_turned_off_and_is_validated()
+    public async Task The_state_age_rule_is_off_by_default_and_is_validated()
     {
         using var f = new ServerFactory();
         var (a, _) = await f.Register("a@example.com");
+        Assert.Equal(0, (await a.GetOk<RetentionSettingsDto>("/v1/settings/retention")).StateMaxAgeDays);
+        // An older client that sends no age leaves the rule off.
+        (await a.PutAsync("/v1/settings/retention", new StringContent("{\"saveVersions\":30,\"configVersions\":30,\"vaultVersions\":5}",
+            System.Text.Encoding.UTF8, "application/json"))).EnsureSuccessStatusCode();
+        Assert.Equal(0, (await a.GetOk<RetentionSettingsDto>("/v1/settings/retention")).StateMaxAgeDays);
+        (await a.PutAsJsonAsync("/v1/settings/retention", new RetentionSettingsDto(30, 30, 5, 90), TestApi.Json)).EnsureSuccessStatusCode();
         Assert.Equal(90, (await a.GetOk<RetentionSettingsDto>("/v1/settings/retention")).StateMaxAgeDays);
         var bad = await a.PutAsJsonAsync("/v1/settings/retention", new RetentionSettingsDto(30, 30, 5, -1), TestApi.Json);
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);

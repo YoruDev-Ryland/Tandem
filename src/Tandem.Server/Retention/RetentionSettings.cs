@@ -19,7 +19,7 @@ public static class RetentionSettings
     public const int Max = 1000;
     public const int MaxStateAgeDays = 3650;
 
-    public static readonly RetentionSettingsDto Defaults = new(30, 30, 5, 90);
+    public static readonly RetentionSettingsDto Defaults = new(30, 30, 5, 0);
     private static readonly string[] Keys = [SaveKey, ConfigKey, VaultKey, StateAgeKey];
 
     public static async Task<RetentionSettingsDto> LoadAsync(TandemDbContext db, Guid userId, CancellationToken ct)
