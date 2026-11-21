@@ -204,7 +204,7 @@ public sealed class DeliveryService(TandemDbContext db, UserLocks locks, IDomain
             {
                 var item = await db.SaveItems.AsNoTracking().Where(i => i.Id == delivery.TargetId)
                     .Select(i => new { i.EmulatorId, i.GameKey, i.DisplayName }).FirstOrDefaultAsync(ct);
-                if (item is not null) (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey);
+                if (item is not null) (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, Games.GameNames.Label(item.GameKey, item.DisplayName));
             }
             else if (delivery.Kind == DeliveryKind.Vault)
             {
@@ -216,7 +216,7 @@ public sealed class DeliveryService(TandemDbContext db, UserLocks locks, IDomain
             {
                 emulatorId = await db.ConfigBundles.AsNoTracking().Where(b => b.Id == delivery.TargetId)
                     .Select(b => b.EmulatorId).FirstOrDefaultAsync(ct);
-                if (emulatorId is not null) label = $"the {emulatorId} config";
+                if (emulatorId is not null) label = $"the {Games.EmulatorNames.Display(emulatorId)} config";
             }
             label ??= delivery.Kind == DeliveryKind.Save ? "a save" : delivery.Kind.ToString().ToLowerInvariant();
             if (delivery.Kind == DeliveryKind.Save)

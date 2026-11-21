@@ -2,7 +2,8 @@ namespace Tandem.Protocol;
 
 public sealed record ErrorResponse(string Code, string Message);
 
-public sealed record ServerInfo(string Name, int Protocol, bool RegistrationOpen);
+/// <param name="Version">The server version: its InformationalVersion without the "+commit" suffix.</param>
+public sealed record ServerInfo(string Name, int Protocol, bool RegistrationOpen, string Version);
 
 public sealed record RegisterRequest(string Email, string Password, string DeviceName, string Platform);
 public sealed record LoginRequest(string Email, string Password, string DeviceName, string Platform);
@@ -12,6 +13,10 @@ public sealed record PairingCodeResponse(string Code, string QrPayload, DateTime
 public sealed record RedeemPairingRequest(string Code, string DeviceName, string Platform);
 public sealed record AccountInfo(Guid Id, string Email, bool IsAdmin);
 public sealed record ChangePasswordRequest(string Current, string New);
+/// <summary>DELETE /v1/account: the account's own password confirms the deletion.</summary>
+public sealed record DeleteAccountRequest(string Password);
+/// <summary>POST /v1/admin/users/{id}/reset-password: the new generated password (every web session of the user is signed out).</summary>
+public sealed record ResetPasswordResponse(string Password);
 public sealed record UserInfo(Guid Id, string Email, bool IsAdmin, DateTimeOffset CreatedUtc, int DeviceCount);
 public sealed record CreateUserRequest(string Email, bool IsAdmin);
 public sealed record CreatedUserResponse(string Email, string Password);

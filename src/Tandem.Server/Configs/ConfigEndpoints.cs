@@ -12,7 +12,7 @@ public static class ConfigEndpoints
         var configs = app.MapGroup("/v1/configs").RequireAuthorization();
 
         configs.MapPost("/upload", (HttpContext http, ConfigUploadRequest request, ConfigService svc, CancellationToken ct) =>
-            svc.UploadAsync(http.User.UserId(), RequireDevice(http), request, ct));
+            svc.UploadAsync(http.User.UserId(), RequireDevice(http), request, ct)).RequireStorage();
 
         configs.MapPost("/bundles/{id:guid}/conflicts/resolve", async (HttpContext http, Guid id, ResolveConflictRequest request,
             ConfigService svc, CancellationToken ct) =>
@@ -55,7 +55,7 @@ public static class ConfigEndpoints
 
         configs.MapPut("/bundles/{id:guid}/files/{*path}", (HttpContext http, Guid id, string path, Guid? device,
             EditConfigFileRequest request, ConfigService svc, CancellationToken ct) =>
-            svc.EditFileAsync(http.User.UserId(), id, path, device, request, ct));
+            svc.EditFileAsync(http.User.UserId(), id, path, device, request, ct)).RequireStorage();
 
         configs.MapPost("/apply", (HttpContext http, ApplyConfigRequest request, ConfigService svc, CancellationToken ct) =>
             svc.ApplyAsync(http.User.UserId(), request, ct));

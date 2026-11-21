@@ -21,6 +21,9 @@ public sealed class DeviceKeyAuthenticationHandler(
 {
     public const string SchemeName = "DeviceKey";
     private const string FailureCodeKey = "tandem:auth-failure";
+    /// <summary>LastSeenUtc and a session's LastUsedUtc are written at most this often (one write per request was one
+    /// SQLite write per blob GET).</summary>
+    public static readonly TimeSpan TouchInterval = TimeSpan.FromMinutes(1);
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -44,7 +47,7 @@ public sealed class DeviceKeyAuthenticationHandler(
         var hash = Secrets.Hash(key);
         var device = await db.Devices.AsNoTracking()
             .Where(d => d.KeyHash == hash)
-            .Select(d => new { d.Id, d.UserId, d.RevokedUtc })
+            .Select(d => new { d.Id, d.UserId, d.RevokedUtc, d.LastSeenUtc })
             .FirstOrDefaultAsync();
         if (device is null) return AuthenticateResult.Fail("Unknown device key.");
         if (device.RevokedUtc is not null) return Revoked();
@@ -54,7 +57,8 @@ public sealed class DeviceKeyAuthenticationHandler(
         if (user is null) return AuthenticateResult.Fail("Unknown user.");
 
         var now = time.GetUtcNow();
-        await db.Devices.Where(d => d.Id == device.Id).ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenUtc, now));
+        if (device.LastSeenUtc is not { } seen || now - seen >= TouchInterval || seen > now)
+            await db.Devices.Where(d => d.Id == device.Id).ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenUtc, now));
         return Success(device.UserId, device.Id, user.IsAdmin, ClaimsExtensions.AuthKindDevice);
     }
 
@@ -83,7 +87,8 @@ public sealed class DeviceKeyAuthenticationHandler(
             .Select(u => new { u.IsAdmin }).FirstOrDefaultAsync();
         if (user is null) return AuthenticateResult.Fail("Unknown user.");
 
-        await db.WebSessions.Where(s => s.TokenHash == hash).ExecuteUpdateAsync(s => s.SetProperty(x => x.LastUsedUtc, now));
+        if (now - session.LastUsedUtc >= TouchInterval || session.LastUsedUtc > now)
+            await db.WebSessions.Where(s => s.TokenHash == hash).ExecuteUpdateAsync(s => s.SetProperty(x => x.LastUsedUtc, now));
         return Success(session.UserId, deviceId, user.IsAdmin, ClaimsExtensions.AuthKindWeb);
     }
 
@@ -119,6 +124,18 @@ public sealed class DeviceKeyAuthenticationHandler(
 
 public static class AuthSetup
 {
+    /// <summary>The rate-limit bucket of a client address: IPv4 as is, IPv6 by its /64 (one host usually holds a whole
+    /// /64, so per-address buckets were free to rotate through).</summary>
+    public static string PartitionKey(System.Net.IPAddress? address)
+    {
+        if (address is null) return "unknown";
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6) return address.ToString();
+        var bytes = address.GetAddressBytes();
+        Array.Clear(bytes, 8, 8);
+        return new System.Net.IPAddress(bytes) + "/64";
+    }
+
     /// <summary>An admin signed in through a web session (a device key never reaches admin routes).</summary>
     public const string AdminPolicy = "Admin";
     /// <summary>A web session (browser sign-in), not a device key.</summary>
@@ -149,7 +166,7 @@ public static class AuthSetup
                     new ErrorResponse("rate_limited", "Too many attempts. Try again in a minute."), ct);
             };
             o.AddPolicy(AuthRateLimit, http => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
-                http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                PartitionKey(http.Connection.RemoteIpAddress),
                 _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
                 {
                     PermitLimit = limit,

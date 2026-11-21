@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace Tandem.Server.Accounts;
 
-public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> options, TimeProvider time)
+public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> options, TimeProvider time, LoginThrottle throttle)
 {
     public const string AllowRegistrationKey = "allowRegistration";
     public const int MinPasswordLength = 8;
@@ -67,6 +67,11 @@ public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> o
             var first = !await db.Users.AnyAsync(ct);
             if (!first && !await GetAllowRegistration(ct))
                 throw new ApiException(403, "registration_closed", "Registration is closed on this server.");
+            // ADMIN_EMAIL closes the first-run window: until the first account exists, only that email may register.
+            if (first && !string.IsNullOrWhiteSpace(options.Value.AdminEmail)
+                && !string.Equals(email, options.Value.AdminEmail.Trim(), StringComparison.OrdinalIgnoreCase))
+                throw new ApiException(403, "admin_email_required",
+                    "The first account on this server must use the admin email the server was set up with (ADMIN_EMAIL).");
             var user = await CreateUser(email, request.Password, isAdmin: first, ct);
             return await CreateDevice(user.Id, request.DeviceName, request.Platform, ct);
         }
@@ -105,14 +110,20 @@ public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> o
         return await CreateDevice(user.Id, request.DeviceName, request.Platform, ct);
     }
 
-    /// <summary>Verifies email and password; every failure is the same 401.</summary>
+    /// <summary>Verifies email and password; every failure is the same 401. After repeated failures for one email the
+    /// account must wait (429 too_many_attempts, see <see cref="LoginThrottle"/>).</summary>
     public async Task<User> Authenticate(string? email, string? password, CancellationToken ct)
     {
         var normalized = (email ?? "").Trim().ToLowerInvariant();
+        throttle.Check(normalized);
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == normalized, ct);
         var result = Hasher.VerifyHashedPassword(user ?? DummyUser, user?.PasswordHash ?? DummyHash, password ?? "");
         if (user is null || result == PasswordVerificationResult.Failed)
+        {
+            throttle.Failed(normalized);
             throw new ApiException(401, "invalid_credentials", "Wrong email or password.");
+        }
+        throttle.Succeeded(normalized);
         if (result == PasswordVerificationResult.SuccessRehashNeeded)
         {
             user.PasswordHash = Hasher.HashPassword(user, password!);
@@ -164,15 +175,34 @@ public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> o
         await db.WebSessions.Where(s => s.UserId == userId && s.TokenHash != currentSessionHash).ExecuteDeleteAsync(ct);
     }
 
-    /// <summary>Sets a new password for the account with this email (admin CLI). Existing devices stay signed in.</summary>
+    /// <summary>Sets a new password for the account with this email (admin CLI) and signs out every web session of
+    /// the user. Device keys stay valid (revoke a device separately).</summary>
     public async Task ResetPassword(string email, string newPassword, CancellationToken ct)
     {
-        CheckPassword(newPassword);
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email, ct)
             ?? throw new ApiException(404, "user_not_found", $"No account with email {email}.");
+        await ResetPassword(user, newPassword, ct);
+    }
+
+    /// <summary>The admin web reset: as <see cref="ResetPassword(string, string, CancellationToken)"/>, by id (404 not_found).</summary>
+    public async Task ResetPassword(Guid userId, string newPassword, CancellationToken ct)
+    {
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct)
+            ?? throw new ApiException(404, "not_found", "No such user.");
+        await ResetPassword(user, newPassword, ct);
+    }
+
+    private async Task ResetPassword(User user, string newPassword, CancellationToken ct)
+    {
+        CheckPassword(newPassword);
         user.PasswordHash = Hasher.HashPassword(user, newPassword);
         await db.SaveChangesAsync(ct);
+        await db.WebSessions.Where(s => s.UserId == user.Id).ExecuteDeleteAsync(ct);
     }
+
+    /// <summary>True when <paramref name="password"/> is the user's current password.</summary>
+    public static bool VerifyPassword(User user, string? password) =>
+        Hasher.VerifyHashedPassword(user, user.PasswordHash, password ?? "") != PasswordVerificationResult.Failed;
 
     private static string Clip(string s, int max) => s.Length > max ? s[..max] : s;
 }

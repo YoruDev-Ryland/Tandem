@@ -36,4 +36,6 @@ public sealed record BackupSettingsResponse(bool Enabled, BackupTargetKind Kind,
 /// <summary>One backup run, newest first in the history.</summary>
 /// <param name="Utc">When the run started (the time in the backup's name).</param>
 /// <param name="Bytes">Size of the written backup file (0 when it failed).</param>
-public sealed record BackupRunInfo(DateTimeOffset Utc, bool Ok, long Bytes, string? Error);
+/// <param name="Partial">The backup was written (Ok) but some blob files were missing from the server; they are listed
+/// in the backup's manifest and <see cref="Error"/> says how many.</param>
+public sealed record BackupRunInfo(DateTimeOffset Utc, bool Ok, long Bytes, string? Error, bool Partial = false);

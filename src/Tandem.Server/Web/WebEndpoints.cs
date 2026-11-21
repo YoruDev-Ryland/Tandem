@@ -22,7 +22,7 @@ public static class WebEndpoints
         var web = app.MapGroup("/v1/web").RequireAuthorization();
 
         web.MapGet("/home", (HttpContext http, WebQueryService q, CancellationToken ct) =>
-            q.HomeAsync(http.User.UserId(), http.User.DeviceId(), ct));
+            q.HomeAsync(http.User.UserId(), http.User.DeviceId(), ct, http.User.IsAdmin()));
 
         web.MapGet("/games", (HttpContext http, WebQueryService svc, string? emulator, string? q, CancellationToken ct) =>
             svc.GamesAsync(http.User.UserId(), emulator, q, ct));
@@ -32,7 +32,14 @@ public static class WebEndpoints
         web.MapGet("/games/{emulatorId}/{*gameKey}", (HttpContext http, WebQueryService q, string emulatorId, string gameKey, CancellationToken ct) =>
             q.GameAsync(http.User.UserId(), emulatorId, gameKey.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase), ct));
 
-        web.MapGet("/devices/{id:guid}", (HttpContext http, WebQueryService q, Guid id, CancellationToken ct) =>
+        web.MapDelete("/games/{emulatorId}/{*gameKey}", async (HttpContext http, SaveService saves, string emulatorId, string gameKey,
+            CancellationToken ct) =>
+        {
+            await saves.DeleteGameAsync(http.User.UserId(), emulatorId, gameKey.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase), ct);
+            return Results.NoContent();
+        }).RequireAuthorization(Auth.AuthSetup.WebSessionPolicy);
+
+        web.MapGet("/devices/{id:guid}",(HttpContext http, WebQueryService q, Guid id, CancellationToken ct) =>
             q.DeviceAsync(http.User.UserId(), id, http.User.DeviceId(), ct));
 
         web.MapGet("/devices/{id:guid}/setup", (HttpContext http, WebQueryService q, Guid id, CancellationToken ct) =>
@@ -50,7 +57,7 @@ public static class WebEndpoints
         web.MapGet("/configs", (HttpContext http, WebQueryService q, CancellationToken ct) =>
             q.ConfigsAsync(http.User.UserId(), ct));
 
-        web.MapPost("/saves/upload", UploadAsync).DisableAntiforgery();
+        web.MapPost("/saves/upload", UploadAsync).DisableAntiforgery().RequireStorage();
 
         app.MapGet("/v1/saves/versions/{versionId:guid}/download", DownloadAsync).RequireAuthorization();
         app.MapGet("/v1/export.zip", ExportAsync).RequireAuthorization();
@@ -102,6 +109,23 @@ public static class WebEndpoints
             if (r.Kind == ItemKind.State && r.Core.Length > 0) slot = $"{slot}/{ZipExport.SanitizePath(r.Core)}";
             var prefix = $"{ZipExport.SanitizePath(r.EmulatorId)}/{ZipExport.SanitizePath(r.GameKey)}/{kind}/{slot}/";
             foreach (var e in Manifests.FromJson(r.ManifestJson).OrderBy(e => e.Path, StringComparer.Ordinal))
+                items.Add(new ZipItem(prefix + ZipExport.SanitizePath(e.Path), e.Hash));
+        }
+
+        // Config bundle heads: configs/<emulatorId>/<device or group name>/<path>.
+        var configs = await (from b in db.ConfigBundles.AsNoTracking()
+                join v in db.ConfigVersions.AsNoTracking() on b.HeadVersionId equals v.Id
+                join d in db.Devices.AsNoTracking() on b.OwnerDeviceId equals d.Id into owners
+                from d in owners.DefaultIfEmpty()
+                join g in db.SyncGroups.AsNoTracking() on b.GroupId equals g.Id into groups
+                from g in groups.DefaultIfEmpty()
+                where b.UserId == userId && (string.IsNullOrEmpty(emulator) || b.EmulatorId == emulator)
+                select new { b.EmulatorId, Owner = g != null ? g.Name : d != null ? d.Name : "config", v.ManifestJson })
+            .ToListAsync(ct);
+        foreach (var c in configs.OrderBy(c => c.EmulatorId, StringComparer.Ordinal).ThenBy(c => c.Owner, StringComparer.Ordinal))
+        {
+            var prefix = $"configs/{ZipExport.SanitizeSegment(c.EmulatorId)}/{ZipExport.SanitizeSegment(c.Owner)}/";
+            foreach (var e in Manifests.FromJson(c.ManifestJson).OrderBy(e => e.Path, StringComparer.Ordinal))
                 items.Add(new ZipItem(prefix + ZipExport.SanitizePath(e.Path), e.Hash));
         }
         var name = string.IsNullOrEmpty(emulator) ? "tandem-export.zip" : $"tandem-{emulator}.zip";

@@ -4,18 +4,57 @@ namespace Tandem.Server.Games;
 
 /// <summary>
 /// Title id → name for the consoles whose saves are keyed by title id: Switch from titledb (MIT,
-/// github.com/blawar/titledb) and 3DS from 3dsdb (github.com/hax0kartik/3dsdb). The ids don't overlap (Switch
-/// ids start 01, 3DS ids 0004). Names are stored as published; <see cref="GameNames"/> cleans them.
+/// github.com/blawar/titledb), 3DS from 3dsdb (github.com/hax0kartik/3dsdb), and GameCube/Wii game ids from GameTDB
+/// (gametdb.com, wiitdb.txt). The ids don't overlap (Switch ids start 01, 3DS ids 0004, both 16 hex digits; game ids
+/// are 4 or 6 letters and digits). Names are stored as published; <see cref="GameNames"/> cleans them.
 /// </summary>
 public sealed class TitleNames
 {
     private readonly Dictionary<string, string> _names;
+    /// <summary>The first 6-character game id per 4-character prefix (a Wii save is keyed by the 4-character id).</summary>
+    private readonly Dictionary<string, string> _byPrefix;
 
-    private TitleNames(Dictionary<string, string> names) => _names = names;
+    private TitleNames(Dictionary<string, string> names)
+    {
+        _names = names;
+        _byPrefix = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var id in names.Keys.Where(k => k.Length == 6 && IsDiscId(k)).Order(StringComparer.Ordinal))
+            _byPrefix.TryAdd(id[..4], id);
+    }
 
     public int Count => _names.Count;
 
     public static bool IsTitleId(string key) => key.Length == 16 && key.All(char.IsAsciiHexDigit);
+
+    /// <summary>A GameCube/Wii game id as Dolphin keys saves: 6 (a GameCube memory-card save) or 4 (a Wii save)
+    /// upper-case letters and digits.</summary>
+    public static bool IsDiscId(string key) =>
+        key.Length is 4 or 6 && key.All(c => char.IsAsciiDigit(c) || char.IsAsciiLetterUpper(c));
+
+    /// <summary>The name of a game id: exact, else (a 4-character Wii id) the first 6-character id starting with it.</summary>
+    public string? LookupDisc(string gameId)
+    {
+        if (!IsDiscId(gameId)) return null;
+        if (_names.GetValueOrDefault(gameId) is { } name) return name;
+        return gameId.Length == 4 && _byPrefix.GetValueOrDefault(gameId) is { } id ? _names.GetValueOrDefault(id) : null;
+    }
+
+    /// <summary>Reads GameTDB's wiitdb.txt: a "TITLES = …" header line, then one "ID = Title" line per game.</summary>
+    public static TitleNames ParseGameTdb(Stream list)
+    {
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        using var reader = new StreamReader(list, System.Text.Encoding.UTF8);
+        while (reader.ReadLine() is { } line)
+        {
+            var eq = line.IndexOf(" = ", StringComparison.Ordinal);
+            if (eq <= 0) continue;
+            var id = line[..eq].Trim().ToUpperInvariant();
+            var name = line[(eq + 3)..].Trim();
+            if (!IsDiscId(id) || name.Length == 0 || id == "TITLES") continue; // the header line is "TITLES = <source>"
+            names.TryAdd(id, name);
+        }
+        return new TitleNames(names);
+    }
 
     /// <summary>The name of [titleId], or of its base title when this id is another program, update or add-on slot.</summary>
     public string? Lookup(string titleId)

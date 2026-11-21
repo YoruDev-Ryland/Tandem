@@ -40,9 +40,19 @@ public static class NotifySettings
         catch (JsonException) { return Defaults; }
     }
 
-    /// <summary>The API view: tokens removed, <see cref="NotifyTarget.TokenSet"/> filled.</summary>
+    /// <summary>The API view: URLs masked, tokens removed, <see cref="NotifyTarget.TokenSet"/> filled.</summary>
     public static NotifySettingsDto ToResponse(NotifySettingsDto s) =>
-        s with { Targets = s.Targets.Select(t => t with { Token = null, TokenSet = !string.IsNullOrEmpty(t.Token) }).ToList() };
+        s with
+        {
+            Targets = s.Targets.Select(t => t with { Url = Mask(t.Url), Token = null, TokenSet = !string.IsNullOrEmpty(t.Token) }).ToList(),
+        };
+
+    public const string MaskSuffix = "/\u2026";
+
+    /// <summary><c>scheme://host[:port]/…</c>: enough to recognise the target, nothing of its path or query (a Discord
+    /// webhook or an ntfy topic is a secret).</summary>
+    public static string Mask(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? $"{uri.Scheme}://{uri.Authority}{MaskSuffix}" : "\u2026";
 
     /// <summary>Validates (400 bad_value), keeps the stored token of a target whose token was omitted and whose Url is
     /// unchanged, and stores.</summary>
@@ -53,12 +63,22 @@ public static class NotifySettings
         if (targets.Count > MaxTargets) throw Bad($"At most {MaxTargets} targets are allowed.");
 
         var current = await LoadAsync(db, userId, ct);
+        // A masked URL sent back stands for the stored target it was made from: the n-th target with that kind and mask
+        // takes the n-th stored one with the same (two Discord webhooks mask alike).
+        var unclaimed = current.Targets.ToList();
         var stored = new List<NotifyTarget>();
         foreach (var t in targets)
         {
             if (t is null) throw Bad("A target is required.");
             if (!Enum.IsDefined(t.Kind)) throw Bad("kind must be Ntfy, Discord or Webhook.");
             var url = t.Url?.Trim() ?? "";
+            if (url.EndsWith(MaskSuffix, StringComparison.Ordinal) || url == "\u2026")
+            {
+                var match = unclaimed.FirstOrDefault(c => c.Kind == t.Kind && Mask(c.Url) == url)
+                    ?? throw Bad("Enter the full URL of the new target.");
+                unclaimed.Remove(match);
+                url = match.Url;
+            }
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
                 throw Bad("Each target url must be an http(s) URL.");
             var token = t.Token is null

@@ -7,8 +7,11 @@ public sealed record ContinueItem(Guid ItemId, string EmulatorId, string GameKey
 
 /// <param name="ConfigConflicts">Config bundles (group or solo) with an open conflict; OpenConflicts and FirstSyncReviews
 /// count saves only.</param>
+/// <param name="DiskLow">The server's data directory is below its free-space minimum; uploads are refused (507).</param>
+/// <param name="BackupNotConfigured">Only ever true for an admin: the scheduled off-server backup is not turned on.</param>
+/// <param name="SilentDevices">Active devices not seen for the server's SilentDeviceHours (default 72).</param>
 public sealed record Attention(int OpenConflicts, int FirstSyncReviews, IReadOnlyList<Guid> ShizukuOffDevices, int FailedDeliveries24h,
-    int ConfigConflicts);
+    int ConfigConflicts, bool DiskLow, bool BackupNotConfigured, IReadOnlyList<Guid> SilentDevices);
 
 public sealed record HomeResponse(IReadOnlyList<ContinueItem> Continue, IReadOnlyList<DeviceSummary> Devices, Attention Attention,
     IReadOnlyList<ActivityItem> Recent);
@@ -31,8 +34,11 @@ public enum DeviceGameState { Newest, HasIt, Pending, Waiting, Behind, NotInstal
 public sealed record GameDeviceState(Guid DeviceId, string DeviceName, DeviceGameState State);
 
 /// <param name="FileCount">Number of files in the version's manifest.</param>
+/// <param name="EmulatorVersion">The uploading device's reported version of the emulator at upload time (a restore copy
+/// keeps the original's), or null.</param>
 public sealed record VersionSummary(Guid Id, int Seq, string? DeviceName, DateTimeOffset ReceivedUtc, long TotalSize, string Core,
-    string? Variant, bool Pinned, ConflictReason? ConflictReason, bool IsHead, bool Resolved, string ManifestHash, int FileCount);
+    string? Variant, bool Pinned, ConflictReason? ConflictReason, bool IsHead, bool Resolved, string ManifestHash, int FileCount,
+    string? EmulatorVersion);
 
 /// <summary>One side of an open save conflict: the current head or an open conflict version.</summary>
 public sealed record ConflictSide(Guid VersionId, Guid? DeviceId, string? DeviceName, DateTimeOffset ReceivedUtc, long TotalSize,

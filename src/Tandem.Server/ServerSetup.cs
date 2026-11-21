@@ -28,10 +28,14 @@ public static class ServerSetup
         EnvironmentAliases.Add(builder.Configuration);
         builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection(ServerOptions.Section));
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<IFreeSpaceProbe, DriveFreeSpaceProbe>();
+        builder.Services.AddSingleton<StorageMonitor>();
         builder.Services.AddOpenApi();
         builder.Services.AddDatabase(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
         builder.Services.AddTandemAuth(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
+        builder.Services.AddSingleton<LoginThrottle>();
         builder.Services.AddScoped<AccountService>();
+        builder.Services.AddScoped<UserDeletion>();
         builder.Services.AddScoped<PairingService>();
         builder.Services.AddSingleton<IBlobStore, BlobStore>();
         builder.Services.AddScoped<BlobService>();
@@ -62,7 +66,8 @@ public static class ServerSetup
         builder.Services.AddSingleton<Games.TitleNamesHolder>();
         builder.Services.AddSingleton<Games.GameNames>();
         builder.Services.AddSingleton<Games.TitleNamesBackfill>();
-        builder.Services.AddHttpClient(Games.TitleNamesRefresher.ClientName, c => c.Timeout = TimeSpan.FromMinutes(10));
+        builder.Services.AddHttpClient(Games.TitleNamesRefresher.ClientName, c => c.Timeout = TimeSpan.FromMinutes(10))
+            .RemoveAllLoggers(); // one Information line per list download is noise (F-28)
         builder.Services.AddHostedService<Games.TitleNamesRefresher>();
         builder.Services.AddSingleton<NotifyTriggers>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<NotifyTriggers>());
@@ -73,9 +78,11 @@ public static class ServerSetup
     {
         var options = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServerOptions>>().Value;
         // First in the pipeline, so the rate limiter, cookies and URLs see the client's address, scheme and host.
-        // The proxy sits on a docker network whose address is not known in advance, so every proxy is trusted:
-        // the option must only be turned on when the server is reachable through the proxy alone.
-        if (options.TrustForwardedHeaders)
+        // With KnownProxies (KNOWN_PROXIES: IPs and CIDRs) only those may send X-Forwarded-*. Without it, the proxy sits
+        // on a docker network whose address is not known in advance, so every proxy is trusted: TrustForwardedHeaders
+        // must then only be turned on when the server is reachable through the proxy alone.
+        var known = KnownProxies.Parse(string.Join(',', options.KnownProxies, options.KnownNetworks));
+        if (options.TrustForwardedHeaders || known.Count > 0)
         {
             var forwarded = new ForwardedHeadersOptions
             {
@@ -83,8 +90,10 @@ public static class ServerSetup
             };
             forwarded.KnownIPNetworks.Clear();
             forwarded.KnownProxies.Clear();
+            foreach (var network in known) forwarded.KnownIPNetworks.Add(network);
             app.UseForwardedHeaders(forwarded);
         }
+        app.UseSecurityHeaders(WebHosting.IndexOf(app.Services));
 
         app.Services.MigrateDatabase();
         var dataDirectory = options.DataDirectory;

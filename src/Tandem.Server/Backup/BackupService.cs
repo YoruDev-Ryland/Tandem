@@ -122,6 +122,7 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
                 string? name = null;
                 long bytes = 0;
                 string? error = null;
+                var missing = 0;
                 try
                 {
                     BackupSettingsDto settings;
@@ -129,9 +130,16 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
                         settings = await BackupSettings.LoadAsync(scope.ServiceProvider.GetRequiredService<TandemDbContext>(), ct);
                     var target = BackupTargets.Create(settings);
                     name = BackupFormat.NameFor(started, settings.Encrypt);
-                    bytes = await WriteAsync(target, name, settings, started, ct);
+                    (bytes, missing) = await WriteAsync(target, name, settings, started, ct);
                     logger.LogInformation("Backup {Name} written ({Bytes} bytes)", name, bytes);
                     error = await PruneTargetAsync(target, name, settings.Keep, ct);
+                    if (missing > 0)
+                    {
+                        var partial = $"{missing} blob file{(missing == 1 ? " was" : "s were")} missing from the data directory, so " +
+                                      $"{(missing == 1 ? "it is" : "they are")} not in {name} (listed in its manifest); everything else was backed up.";
+                        logger.LogWarning("Backup {Name} is partial: {Missing} blob files missing", name, missing);
+                        error = error is null ? partial : $"{partial} {error}";
+                    }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -142,13 +150,19 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
                 {
                     error = Describe(ex);
                     bytes = 0;
+                    missing = 0;
                     logger.LogError("Backup failed: {Error}", error);
                 }
 
-                var run = new BackupRun { Utc = started, Ok = error is null, Bytes = bytes, Name = name, Error = Truncate(error) };
+                // A partial run is Ok: the backup is there and restores; the missing files are listed in it.
+                var run = new BackupRun
+                {
+                    Utc = started, Ok = bytes > 0 && (error is null || missing > 0), Partial = missing > 0, Bytes = bytes, Name = name,
+                    Error = Truncate(error),
+                };
                 await RecordAsync(run);
-                await events.Raise(new BackupFinished(run.Ok, run.Error), CancellationToken.None);
-                return new BackupRunInfo(run.Utc, run.Ok, run.Bytes, run.Error);
+                await events.Raise(new BackupFinished(run.Ok, run.Error, run.Partial), CancellationToken.None);
+                return new BackupRunInfo(run.Utc, run.Ok, run.Bytes, run.Error, run.Partial);
             }
         }
         finally
@@ -200,9 +214,10 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
         }
     }
 
-    /// <summary>Writes the archive to the target and returns its size in bytes.</summary>
-    private async Task<long> WriteAsync(IBackupTarget target, string name, BackupSettingsDto settings, DateTimeOffset started,
-        CancellationToken ct)
+    /// <summary>Writes the archive to the target and returns its size in bytes and how many recorded blob files were
+    /// missing (left out, and listed in the manifest).</summary>
+    private async Task<(long Bytes, int Missing)> WriteAsync(IBackupTarget target, string name, BackupSettingsDto settings,
+        DateTimeOffset started, CancellationToken ct)
     {
         var dataDir = options.Value.DataDirectory;
         var tmp = Directory.CreateDirectory(Path.Combine(dataDir, "tmp", $"backup-{Guid.NewGuid():N}")).FullName;
@@ -212,6 +227,17 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
             var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
             var store = scope.ServiceProvider.GetRequiredService<IBlobStore>();
             var export = await BackupDatabase.ExportAsync(db, tmp, BackupSettings.RedactForExport, ct);
+            // A missing file (a bad sector, a stray rm) must not stop every backup from then on: the rest is backed up.
+            var missing = new List<(Guid UserId, string Hash, long Size)>();
+            foreach (var b in export.Blobs)
+                if (!await store.ExistsAsync(b.UserId, b.Hash, ct)) missing.Add(b);
+            if (missing.Count > 0)
+            {
+                foreach (var (userId, hash, _) in missing)
+                    logger.LogWarning("Blob {Hash} of user {UserId} is recorded but its file is missing; the backup leaves it out", hash, userId);
+                var gone = missing.ToHashSet();
+                export = export with { Blobs = export.Blobs.Where(b => !gone.Contains(b)).ToList(), Missing = missing };
+            }
 
             var pipe = new Pipe(new PipeOptions(pauseWriterThreshold: 8 << 20, resumeWriterThreshold: 4 << 20));
             var produce = ProduceAsync(pipe.Writer, export, store, settings, started, ct);
@@ -228,7 +254,7 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
             }
             await pipe.Reader.CompleteAsync();
             await produce;
-            return counting.Count;
+            return (counting.Count, missing.Count);
         }
         finally
         {
@@ -275,7 +301,8 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
         CancellationToken ct)
     {
         var manifest = new BackupManifest(BackupFormat.FormatVersion, BackupFormat.ServerVersion, started, export.Provider,
-            export.Tables.ToDictionary(t => t.Table, t => t.Rows), export.Blobs.Count, export.Blobs.Sum(b => b.Size));
+            export.Tables.ToDictionary(t => t.Table, t => t.Rows), export.Blobs.Count, export.Blobs.Sum(b => b.Size),
+            export.Missing is { Count: > 0 } m ? m.Select(b => $"{b.UserId:N}/{b.Hash}").ToList() : null);
         using (var json = new MemoryStream(JsonSerializer.SerializeToUtf8Bytes(manifest, BackupFormat.ManifestJson)))
             await tar.WriteEntryAsync(Entry(BackupFormat.ManifestEntry, json, started), ct);
 

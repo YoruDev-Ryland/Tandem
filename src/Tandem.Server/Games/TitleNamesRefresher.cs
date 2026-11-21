@@ -40,18 +40,43 @@ public sealed class TitleNamesRefresher(IOptions<ServerOptions> options, TitleNa
     IHttpClientFactory http, TimeProvider time, ILogger<TitleNamesRefresher> log) : BackgroundService
 {
     public const string ClientName = "titles";
+    /// <summary>v3: Switch, 3DS and GameCube/Wii.</summary>
+    public const string CacheFileName = "titles-v3.json";
+    public const string PreviousCacheFileName = "titles-v2.json";
+
+    /// <summary>Best effort: a cache file that cannot be deleted is only wasted space.</summary>
+    public void DeleteCaches(string dataDirectory, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            try { File.Delete(Path.Combine(dataDirectory, name)); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log.LogDebug(e, "Could not delete {File}", name); }
+        }
+    }
+    /// <summary>A title list bigger than this is refused (titledb's US file is about 150 MB).</summary>
+    public const long MaxDownloadBytes = 300L * 1024 * 1024;
     private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromHours(6);
 
     protected override async Task ExecuteAsync(CancellationToken stop)
     {
         var o = options.Value;
+        DeleteCaches(o.DataDirectory, "titles.json"); // v1 (Switch only) is never read again (F-23)
         if (!o.EnableTitleNames || string.IsNullOrWhiteSpace(o.TitleNamesUrl))
         {
-            await backfill.RunAsync(stop);   // still cleans tags from stored names
+            DeleteCaches(o.DataDirectory, PreviousCacheFileName, CacheFileName);
+            await backfill.RunAsync(stop);   // still cleans tags and prefixes from stored names
             return;
         }
-        var cache = Path.Combine(o.DataDirectory, "titles-v2.json");   // v2: Switch and 3DS
+        var cache = Path.Combine(o.DataDirectory, CacheFileName);
         var maxAge = TimeSpan.FromDays(Math.Max(1, o.TitleNamesRefreshDays));
+
+        // Until the first v3 download, the v2 list (Switch and 3DS) still names those; it goes once v3 is saved.
+        var previous = Path.Combine(o.DataDirectory, PreviousCacheFileName);
+        if (!File.Exists(cache) && File.Exists(previous))
+        {
+            try { holder.Current = TitleNames.Load(previous); }
+            catch (Exception e) when (e is not OperationCanceledException) { log.LogDebug(e, "Couldn't read the previous title list"); }
+        }
 
         if (File.Exists(cache))
         {
@@ -92,11 +117,36 @@ public sealed class TitleNamesRefresher(IOptions<ServerOptions> options, TitleNa
         var lists = new List<TitleNames> { await FetchAsync(o.TitleNamesUrl!, TitleNames.Parse, cache, ct) };
         foreach (var url in (o.ThreeDsTitleNamesUrls ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             lists.Add(await FetchAsync(url, TitleNames.ParseThreeDs, cache, ct));
+        if (!string.IsNullOrWhiteSpace(o.DiscTitleNamesUrl))
+            lists.Add(await FetchAsync(o.DiscTitleNamesUrl, TitleNames.ParseGameTdb, cache, ct));
         var merged = TitleNames.Merge([.. lists]);
         if (merged.Count == 0) throw new InvalidDataException("the lists had no titles");
         merged.Save(cache);
         holder.Current = merged;
+        DeleteCaches(o.DataDirectory, PreviousCacheFileName);
         log.LogInformation("Loaded {Count} titles", merged.Count);
+    }
+
+    /// <summary>Copies a title list download, refusing one over <paramref name="max"/> bytes (by its Content-Length, or
+    /// while streaming) and one that is plainly not a list (an image, video or audio type) (F-22).</summary>
+    internal static async Task CopyCappedAsync(HttpContent content, Stream target, long max, CancellationToken ct)
+    {
+        var tooBig = $"the list is larger than {max / (1024 * 1024)} MB";
+        if (content.Headers.ContentLength > max) throw new InvalidDataException(tooBig);
+        var type = content.Headers.ContentType?.MediaType ?? "";
+        if (type.StartsWith("image/", StringComparison.OrdinalIgnoreCase) || type.StartsWith("video/", StringComparison.OrdinalIgnoreCase)
+            || type.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"the list came back as {type}");
+        await using var body = await content.ReadAsStreamAsync(ct);
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await body.ReadAsync(buffer, ct)) > 0)
+        {
+            total += read;
+            if (total > max) throw new InvalidDataException(tooBig);
+            await target.WriteAsync(buffer.AsMemory(0, read), ct);
+        }
     }
 
     /// <summary>Downloads [url] to a temporary file beside [cache] and parses it there, so memory holds only the result.</summary>
@@ -110,7 +160,7 @@ public sealed class TitleNamesRefresher(IOptions<ServerOptions> options, TitleNa
             {
                 response.EnsureSuccessStatusCode();
                 await using var file = File.Create(tmp);
-                await response.Content.CopyToAsync(file, ct);
+                await CopyCappedAsync(response.Content, file, MaxDownloadBytes, ct);
             }
             await using var f = File.OpenRead(tmp);
             return parse(f);

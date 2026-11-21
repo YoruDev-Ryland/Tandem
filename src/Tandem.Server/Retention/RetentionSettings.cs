@@ -14,22 +14,25 @@ public static class RetentionSettings
     public const string SaveKey = "retention.saveVersions";
     public const string ConfigKey = "retention.configVersions";
     public const string VaultKey = "retention.vaultVersions";
+    public const string StateAgeKey = "retention.stateMaxAgeDays";
     public const int Min = 1;
     public const int Max = 1000;
+    public const int MaxStateAgeDays = 3650;
 
-    public static readonly RetentionSettingsDto Defaults = new(30, 30, 5);
+    public static readonly RetentionSettingsDto Defaults = new(30, 30, 5, 90);
+    private static readonly string[] Keys = [SaveKey, ConfigKey, VaultKey, StateAgeKey];
 
     public static async Task<RetentionSettingsDto> LoadAsync(TandemDbContext db, Guid userId, CancellationToken ct)
     {
         var rows = await db.UserSettings.AsNoTracking()
-            .Where(s => s.UserId == userId && (s.Key == SaveKey || s.Key == ConfigKey || s.Key == VaultKey))
+            .Where(s => s.UserId == userId && Keys.Contains(s.Key))
             .ToDictionaryAsync(s => s.Key, s => s.Value, ct);
         // A missing or unreadable value means the default; never a smaller count than the user can have asked for.
-        int Read(string key, int fallback) =>
+        int Read(string key, int fallback, int min = Min, int max = Max) =>
             rows.TryGetValue(key, out var v) && int.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out var n)
-                && n is >= Min and <= Max ? n : fallback;
+                && n >= min && n <= max ? n : fallback;
         return new RetentionSettingsDto(Read(SaveKey, Defaults.SaveVersions), Read(ConfigKey, Defaults.ConfigVersions),
-            Read(VaultKey, Defaults.VaultVersions));
+            Read(VaultKey, Defaults.VaultVersions), Read(StateAgeKey, Defaults.StateMaxAgeDays, 0, MaxStateAgeDays));
     }
 
     /// <summary>Validates (400 bad_value) and stores. Caller holds the user's lock, so a prune never sees half of it.</summary>
@@ -39,11 +42,14 @@ public static class RetentionSettings
         foreach (var (name, n) in new[] { ("saveVersions", value.SaveVersions), ("configVersions", value.ConfigVersions), ("vaultVersions", value.VaultVersions) })
             if (n is < Min or > Max)
                 throw new ApiException(400, "bad_value", $"{name} must be {Min}-{Max}.");
+        if (value.StateMaxAgeDays is < 0 or > MaxStateAgeDays)
+            throw new ApiException(400, "bad_value", $"stateMaxAgeDays must be 0-{MaxStateAgeDays}.");
 
         var existing = await db.UserSettings
-            .Where(s => s.UserId == userId && (s.Key == SaveKey || s.Key == ConfigKey || s.Key == VaultKey))
+            .Where(s => s.UserId == userId && Keys.Contains(s.Key))
             .ToDictionaryAsync(s => s.Key, ct);
-        foreach (var (key, n) in new[] { (SaveKey, value.SaveVersions), (ConfigKey, value.ConfigVersions), (VaultKey, value.VaultVersions) })
+        foreach (var (key, n) in new[] { (SaveKey, value.SaveVersions), (ConfigKey, value.ConfigVersions), (VaultKey, value.VaultVersions),
+                     (StateAgeKey, value.StateMaxAgeDays) })
         {
             var text = n.ToString(CultureInfo.InvariantCulture);
             if (existing.TryGetValue(key, out var row)) row.Value = text;

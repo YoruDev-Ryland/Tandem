@@ -10,7 +10,8 @@ using Microsoft.EntityFrameworkCore;
 namespace Tandem.Server.Web;
 
 /// <summary>Read models for the web app. Everything is scoped to the user and ignores revoked devices.</summary>
-public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameStateQueries gameStates)
+public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameStateQueries gameStates, Http.StorageMonitor storage,
+    Microsoft.Extensions.Options.IOptions<ServerOptions> options)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public const int ContinueCount = 10;
@@ -22,7 +23,7 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
 
     // ---- Home ----
 
-    public async Task<HomeResponse> HomeAsync(Guid userId, Guid? currentDevice, CancellationToken ct)
+    public async Task<HomeResponse> HomeAsync(Guid userId, Guid? currentDevice, CancellationToken ct, bool isAdmin = false)
     {
         var heads = await (
                 from i in db.SaveItems.AsNoTracking()
@@ -52,7 +53,11 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
             .Select(a => new ActivityItem(a.Id, a.Utc, a.Kind, a.Message, a.DeviceId,
                 db.Devices.Where(x => x.Id == a.DeviceId).Select(x => x.Name).FirstOrDefault(), a.EmulatorId, a.GameKey))
             .ToListAsync(ct);
-        return new HomeResponse(cont, devices, new Attention(concurrent, firstSync, shizuku, failed, configConflicts), recent);
+        var backupOff = isAdmin && !(await Backup.BackupSettings.LoadAsync(db, ct)).Enabled;
+        var silent = (await Notify.NotifyTriggers.SilentDevicesAsync(db, userId, options.Value.SilentDeviceHours, time.GetUtcNow(), ct))
+            .OrderBy(d => d.CreatedUtc).Select(d => d.Id).ToList();
+        return new HomeResponse(cont, devices, new Attention(concurrent, firstSync, shizuku, failed, configConflicts, storage.IsLow,
+            backupOff, silent), recent);
     }
 
     public async Task<List<DeviceSummary>> DevicesAsync(Guid userId, Guid? current, CancellationToken ct)
@@ -120,15 +125,24 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
             throw new ApiException(404, "game_not_found", "Game not found.");
 
         var ids = items.Select(i => i.Id).ToList();
-        var versions = await db.SaveVersions.AsNoTracking().Where(v => ids.Contains(v.ItemId)).OrderByDescending(v => v.Seq).ToListAsync(ct);
+        // The manifest itself is read only for rows stored before FileCount was.
+        var versions = await db.SaveVersions.AsNoTracking().Where(v => ids.Contains(v.ItemId)).OrderByDescending(v => v.Seq)
+            .Select(v => new
+            {
+                v.Id, v.ItemId, v.Seq, v.DeviceId, v.ReceivedUtc, v.TotalSize, v.Core, v.Variant, v.Pinned, v.ConflictReason,
+                v.Resolved, v.ManifestHash, v.EmulatorVersion, v.FileCount,
+                OldManifest = v.FileCount == null ? v.ManifestJson : null,
+            }).ToListAsync(ct);
         var states = await gameStates.LoadAsync(userId, itemQuery, ct);
-        var heads = versions.Where(v => items.Any(i => i.HeadVersionId == v.Id)).ToDictionary(v => v.Id, v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc));
+        var headIds = items.Where(i => i.HeadVersionId != null).Select(i => i.HeadVersionId!.Value).ToHashSet();
+        var heads = versions.Where(v => headIds.Contains(v.Id)).ToDictionary(v => v.Id, v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc));
+        var byItem = versions.ToLookup(v => v.ItemId);
 
         var details = items.Select(i => new SaveItemDetail(i.Id, i.Kind, i.Slot, i.Core, i.HeadVersionId, i.OpenConflict,
-            versions.Where(v => v.ItemId == i.Id).Select(v => new VersionSummary(v.Id, v.Seq,
+            byItem[i.Id].Select(v => new VersionSummary(v.Id, v.Seq,
                 states.DeviceName(v.DeviceId), v.ReceivedUtc, v.TotalSize, v.Core, v.Variant,
                 v.Pinned, v.ConflictReason, v.Id == i.HeadVersionId, v.Resolved, v.ManifestHash,
-                Manifests.FromJson(v.ManifestJson).Count)).ToList())).ToList();
+                v.FileCount ?? Manifests.FromJson(v.OldManifest ?? "[]").Count, v.EmulatorVersion)).ToList())).ToList();
         return new GameDetail(BuildRow(emulatorId, gameKey, items, installs, heads, states), details);
     }
 

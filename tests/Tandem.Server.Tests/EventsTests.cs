@@ -302,4 +302,22 @@ public class EventsTests
         await Task.Delay(100);
         Assert.Equal(after, await LastSeen(a, bKey.DeviceId));
     }
+
+    [Fact]
+    public async Task Revoking_a_device_ends_its_open_stream_and_the_reconnect_gets_device_revoked()
+    {
+        using var factory = NewFactory();
+        var (a, _) = await factory.Register("e4@example.com", deviceName: "Thor");
+        var (b, bKey) = await factory.PairSecondDevice(a, "Pocket");
+
+        using var cts = Timeout();
+        await using var sse = await Open(b, cts.Token);
+        await sse.Next(cts.Token); // connected
+        Assert.Equal(HttpStatusCode.NoContent, (await a.DeleteAsync($"/v1/devices/{bKey.DeviceId}")).StatusCode);
+
+        await Assert.ThrowsAsync<EndOfStreamException>(async () => await sse.Until(_ => false, cts.Token));
+        var again = await b.GetAsync("/v1/events", cts.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, again.StatusCode);
+        Assert.Equal("device_revoked", (await again.ReadAsync<ErrorResponse>()).Code);
+    }
 }

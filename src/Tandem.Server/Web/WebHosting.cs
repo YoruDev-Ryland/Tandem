@@ -11,6 +11,9 @@ public static class WebHosting
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>Tandem</title></head>" +
         "<body><p>Tandem server is running. The web app is not built yet.</p></body></html>";
 
+    /// <summary>The built app's index.html (it may not exist).</summary>
+    public static string IndexOf(IServiceProvider services) => Path.Combine(RootOf(services), "index.html");
+
     private static string RootOf(IServiceProvider services)
     {
         var configured = services.GetRequiredService<IOptions<ServerOptions>>().Value.WebRoot;
