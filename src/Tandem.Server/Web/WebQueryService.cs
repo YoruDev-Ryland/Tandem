@@ -125,15 +125,24 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
             throw new ApiException(404, "game_not_found", "Game not found.");
 
         var ids = items.Select(i => i.Id).ToList();
-        var versions = await db.SaveVersions.AsNoTracking().Where(v => ids.Contains(v.ItemId)).OrderByDescending(v => v.Seq).ToListAsync(ct);
+        // The manifest itself is read only for rows stored before FileCount was.
+        var versions = await db.SaveVersions.AsNoTracking().Where(v => ids.Contains(v.ItemId)).OrderByDescending(v => v.Seq)
+            .Select(v => new
+            {
+                v.Id, v.ItemId, v.Seq, v.DeviceId, v.ReceivedUtc, v.TotalSize, v.Core, v.Variant, v.Pinned, v.ConflictReason,
+                v.Resolved, v.ManifestHash, v.EmulatorVersion, v.FileCount,
+                OldManifest = v.FileCount == null ? v.ManifestJson : null,
+            }).ToListAsync(ct);
         var states = await gameStates.LoadAsync(userId, itemQuery, ct);
-        var heads = versions.Where(v => items.Any(i => i.HeadVersionId == v.Id)).ToDictionary(v => v.Id, v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc));
+        var headIds = items.Where(i => i.HeadVersionId != null).Select(i => i.HeadVersionId!.Value).ToHashSet();
+        var heads = versions.Where(v => headIds.Contains(v.Id)).ToDictionary(v => v.Id, v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc));
+        var byItem = versions.ToLookup(v => v.ItemId);
 
         var details = items.Select(i => new SaveItemDetail(i.Id, i.Kind, i.Slot, i.Core, i.HeadVersionId, i.OpenConflict,
-            versions.Where(v => v.ItemId == i.Id).Select(v => new VersionSummary(v.Id, v.Seq,
+            byItem[i.Id].Select(v => new VersionSummary(v.Id, v.Seq,
                 states.DeviceName(v.DeviceId), v.ReceivedUtc, v.TotalSize, v.Core, v.Variant,
                 v.Pinned, v.ConflictReason, v.Id == i.HeadVersionId, v.Resolved, v.ManifestHash,
-                Manifests.FromJson(v.ManifestJson).Count)).ToList())).ToList();
+                v.FileCount ?? Manifests.FromJson(v.OldManifest ?? "[]").Count, v.EmulatorVersion)).ToList())).ToList();
         return new GameDetail(BuildRow(emulatorId, gameKey, items, installs, heads, states), details);
     }
 

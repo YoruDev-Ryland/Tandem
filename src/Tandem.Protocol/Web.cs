@@ -34,8 +34,11 @@ public enum DeviceGameState { Newest, HasIt, Pending, Waiting, Behind, NotInstal
 public sealed record GameDeviceState(Guid DeviceId, string DeviceName, DeviceGameState State);
 
 /// <param name="FileCount">Number of files in the version's manifest.</param>
+/// <param name="EmulatorVersion">The uploading device's reported version of the emulator at upload time (a restore copy
+/// keeps the original's), or null.</param>
 public sealed record VersionSummary(Guid Id, int Seq, string? DeviceName, DateTimeOffset ReceivedUtc, long TotalSize, string Core,
-    string? Variant, bool Pinned, ConflictReason? ConflictReason, bool IsHead, bool Resolved, string ManifestHash, int FileCount);
+    string? Variant, bool Pinned, ConflictReason? ConflictReason, bool IsHead, bool Resolved, string ManifestHash, int FileCount,
+    string? EmulatorVersion);
 
 /// <summary>One side of an open save conflict: the current head or an open conflict version.</summary>
 public sealed record ConflictSide(Guid VersionId, Guid? DeviceId, string? DeviceName, DateTimeOffset ReceivedUtc, long TotalSize,

@@ -98,6 +98,7 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
                     Id = Guid.NewGuid(), ItemId = item.Id, Seq = seq, BaseVersionId = baseId,
                     DeviceId = deviceId, ReceivedUtc = time.GetUtcNow(), ManifestJson = Manifests.ToJson(manifest),
                     ManifestHash = manifestHash, TotalSize = manifest.Sum(e => e.Size), Core = core,
+                    FileCount = manifest.Count, EmulatorVersion = await EmulatorVersionAsync(deviceId, request.EmulatorId, ct),
                 };
                 db.SaveVersions.Add(version);
 
@@ -146,6 +147,17 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
         var item = await db.SaveItems.AsNoTracking().FirstOrDefaultAsync(i => i.UserId == userId && i.EmulatorId == emulatorId
             && i.Kind == kind && i.GameKey == gameKey && i.Slot == slot && i.Core == itemCore, ct);
         return item is null ? (null, false) : (item.HeadVersionId, item.OpenConflict);
+    }
+
+    /// <summary>The device's emulator version from its last status report (F-12: recorded, not yet acted on).</summary>
+    private async Task<string?> EmulatorVersionAsync(Guid? deviceId, string emulatorId, CancellationToken ct)
+    {
+        if (deviceId is not Guid id) return null;
+        var v = await db.DeviceEmulators.AsNoTracking().Where(e => e.DeviceId == id && e.EmulatorId == emulatorId)
+            .Select(e => e.Version).FirstOrDefaultAsync(ct);
+        if (string.IsNullOrWhiteSpace(v)) return null;
+        v = v.Trim();
+        return v.Length > 40 ? v[..40] : v;
     }
 
     private async Task<string> DeviceNameAsync(Guid deviceId, CancellationToken ct) =>
@@ -305,7 +317,8 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
                 {
                     Id = Guid.NewGuid(), ItemId = item.Id, Seq = seq, BaseVersionId = head?.Id, DeviceId = null,
                     ReceivedUtc = time.GetUtcNow(), ManifestJson = chosen.ManifestJson, ManifestHash = chosen.ManifestHash,
-                    TotalSize = chosen.TotalSize, Core = chosen.Core,
+                    TotalSize = chosen.TotalSize, Core = chosen.Core, FileCount = chosen.FileCount,
+                    EmulatorVersion = chosen.EmulatorVersion, // the content was made by that version
                 };
                 db.SaveVersions.Add(copy);
                 if (head is { Pinned: false }) await LabelVariantsAsync([head], ct);
