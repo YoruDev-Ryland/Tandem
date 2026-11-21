@@ -118,7 +118,7 @@
     input.value = "";
     if (list.length === 0) return;
     const rel = (list[0] as File & { webkitRelativePath?: string }).webkitRelativePath;
-    picked = fromPicker(list);
+    picked = fromPicker(list, true);
     // A folder is named for itself; a single file for its own name.
     name = rel ? rel.split("/")[0] : list.length === 1 ? list[0].name : "";
   }

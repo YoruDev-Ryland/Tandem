@@ -168,6 +168,8 @@ class EdenModule(private val internalRoot: String = "/storage/emulated/0") : Emu
     override fun vaultTarget(fs: Fs, d: Detected, category: String, name: String): String? =
         if (category == "keys") "${d.dataRoot}/keys" else null
 
+    override fun vaultFolderIsTarget(category: String) = category == "keys"
+
     private fun avatarProfile(fs: Fs, d: Detected): String? =
         fs.list("${nandOf(d)}/system/save/8000000000000010/su/avators").asSequence()
             .map { it.path.substringAfterLast('/').substringBeforeLast('.') }

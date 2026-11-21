@@ -154,6 +154,8 @@ class AzaharModule(
     override fun vaultTarget(fs: Fs, d: Detected, category: String, name: String): String? =
         if (category == "sysdata" || category == "keys") "${d.dataRoot}/sysdata" else null
 
+    override fun vaultFolderIsTarget(category: String) = category == "sysdata" || category == "keys"
+
     companion object {
         /**
          * Program ID (u64 LE at 0x118 of the NCCH header) of an NCCH (.cxi) or NCSD (.3ds/.cci) image, else null.

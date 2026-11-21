@@ -96,6 +96,28 @@ describe("Vault", () => {
     });
   });
 
+  it("uploads a picked folder with the folder's own name leading every path", async () => {
+    const calls = serve([bios]);
+    render(Vault);
+    await screen.findByText("PlayStation BIOS");
+    await fireEvent.click(screen.getByRole("button", { name: /Upload from this PC/ }));
+    const dialog = await screen.findByRole("dialog");
+    const inDir = (body: string, rel: string) => {
+      const f = new File([body], rel.split("/").pop()!);
+      Object.defineProperty(f, "webkitRelativePath", { value: rel });
+      return f;
+    };
+    await fireEvent.change(within(dialog).getByLabelText("Folder") as HTMLInputElement, {
+      target: { files: [inDir("abc", "dc/dc_boot.bin"), inDir("abc", "dc/sub/dc_flash.bin")] },
+    });
+    expect((within(dialog).getByLabelText("Name") as HTMLInputElement).value).toBe("dc");
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Upload" }));
+    await waitFor(() => expect(calls.find((c) => c.url.endsWith("/v1/vault/upload"))).toBeTruthy());
+    const body = calls.find((c) => c.url.endsWith("/v1/vault/upload"))!.body as { name: string; manifest: { path: string }[] };
+    expect(body.name).toBe("dc");
+    expect(body.manifest.map((m) => m.path).sort()).toEqual(["dc/dc_boot.bin", "dc/sub/dc_flash.bin"]);
+  });
+
   it("explains in place that a vault upload needs HTTPS when crypto.subtle is missing, and sends nothing", async () => {
     const calls = serve([bios]);
     vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });

@@ -129,9 +129,13 @@ class DeliveryApplierTest {
             failTarget?.let { throw it }
             return "$root/saves/$gameKey"
         }
-        /** Keys go to <root>/data/keys, like Eden's; other categories have no known folder. */
-        override fun vaultTarget(fs: Fs, d: Detected, category: String, name: String) =
-            if (category == "keys") "$root/data/keys" else null
+        /** Keys go to <root>/data/keys, like Eden's; BIOS to <root>/system, like RetroArch's; others have no known folder. */
+        override fun vaultTarget(fs: Fs, d: Detected, category: String, name: String): String? {
+            vaultError?.let { throw it }
+            return when (category) { "keys" -> "$root/data/keys"; "bios" -> "$root/system"; else -> null }
+        }
+        override fun vaultFolderIsTarget(category: String) = category == "keys"
+        var vaultError: ModuleException? = null
     }
 
     // ---- harness ----
@@ -721,6 +725,50 @@ class DeliveryApplierTest {
         assertFalse(File(root, "data/keys").exists())
     }
 
+    @Test fun a_bios_folder_keeps_its_own_folder_below_the_system_folder() = runBlocking {
+        api.vaultItems = listOf(VaultItemDto("item-dc", "bios", "fake", "dc"))
+        put("system/dc_boot.bin", "someone else's")
+        api.standing = listOf(keysDelivery("v1", "item-dc", "dc/dc_boot.bin" to "boot", "dc/dc_flash.bin" to "flash"))
+        assertEquals(1, applier().applyAll().applied)
+        assertEquals("boot", read("system/dc/dc_boot.bin"))
+        assertEquals("flash", read("system/dc/dc_flash.bin"))
+        assertEquals("not clobbered", "someone else's", read("system/dc_boot.bin"))
+        assertEquals(AckRequest(DeliveryResult.Applied, DeliveryApplier.PLACED), ackOf("v1"))
+    }
+
+    @Test fun a_single_bios_file_lands_directly_in_the_system_folder() = runBlocking {
+        api.vaultItems = listOf(VaultItemDto("item-psx", "bios", "fake", "scph5501.bin"))
+        api.standing = listOf(keysDelivery("v1", "item-psx", "scph5501.bin" to "psx"))
+        assertEquals(1, applier().applyAll().applied)
+        assertEquals("psx", read("system/scph5501.bin"))
+    }
+
+    @Test fun a_keys_folder_goes_into_the_keys_folder_not_below_it() = runBlocking {
+        api.vaultItems = listOf(VaultItemDto("item-keys", "keys", "fake", "switch keys"))
+        api.standing = listOf(keysDelivery("v1", "item-keys", "switch keys/prod.keys" to "p", "switch keys/title.keys" to "t"))
+        assertEquals(1, applier().applyAll().applied)
+        assertEquals("p", read("data/keys/prod.keys"))
+        assertEquals("t", read("data/keys/title.keys"))
+        assertFalse(File(root, "data/keys/switch keys").exists())
+    }
+
+    @Test fun a_staged_folder_is_not_nested_twice() = runBlocking {
+        api.vaultItems = listOf(VaultItemDto("item-fw", "firmware", "fake", "fw19"))
+        api.standing = listOf(keysDelivery("v1", "item-fw", "fw19/a.nca" to "a", "fw19/sub/b.nca" to "b"))
+        assertEquals(1, applier().applyAll().applied)
+        assertEquals("a", File(vaultRoot, "fake/firmware/fw19/a.nca").readText())
+        assertEquals("b", File(vaultRoot, "fake/firmware/fw19/sub/b.nca").readText())
+    }
+
+    @Test fun a_module_error_while_finding_the_folder_stages_the_item_instead_of_failing() = runBlocking {
+        api.vaultItems = listOf(VaultItemDto("item-keys", "keys", "fake", "keys"))
+        module.vaultError = ModuleException("retroarch.cfg unreadable")
+        api.standing = listOf(keysDelivery("v1", "item-keys", "keys/prod.keys" to "k"))
+        assertEquals(1, applier().applyAll().applied)
+        assertEquals("k", File(vaultRoot, "fake/keys/keys/prod.keys").readText())
+        assertEquals(AckRequest(DeliveryResult.Applied, DeliveryApplier.STAGED), ackOf("v1"))
+    }
+
     @Test fun without_the_vault_list_the_delivery_waits_for_the_next_pass() = runBlocking {
         api.vaultError = java.io.IOException("offline")
         api.standing = listOf(keysDelivery("v1", "item-keys", "prod.keys" to "k"), keysDelivery("v2", "item-other", "x.bin" to "x"))
@@ -748,6 +796,9 @@ class DeliveryApplierTest {
         assertEquals("/a/user/sysdata", AzaharModule().vaultTarget(fs, az, "sysdata", "aes_keys.txt"))
         assertEquals("/a/user/sysdata", AzaharModule().vaultTarget(fs, az, "keys", "aes_keys.txt"))
         assertNull(AzaharModule().vaultTarget(fs, az, "bios", "x"))
+        assertTrue("a keys folder goes into keys/", EdenModule().vaultFolderIsTarget("keys"))
+        assertTrue("a sysdata folder goes into sysdata/", AzaharModule().vaultFolderIsTarget("sysdata"))
+        assertFalse("a BIOS folder stays a folder in system/", RetroArchModule().vaultFolderIsTarget("bios"))
         for (m in listOf(PpssppModule(), DolphinModule(), MelonDsModule(), Vita3kModule())) {
             for (c in listOf("bios", "keys", "firmware", "sysdata", "system")) {
                 assertNull("${m.emulatorId} $c", m.vaultTarget(fs, Detected(m.emulatorId, "p", "", "/x"), c, "n"))

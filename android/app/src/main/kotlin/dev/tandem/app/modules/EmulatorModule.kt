@@ -77,4 +77,12 @@ interface EmulatorModule {
      * Tandem/vault). Only folders the module itself knows the layout of. [name] is the item's name (a file or folder).
      */
     fun vaultTarget(fs: Fs, d: Detected, category: String, name: String): String? = null
+
+    /**
+     * True when [vaultTarget] for [category] is itself the folder a folder item stands for (Azahar's `sysdata`, Eden's
+     * `keys`): a folder item's own top folder is then dropped and its contents go straight in. False (the default)
+     * keeps the folder below the target, as RetroArch's cores expect (`system/dc/dc_boot.bin`). Single files are
+     * placed at the target either way.
+     */
+    fun vaultFolderIsTarget(category: String): Boolean = false
 }

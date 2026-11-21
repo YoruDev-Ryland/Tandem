@@ -31,10 +31,15 @@ export function uploadFiles(
   return uploadSave(form);
 }
 
-/** Files from an input: a folder pick keeps paths below the chosen folder, which is the save's root. */
-export function fromPicker(list: FileList | File[]): UploadFile[] {
+/**
+ * Files from an input: a folder pick keeps paths below the chosen folder, which is the save's root. With
+ * `keepFolder` (vault items) the folder's own name stays as the first segment ("dc/dc_boot.bin"), so a device places
+ * the folder itself, not its loose contents.
+ */
+export function fromPicker(list: FileList | File[], keepFolder = false): UploadFile[] {
   return [...list].map((file) => {
     const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+    if (rel && keepFolder) return { file, path: rel };
     return { file, path: rel ? rel.split("/").slice(1).join("/") || file.name : file.name };
   });
 }

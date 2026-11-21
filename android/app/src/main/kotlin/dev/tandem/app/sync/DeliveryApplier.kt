@@ -410,14 +410,26 @@ class DeliveryApplier(
         val category = safe(item?.category)
         val label = name ?: "vault item ${d.targetId}"
         val m = d.emulatorId.takeIf { it.isNotEmpty() }?.let { registry.byId(it) }
-        val det = m?.let { mod -> moduleCall { mod.detect(fs, settings) } }
+        // A module that can't read its own layout right now (an unparsable retroarch.cfg) stages the item rather than
+        // failing it for good: staging only writes into Tandem's own folder.
+        fun <T> orStage(what: String, f: () -> T): T? = try { moduleCall(f) } catch (e: Reject) {
+            log("vault ${d.targetId}: $what failed, staged instead (${e.detail})"); null
+        }
+        val det = m?.let { mod -> orStage("detect") { mod.detect(fs, settings) } }
         val target = if (m != null && det != null && category != null && name != null) {
-            moduleCall { m.vaultTarget(fs, det, category, name) }
+            orStage("vault folder") { m.vaultTarget(fs, det, category, name) }
         } else null
+        // A folder item's paths all sit under its own top folder ("dc/dc_boot.bin"); a single file has no folder.
+        val tops = d.manifest.map { it.path.substringBefore('/', "") }
+        val top = tops.firstOrNull()?.takeIf { t -> t.isNotEmpty() && tops.all { it == t } }
 
         if (m != null && det != null && target != null) {
             if (fs.isEmulatorRunning(m, det)) return waitingVault(d, m, label)
-            val planned = d.manifest.map { Planned(it, it.path, "$target/${it.path}", false) }
+            val drop = top != null && category != null && m.vaultFolderIsTarget(category)
+            val planned = d.manifest.map {
+                val rel = if (drop) it.path.removePrefix("$top/") else it.path
+                Planned(it, rel, "$target/$rel", false)
+            }
             pendingWhileRunning.remove(d.id)
             if (planned.all { fs.exists(it.abs) && fileMatches(it.abs, it.entry) }) {   // already there, identical
                 ack(d, DeliveryResult.Applied, PLACED)
@@ -440,7 +452,11 @@ class DeliveryApplier(
         val dir = if (name != null && category != null) "$vaultRoot/${m?.emulatorId ?: SHARED}/$category/$name" else "$vaultRoot/${d.targetId}"
         install(d, Target(
             name = label, markerKey = key, backupId = "vault", safeKey = ItemKey.safe(key), procs = null,
-            targetDir = dir, files = d.manifest.map { Planned(it, it.path, "$dir/${it.path}", false) },
+            targetDir = dir, files = d.manifest.map {
+                // The staging folder is already named for the item: a folder of the same name isn't nested again.
+                val rel = if (top != null && top == name) it.path.removePrefix("$top/") else it.path
+                Planned(it, rel, "$dir/$rel", false)
+            },
             local = emptyMap(), deletable = emptySet(), guardHash = null, untrackedOk = emptySet(),
             checkUntracked = false,
         ))
