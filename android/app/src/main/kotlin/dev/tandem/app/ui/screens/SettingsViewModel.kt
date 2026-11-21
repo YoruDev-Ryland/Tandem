@@ -36,7 +36,7 @@ data class EmulatorFocus(val emulatorId: String, val seq: Int)
 
 data class SettingsUi(
     val section: SettingsSection = SettingsSection.Sync,
-    val autoApply: Boolean = false,
+    val autoApply: Boolean = true,
     val romDirs: List<String> = emptyList(),
     val azaharRoot: String = "",
     val ppssppMemstick: String = "",

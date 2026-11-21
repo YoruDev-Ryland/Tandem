@@ -212,6 +212,34 @@ internal fun StepNote(text: String, modifier: Modifier = Modifier) {
     BasicText(text, modifier.padding(top = 14.dp).widthIn(max = 560.dp), style = EmuType.meta.copy(color = LocalEmu.current.ink3))
 }
 
+/**
+ * One setting as a hairline row: what it does, and On or Off at the right. A tap (or the hint bar's button the
+ * caller gives it) flips it.
+ */
+@Composable
+internal fun ToggleLine(text: String, on: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    val c = LocalEmu.current
+    Row(
+        modifier
+            .widthIn(max = 640.dp)
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .drawBehind {
+                drawLine(c.rule, Offset(0f, 0.5f), Offset(size.width, 0.5f), strokeWidth = 1.dp.toPx())
+                drawLine(c.rule, Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), strokeWidth = 1.dp.toPx())
+            }
+            .noKeyFocus()
+            .clickable(interactionSource = null, indication = null, onClick = onToggle)
+            .semantics(mergeDescendants = true) { selected = on }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        BasicText(text, Modifier.weight(1f), style = EmuType.body.copy(color = c.ink))
+        BasicText(if (on) "On" else "Off", style = EmuType.meta.copy(color = c.ink2))
+    }
+}
+
 /** Waiting for the server or the service, as the web shows it. */
 @Composable
 internal fun Loading() {

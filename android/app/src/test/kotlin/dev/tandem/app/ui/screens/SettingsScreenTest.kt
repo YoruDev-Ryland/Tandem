@@ -229,9 +229,11 @@ class SettingsScreenTest {
     @Test fun autoApplyToggleSavesAndReloads() {
         val st = store()
         show(st, vm(st))
-        compose.onNodeWithText("Apply newer saves automatically when the emulator is closed").assertIsDisplayed()
+        compose.onNodeWithText("Apply arriving saves automatically when the emulator is closed").assertIsDisplayed()
+        assertTrue("on for a new install", st.settings.autoApply)
+        compose.onNodeWithText("Turn off").assertExists()
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
-        assertTrue(st.settings.autoApply)
+        assertFalse(st.settings.autoApply)
         assertEquals(1, reloads)
     }
 
@@ -337,8 +339,8 @@ class SettingsViewModelTest {
 
     @Test fun settingsChangedWhileSignedOutDoNotStartSync() {
         val (st, vm) = setup(signedIn = false)
-        vm.setAutoApply(true)
-        assertTrue(st.settings.autoApply)
+        vm.setAutoApply(false)
+        assertFalse(st.settings.autoApply)
         assertEquals(0, reloads)
     }
 

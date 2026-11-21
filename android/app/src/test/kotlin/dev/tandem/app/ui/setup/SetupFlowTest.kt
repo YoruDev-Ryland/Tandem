@@ -455,6 +455,22 @@ class SetupFlowTest {
         assertFalse(vm.active.value)
     }
 
+    @Test fun step5ShowsAutoApplyOnAndXTurnsItOff() {
+        signedIn()
+        val vm = vm(handleAt(SetupStep.FirstSync))
+        show(vm)
+        compose.onNodeWithText("Apply arriving saves automatically when the emulator is closed").assertIsDisplayed()
+        compose.onNodeWithText("On").assertIsDisplayed()
+        assertTrue(store.settings.autoApply)
+        compose.key(KeyEvent.KEYCODE_BUTTON_X)
+        assertFalse(store.settings.autoApply)
+        compose.onNodeWithText("Off").assertIsDisplayed()
+        compose.onNodeWithText(dev.tandem.app.ui.setup.steps.AUTO_APPLY_OFF_NOTE).assertIsDisplayed()
+        assertEquals(1, reloads)   // the service picks the change up, as from Settings
+        compose.onNodeWithText("Apply arriving saves automatically when the emulator is closed").performClick()
+        assertTrue(store.settings.autoApply)
+    }
+
     @Test fun firstSyncReviewDecidesWithTheFaceButtons() {
         signedIn()
         conflicts = listOf(

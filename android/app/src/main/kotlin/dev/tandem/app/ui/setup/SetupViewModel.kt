@@ -152,7 +152,7 @@ private const val K_CHOICES = "setup.choices"
  * Nothing here writes emulator files. Signing in goes through [StateStore.signIn] (every emulator's sync state is
  * forgotten before the new key uploads anything), the variant and folder choices go through [settings] (the same
  * writes and forget protection as Settings), and the service is started only through [service] (SyncService
- * tryStart). Auto-apply is never turned on here.
+ * tryStart). Step 5 shows auto-apply (on for a new install) and can turn it off, through [settings] like Settings.
  */
 class SetupViewModel(
     private val handle: SavedStateHandle,
@@ -559,6 +559,10 @@ class SetupViewModel(
             }
         }
     }
+
+    /** Whether arriving saves are applied by themselves (Settings › Sync's switch). */
+    val autoApply: StateFlow<Boolean> = settings.ui.map { it.autoApply }.stateIn(scope, SharingStarted.Eagerly, settings.ui.value.autoApply)
+    fun setAutoApply(on: Boolean) = settings.setAutoApply(on)
 
     /** Try again after a failure: scan again, then read the conflicts. */
     fun retryFirstSync() = startFirstSync()

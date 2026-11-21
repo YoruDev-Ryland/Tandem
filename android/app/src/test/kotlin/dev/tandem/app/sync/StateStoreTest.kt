@@ -205,4 +205,62 @@ class StateStoreTest {
         s.signIn("http://x", "k", "d", listOf("eden"))
         assertEquals(emptySet<String>(), s.applyOnExit)
     }
+
+    @Test fun auto_apply_is_on_for_a_new_install_and_a_stored_choice_stays() {
+        assertTrue(StateStore(File(tmp.root, "new.json")).settings.autoApply)
+        val f = File(tmp.root, "state.json")
+        f.writeText("""{"settings":{"romDirs":[],"overrides":{},"autoApply":false}}""")
+        assertFalse(StateStore(f).settings.autoApply)
+        f.writeText("""{"settings":{"romDirs":[],"overrides":{},"autoApply":true}}""")
+        assertTrue(StateStore(f).settings.autoApply)
+        // Saved again after loading an old file, the "off" it loaded as is kept.
+        f.writeText("""{"settings":{"romDirs":[],"overrides":{}}}""")
+        StateStore(f).deviceId = "d"
+        assertFalse(StateStore(f).settings.autoApply)
+    }
+
+    @Test fun last_synced_is_written_at_most_once_a_minute_and_survives_reload() {
+        val f = File(tmp.root, "state.json")
+        val s = StateStore(f)
+        assertNull(s.lastSyncedAt)
+        assertTrue(s.markSynced(1_000_000))
+        assertFalse(s.markSynced(1_030_000))
+        assertEquals(1_000_000L, StateStore(f).lastSyncedAt)
+        assertTrue(s.markSynced(1_060_000))
+        assertEquals(1_060_000L, StateStore(f).lastSyncedAt)
+        s.signOut(listOf("eden"))
+        assertNull(s.lastSyncedAt)
+    }
+
+    @Test fun revoked_stops_sync_until_a_sign_in_or_out() {
+        val s = StateStore(File(tmp.root, "state.json"))
+        s.signIn("http://x", "k", "d", emptyList())
+        assertTrue(s.canSync)
+        s.markRevoked()
+        assertTrue(s.revoked)
+        assertFalse(s.canSync)
+        assertTrue(StateStore(File(tmp.root, "state.json")).revoked)
+        s.signIn("http://x", "k2", "d2", emptyList())
+        assertFalse(s.revoked)
+        s.markRevoked()
+        s.signOut(emptyList())
+        assertFalse(s.revoked)
+        assertFalse(s.canSync)
+    }
+
+    @Test fun changing_the_server_address_keeps_the_key_and_sync_state() {
+        val s = StateStore(File(tmp.root, "state.json"))
+        s.signIn("http://old:5100", "k", "d", emptyList())
+        s.applyPendingForget()
+        s.put("eden|Save|0100|", ItemState("v1", "m", "u"))
+        s.putConfigState("eden", ConfigState("b", "v", "m", "u"))
+        s.changeServer("https://tandem.example.ts.net")
+        val r = StateStore(File(tmp.root, "state.json"))
+        assertEquals("https://tandem.example.ts.net", r.serverUrl)
+        assertEquals("https://tandem.example.ts.net", r.signInForm.serverUrl)
+        assertEquals("k", r.deviceKey); assertEquals("d", r.deviceId)
+        assertEquals(ItemState("v1", "m", "u"), r.get("eden|Save|0100|"))
+        assertEquals(ConfigState("b", "v", "m", "u"), r.configState("eden"))
+        assertTrue(r.pendingForget.isEmpty())
+    }
 }

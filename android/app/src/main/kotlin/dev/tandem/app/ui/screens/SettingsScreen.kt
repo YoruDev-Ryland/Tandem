@@ -90,7 +90,7 @@ fun SettingsViewModel.actions(diagnostics: (() -> Unit)?, setUp: () -> Unit, bac
     diagnostics = diagnostics, setUp = setUp, back = back,
 )
 
-const val AUTO_APPLY_COPY = "Apply newer saves automatically when the emulator is closed"
+const val AUTO_APPLY_COPY = "Apply arriving saves automatically when the emulator is closed"
 const val REMOVE_ROM_COPY = "Games found only in this folder stop receiving saves on this device."
 const val SIGN_OUT_COPY = "This device stops syncing until you sign in again. Nothing on it is deleted."
 

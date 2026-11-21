@@ -43,10 +43,13 @@ import dev.tandem.app.ui.setup.SetupViewModel
 import dev.tandem.app.ui.setup.StepNote
 import dev.tandem.app.ui.setup.StepSub
 import dev.tandem.app.ui.setup.StepTitle
+import dev.tandem.app.ui.setup.ToggleLine
+import dev.tandem.app.ui.screens.AUTO_APPLY_COPY
 import dev.tandem.app.ui.state.TopStatus
 import dev.tandem.app.ui.theme.EmuType
 
 const val ALL_SET = "All set."
+const val AUTO_APPLY_OFF_NOTE = "Saves from your other devices then wait until you press Sync now on This device."
 
 /** "Use Odin 3's", or "Use the earlier save" when the other save is this device's own. */
 private fun useOther(e: ConflictEntry) = if (e.otherId == null) "Use ${e.other}" else "Use ${e.other}'s"
@@ -62,11 +65,18 @@ internal fun FirstSyncStep(vm: SetupViewModel, status: TopStatus, onDone: () -> 
     val error by vm.firstSyncError.collectAsState()
     val shizuku by vm.shizuku.collectAsState()
     val slow by vm.scanSlow.collectAsState()
+    val autoApply by vm.autoApply.collectAsState()
     fun done() { vm.finish(); onDone() }
+    // X flips auto-apply on every screen of the step but the review, where X picks the other device's save.
+    val toggle = Hint(Action.X, if (autoApply) "Turn off" else "Turn on") { vm.setAutoApply(!autoApply) }
+    val line: @Composable () -> Unit = {
+        ToggleLine(AUTO_APPLY_COPY, autoApply, { vm.setAutoApply(!autoApply) }, Modifier.padding(top = 18.dp))
+        if (!autoApply) StepNote(AUTO_APPLY_OFF_NOTE)
+    }
 
     when (phase) {
         FirstSyncPhase.Scanning -> SetupFrame(
-            status, SetupStep.FirstSync, emptyList(), vm::back,
+            status, SetupStep.FirstSync, listOf(toggle), vm::back,
             note = if (shizuku != ShizukuState.Ready) "Shizuku is off: the scan waits for it" else "Scanning this device",
             later = later,
         ) {
@@ -78,16 +88,19 @@ internal fun FirstSyncStep(vm: SetupViewModel, status: TopStatus, onDone: () -> 
             } else {
                 Loading()
             }
+            line()
         }
         FirstSyncPhase.Failed -> SetupFrame(
-            status, SetupStep.FirstSync, listOf(Hint(Action.A, "Try again", vm::retryFirstSync)), vm::back, later = later,
+            status, SetupStep.FirstSync, listOf(Hint(Action.A, "Try again", vm::retryFirstSync), toggle), vm::back, later = later,
         ) {
             StepTitle("First sync")
             error?.let { ErrorLine(it, text = ::describeSetupError) }
+            line()
         }
-        FirstSyncPhase.Done -> SetupFrame(status, SetupStep.FirstSync, listOf(Hint(Action.A, "Go to This device", ::done)), vm::back) {
+        FirstSyncPhase.Done -> SetupFrame(status, SetupStep.FirstSync, listOf(Hint(Action.A, "Go to This device", ::done), toggle), vm::back) {
             StepTitle(ALL_SET)
             StepSub("Every save on this device matched or synced on its own. Tandem keeps them in sync from here.")
+            line()
         }
         FirstSyncPhase.Review -> Review(vm, status, later ?: ::done, now)
     }
