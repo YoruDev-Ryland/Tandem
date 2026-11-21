@@ -37,6 +37,14 @@ describe("Devices", () => {
   });
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+  it("offers Pair a new device as a button without a gamepad", async () => {
+    serve(() => devices);
+    render(Devices);
+    await screen.findByText("Odin 3");
+    await fireEvent.click(screen.getByRole("button", { name: /Pair a new device/ }));
+    expect(router.path).toBe("/devices/pair");
+  });
+
   it("lists devices with last seen and status", async () => {
     serve(() => devices);
     render(Devices);
