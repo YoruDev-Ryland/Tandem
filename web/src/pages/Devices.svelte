@@ -6,6 +6,7 @@
   import { onAction } from "../lib/input/actions";
   import { router } from "../lib/router.svelte";
   import { relativeTime } from "../lib/time";
+  import Button from "../lib/ui/Button.svelte";
   import Empty from "../lib/ui/Empty.svelte";
   import ErrorLine from "../lib/ui/ErrorLine.svelte";
   import HintBar from "../lib/ui/HintBar.svelte";
@@ -64,12 +65,20 @@
         {/snippet}
       </List>
     {/if}
+    <div class="actions">
+      <Button glyph="x" onclick={pair}>Pair a new device</Button>
+    </div>
   </section>
 
   <HintBar hints={[{ glyph: "a", label: "Open" }, { glyph: "x", label: "Pair a new device" }, { glyph: "b", label: "Back" }]} />
 </div>
 
 <style>
+  .actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+  }
   .page {
     display: flex;
     flex-direction: column;

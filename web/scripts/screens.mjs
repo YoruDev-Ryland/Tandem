@@ -1,5 +1,5 @@
 // Captures every route at desktop and phone width, both themes.
-// Usage: EMUSYNC_EMAIL=... EMUSYNC_PASSWORD=... node web/scripts/screens.mjs http://localhost:5100 [outDir]
+// Usage: TANDEM_EMAIL=... TANDEM_PASSWORD=... node web/scripts/screens.mjs http://localhost:5100 [outDir]
 import { chromium } from "playwright-core";
 import { homedir } from "node:os";
 import { mkdirSync } from "node:fs";
@@ -9,13 +9,13 @@ import { dirname, join } from "node:path";
 const base = (process.argv[2] ?? "http://localhost:5100").replace(/\/$/, "");
 const here = dirname(fileURLToPath(import.meta.url));
 const out = process.argv[3] ?? join(here, "../../design/screens/web");
-const email = process.env.EMUSYNC_EMAIL;
-const password = process.env.EMUSYNC_PASSWORD;
-if (!email || !password) throw new Error("Set EMUSYNC_EMAIL and EMUSYNC_PASSWORD.");
+const email = process.env.TANDEM_EMAIL;
+const password = process.env.TANDEM_PASSWORD;
+if (!email || !password) throw new Error("Set TANDEM_EMAIL and TANDEM_PASSWORD.");
 const executablePath = process.env.CHROMIUM ?? join(homedir(), ".cache/ms-playwright/chromium-1234/chrome-linux64/chrome");
 mkdirSync(out, { recursive: true });
 
-const headers = { "EmuSync-Protocol": "1" };
+const headers = { "Tandem-Protocol": "1" };
 const browser = await chromium.launch({ executablePath, args: ["--no-sandbox"] });
 
 // Sign in once through the API, then reuse the session cookie.
@@ -54,7 +54,7 @@ const sizes = { desktop: { width: 1440, height: 900 }, phone: { width: 390, heig
 for (const theme of ["light", "dark"]) {
   for (const [size, viewport] of Object.entries(sizes)) {
     const ctx = await browser.newContext({ baseURL: base, viewport, storageState: state, reducedMotion: "reduce" });
-    await ctx.addInitScript((t) => localStorage.setItem("emusync.theme", t), theme);
+    await ctx.addInitScript((t) => localStorage.setItem("tandem.theme", t), theme);
     const page = await ctx.newPage();
     for (const r of routes) {
       await page.goto(r.path);
@@ -74,7 +74,7 @@ for (const theme of ["light", "dark"]) {
 for (const theme of ["light", "dark"]) {
   for (const [size, viewport] of Object.entries(sizes)) {
     const ctx = await browser.newContext({ baseURL: base, viewport, reducedMotion: "reduce" });
-    await ctx.addInitScript((t) => localStorage.setItem("emusync.theme", t), theme);
+    await ctx.addInitScript((t) => localStorage.setItem("tandem.theme", t), theme);
     const page = await ctx.newPage();
     await page.goto("/sign-in");
     await page.waitForSelector("h1");

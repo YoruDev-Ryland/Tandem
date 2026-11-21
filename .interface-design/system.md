@@ -1,4 +1,4 @@
-# EmuSync design system (short form)
+# Tandem design system (short form)
 
 The authority is docs/superpowers/specs/2026-11-20-ui-design.md. The mockups are in design/mockups/.
 

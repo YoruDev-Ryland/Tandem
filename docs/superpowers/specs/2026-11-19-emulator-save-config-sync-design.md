@@ -1,7 +1,7 @@
 # Emulator save & config sync: design
 
 Status: draft for review · 2026-11-19
-Working name: EmuSync (folder name only; a GPL project called EmuSync already exists, so pick a new name before
+Working name: Tandem (folder name only; a GPL project called Tandem already exists, so pick a new name before
 any public release).
 
 ## 1. Intent

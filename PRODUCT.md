@@ -62,8 +62,7 @@ between play sessions.
   - *delivery waiting*: held until the emulator closes.
 - **Rule:** files are never written while the emulator is running, and the UI must say so wherever a write waits.
 - **Web stack:** Svelte 5 + Vite, served by the ASP.NET Core server.
-- **Undecided:** the product name. "EmuSync" is a working name and taken by another project, so designs must not
-  depend on the name.
+- **Name:** Tandem (chosen 2026-11-20; the working name was EmuSync, which another project already uses).
 
 ## Evidence on Hand
 

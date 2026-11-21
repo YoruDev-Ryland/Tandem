@@ -5,14 +5,14 @@ plugins {
 }
 
 android {
-    namespace = "dev.emusync.app"
+    namespace = "dev.tandem.app"
     // Compose 1.13 (BOM 2026.11.01) needs compileSdk 37.1 or later.
     compileSdk {
         version = release(37) { minorApiLevel = 2 }
     }
 
     defaultConfig {
-        applicationId = "dev.emusync.app"
+        applicationId = "dev.tandem.app"
         minSdk = 33
         targetSdk = 35
         versionCode = 1

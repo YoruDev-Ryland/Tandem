@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Tandem.Protocol/Tandem.Protocol.csproj" />
+    <Project Path="src/Tandem.Server/Tandem.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Tandem.Server.Tests/Tandem.Server.Tests.csproj" />
+  </Folder>
+</Solution>

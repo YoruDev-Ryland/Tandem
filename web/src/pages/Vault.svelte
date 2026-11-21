@@ -79,7 +79,7 @@
       await sendVault(sendTarget.id, deviceId);
       sending = false;
       failure = undefined;
-      status = `Sent to ${deviceName}. It goes in next time EmuSync syncs there.`;
+      status = `Sent to ${deviceName}. It goes in next time Tandem syncs there.`;
       vault.reload();
     } catch (e) {
       sendError = e;
@@ -216,7 +216,7 @@
           </li>
         {/each}
       </ul>
-      <p class="note">It goes in next time EmuSync syncs on that device.</p>
+      <p class="note">It goes in next time Tandem syncs on that device.</p>
     {/if}
     {#if sendError}<ErrorLine error={sendError} />{/if}
     <div class="actions"><Button onclick={() => (sending = false)}>Cancel</Button></div>

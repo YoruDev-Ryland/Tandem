@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "emusync"
+rootProject.name = "tandem"
 include(":app")

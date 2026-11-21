@@ -82,7 +82,7 @@
         <div>
           <p class="code" aria-label="Pairing code">{shown.code}</p>
           <p class="expires">Expires in {clock}</p>
-          <p class="how">Open EmuSync on the device, choose Sign in with a code, and enter this code.</p>
+          <p class="how">Open Tandem on the device, choose Sign in with a code, and enter this code.</p>
           {#if failure}<ErrorLine error={failure} />{/if}
         </div>
       </div>
