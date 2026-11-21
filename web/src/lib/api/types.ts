@@ -1,4 +1,4 @@
-// TypeScript mirrors of the C# records in src/EmuSync.Protocol (camelCase on the wire, enums as strings).
+// TypeScript mirrors of the C# records in src/Tandem.Protocol (camelCase on the wire, enums as strings).
 // Guid and DateTimeOffset are strings (UUID / ISO 8601). Nullable C# members are `T | null` on responses; they are
 // optional on requests where the server accepts omission.
 

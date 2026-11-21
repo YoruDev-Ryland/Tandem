@@ -1,1 +1,1 @@
-export const PRODUCT_NAME = "EmuSync";
+export const PRODUCT_NAME = "Tandem";

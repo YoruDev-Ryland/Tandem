@@ -25,7 +25,7 @@ const notify: NotifySettingsDto = {
   events: { conflicts: true, failedSyncs: true, shizukuOff: false, backupFailed: true },
 };
 const backup: BackupSettingsResponse = {
-  enabled: true, kind: "Folder", folderPath: "/mnt/nas/emusync", s3: null, hourUtc: 3, keep: 7,
+  enabled: true, kind: "Folder", folderPath: "/mnt/nas/tandem", s3: null, hourUtc: 3, keep: 7,
   encrypt: true, passphraseSet: true, running: false,
 };
 

@@ -7,12 +7,12 @@ ARG BUILDPLATFORM=linux/amd64
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG TARGETARCH
 WORKDIR /src
-COPY Directory.Build.props EmuSync.slnx ./
-COPY src/EmuSync.Protocol/EmuSync.Protocol.csproj src/EmuSync.Protocol/
-COPY src/EmuSync.Server/EmuSync.Server.csproj src/EmuSync.Server/
-RUN dotnet restore src/EmuSync.Server/EmuSync.Server.csproj -a "${TARGETARCH:-amd64}"
+COPY Directory.Build.props Tandem.slnx ./
+COPY src/Tandem.Protocol/Tandem.Protocol.csproj src/Tandem.Protocol/
+COPY src/Tandem.Server/Tandem.Server.csproj src/Tandem.Server/
+RUN dotnet restore src/Tandem.Server/Tandem.Server.csproj -a "${TARGETARCH:-amd64}"
 COPY src/ src/
-RUN dotnet publish src/EmuSync.Server/EmuSync.Server.csproj -c Release -a "${TARGETARCH:-amd64}" --no-restore -o /out
+RUN dotnet publish src/Tandem.Server/Tandem.Server.csproj -c Release -a "${TARGETARCH:-amd64}" --no-restore -o /out
 
 FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /web

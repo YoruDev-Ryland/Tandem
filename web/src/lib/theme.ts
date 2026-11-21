@@ -1,6 +1,6 @@
 export type Theme = "system" | "light" | "dark";
 
-const KEY = "emusync.theme";
+const KEY = "tandem.theme";
 
 export function getTheme(): Theme {
   try {

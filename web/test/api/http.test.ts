@@ -17,7 +17,7 @@ describe("api", () => {
     expect(path).toBe("/v1/x");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
-    expect(init.headers["EmuSync-Protocol"]).toBe("1");
+    expect(init.headers["Tandem-Protocol"]).toBe("1");
     expect(init.headers["Content-Type"]).toBe("application/json");
     expect(init.body).toBe('{"a":1}');
   });

@@ -36,7 +36,7 @@ async function put(hash: string, body: Blob): Promise<void> {
   try {
     res = await fetch(`/v1/blobs/${hash}`, {
       method: "PUT",
-      headers: { "EmuSync-Protocol": "1", "Content-Type": "application/octet-stream" },
+      headers: { "Tandem-Protocol": "1", "Content-Type": "application/octet-stream" },
       body,
       credentials: "same-origin",
     });

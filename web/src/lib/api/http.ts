@@ -19,7 +19,7 @@ export function onUnauthorized(handler?: () => void): void {
 }
 
 async function send(method: string, path: string, body: unknown, accept: string): Promise<Response> {
-  const headers: Record<string, string> = { "EmuSync-Protocol": "1", Accept: accept };
+  const headers: Record<string, string> = { "Tandem-Protocol": "1", Accept: accept };
   let payload: BodyInit | undefined;
   if (body instanceof FormData) {
     payload = body; // the browser sets the multipart boundary

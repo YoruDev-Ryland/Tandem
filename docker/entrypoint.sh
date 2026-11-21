@@ -13,6 +13,6 @@ if [ "$(id -u)" = "0" ]; then
     if [ "$(stat -c %u:%g "$DATA_DIR")" != "$PUID:$PGID" ]; then
         chown -R "$PUID:$PGID" "$DATA_DIR" || echo "warning: could not chown $DATA_DIR to $PUID:$PGID" >&2
     fi
-    exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups /app/EmuSync.Server "$@"
+    exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups /app/Tandem.Server "$@"
 fi
-exec /app/EmuSync.Server "$@"
+exec /app/Tandem.Server "$@"

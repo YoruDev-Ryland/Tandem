@@ -1,21 +1,21 @@
 services:
-  emusync:
-    image: ghcr.io/<owner>/emusync:latest
+  tandem:
+    image: ghcr.io/<owner>/tandem:latest
     # To build from source instead of pulling the image:
     # build: .
-    container_name: emusync
+    container_name: tandem
     restart: unless-stopped
     environment:
       # The address devices and browsers use to reach the server (needed for pairing QR codes and links).
-      PUBLIC_URL: https://emusync.example.com
+      PUBLIC_URL: https://tandem.example.com
       # PUID: 1654
       # PGID: 1654
       # ALLOW_REGISTRATION: "false"
-      # SERVER_NAME: EmuSync
+      # SERVER_NAME: Tandem
     volumes:
-      - emusync-data:/data
+      - tandem-data:/data
     ports:
       - "8080:8080"
 
 volumes:
-  emusync-data:
+  tandem-data:

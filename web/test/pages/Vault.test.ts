@@ -70,7 +70,7 @@ describe("Vault", () => {
     const send = calls.find((c) => c.url.endsWith("/send"))!;
     expect(send.url).toBe("/v1/vault/v-bios/send");
     expect(send.body).toEqual({ deviceId: "d-thor" });
-    expect(await screen.findByText("Sent to Thor. It goes in next time EmuSync syncs there.")).toBeTruthy();
+    expect(await screen.findByText("Sent to Thor. It goes in next time Tandem syncs there.")).toBeTruthy();
   });
 
   it("uploads a picked file: hashes it, then registers the manifest", async () => {

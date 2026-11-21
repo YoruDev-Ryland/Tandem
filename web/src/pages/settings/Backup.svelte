@@ -156,7 +156,7 @@
       <Field label="Target" options={[{ value: "Folder", label: "Folder" }, { value: "S3", label: "S3" }]} bind:value={form.kind} />
 
       {#if form.kind === "Folder"}
-        <Field label="Folder path" mono placeholder="/mnt/nas/emusync" bind:value={form.folderPath} />
+        <Field label="Folder path" mono placeholder="/mnt/nas/tandem" bind:value={form.folderPath} />
         {#if folderProblem}<p class="fault">Use an absolute path that starts with /.</p>{/if}
       {:else}
         <div class="two">
