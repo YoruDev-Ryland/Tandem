@@ -3,7 +3,7 @@
  * /licenses/). One entry per bundled font; add a line here when a new licence file is added.
  */
 export const LICENSES: readonly { name: string; licence: string; file: string }[] = [
-  { name: "Barlow", licence: "SIL Open Font License 1.1", file: "/licenses/Barlow-OFL.txt" },
-  { name: "Barlow Semi Condensed", licence: "SIL Open Font License 1.1", file: "/licenses/BarlowSemiCondensed-OFL.txt" },
-  { name: "JetBrains Mono", licence: "SIL Open Font License 1.1", file: "/licenses/JetBrainsMono-OFL.txt" },
+  { name: "Barlow", licence: "SIL Open Font License 1.1", file: "/licenses/barlow-OFL.txt" },
+  { name: "Barlow Semi Condensed", licence: "SIL Open Font License 1.1", file: "/licenses/barlow-semi-condensed-OFL.txt" },
+  { name: "JetBrains Mono", licence: "SIL Open Font License 1.1", file: "/licenses/jetbrains-mono-OFL.txt" },
 ];

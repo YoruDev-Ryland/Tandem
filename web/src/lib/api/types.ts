@@ -115,7 +115,7 @@ export interface SendVaultRequest { deviceId: Guid }
 export interface SendVaultResponse { deliveryId: Guid; versionId: Guid }
 
 // ---- Settings ----
-export interface RetentionSettingsDto { saveVersions: number; configVersions: number; vaultVersions: number }
+export interface RetentionSettingsDto { saveVersions: number; configVersions: number; vaultVersions: number; stateMaxAgeDays?: number }
 export interface StorageRow { emulatorId: string; gameKey: string | null; displayName: string | null; bytes: number }
 export interface StorageUsage { totalBytes: number; byEmulator: StorageRow[]; topGames: StorageRow[] }
 /**
@@ -123,7 +123,7 @@ export interface StorageUsage { totalBytes: number; byEmulator: StorageRow[]; to
  * the masked value back unchanged keeps the stored address.
  */
 export interface NotifyTarget { kind: NotifyKind; url: string; token?: string | null; tokenSet?: boolean }
-export interface NotifyEvents { conflicts: boolean; failedSyncs: boolean; shizukuOff: boolean; backupFailed: boolean; silentDevices: boolean }
+export interface NotifyEvents { conflicts: boolean; failedSyncs: boolean; shizukuOff: boolean; backupFailed: boolean; silentDevices: boolean; storageLow?: boolean }
 export interface NotifySettingsDto { targets: NotifyTarget[]; events: NotifyEvents }
 export interface NotifyTestResult { kind: NotifyKind; ok: boolean; status?: number | null; error?: string | null }
 
@@ -159,7 +159,7 @@ export interface BackupSettingsResponse {
   passphraseSet: boolean;
   running: boolean;
 }
-export interface BackupRunInfo { utc: IsoDate; ok: boolean; bytes: number; error: string | null }
+export interface BackupRunInfo { utc: IsoDate; ok: boolean; bytes: number; error: string | null; partial?: boolean }
 
 // ---- Web read models (/v1/web/*) ----
 export interface ContinueItem {

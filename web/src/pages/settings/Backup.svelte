@@ -211,7 +211,10 @@
         {#each history as r (r.utc)}
           <li>
             <span class="mono when">{formatWhen(r.utc)}</span>
-            {#if r.ok}
+            {#if r.ok && r.partial}
+              <span class="mono">{formatSize(r.bytes)}</span>
+              <span class="wait">Partial: {r.error ?? "some files were missing"}</span>
+            {:else if r.ok}
               <span class="mono">{formatSize(r.bytes)}</span>
             {:else}
               <span class="fault">{r.error ?? "Failed"}</span>

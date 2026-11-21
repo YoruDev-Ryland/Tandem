@@ -163,7 +163,7 @@ describe("Settings", () => {
     expect(save.disabled).toBe(false);
     await fireEvent.click(save);
     await screen.findByText("Saved.");
-    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ saveVersions: 25, configVersions: 5, vaultVersions: 3 });
+    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ saveVersions: 25, configVersions: 5, vaultVersions: 3, stateMaxAgeDays: 90 });
   });
 
   it("lists storage in mono", async () => {
@@ -273,7 +273,7 @@ describe("Settings", () => {
   it("shows the server version and the open-source licences in the footer", async () => {
     await open();
     expect(await screen.findByText("1.2.3")).toBeTruthy();
-    for (const [name, file] of [["Barlow", "/licenses/Barlow-OFL.txt"], ["Barlow Semi Condensed", "/licenses/BarlowSemiCondensed-OFL.txt"], ["JetBrains Mono", "/licenses/JetBrainsMono-OFL.txt"]])
+    for (const [name, file] of [["Barlow", "/licenses/barlow-OFL.txt"], ["Barlow Semi Condensed", "/licenses/barlow-semi-condensed-OFL.txt"], ["JetBrains Mono", "/licenses/jetbrains-mono-OFL.txt"]])
       expect(screen.getByRole("link", { name }).getAttribute("href")).toBe(file);
   });
 

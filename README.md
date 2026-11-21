@@ -48,9 +48,9 @@ precedence over the plain names.
 | `DATABASE_CONNECTION` | none | Npgsql connection string for `postgres`; for `sqlite` an optional database file path. |
 | `TRUST_FORWARDED_HEADERS` | `false` | Trust `X-Forwarded-For`/`-Proto`/`-Host` from a reverse proxy (set it when behind one): rate limits are per client, the session cookie is `Secure` over https, and pairing QR codes use the public host. Every proxy address is trusted, so only turn it on when the server is reachable through the proxy alone. |
 | `KNOWN_PROXIES` | none | Comma-separated proxy addresses or networks whose forwarded headers are trusted. Prefer this to `TRUST_FORWARDED_HEADERS`, which trusts every address. |
-| `ADMIN_EMAIL` | none | The admin account that receives admin-only notices. |
+| `ADMIN_EMAIL` | none | When set, the first account ever created must use this email, so nobody else can claim the admin account of a freshly started server. |
 | `SILENT_DEVICE_HOURS` | `72` | A device not seen for this long is flagged as silent in the web UI and in notifications. |
-| `Tandem__MinFreeBytes` | 1 GiB | Free space to keep in the data directory. Below it, uploads fail with 507 `storage_full`, `/healthz` reports `degraded` and admins are notified. |
+| `MIN_FREE_BYTES` | 1 GiB | Free space to keep in the data directory. Below it, uploads fail with 507 `storage_full`, `/healthz` reports `degraded` and admins are notified. |
 | `ALLOW_ROOT` | `false` | The entrypoint refuses `PUID=0` or `PGID=0` unless this is `true`. |
 | `SERVER_NAME` | `Tandem` | Shown to clients (max 60 characters). |
 | `TITLE_NAMES` | `true` | Downloads the public Switch (titledb) and 3DS (3dsdb) title lists weekly so saves keyed by title id show game names. `false` keeps the server offline; those games then show their ids. |

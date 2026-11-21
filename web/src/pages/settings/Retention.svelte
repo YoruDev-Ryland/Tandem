@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getRetention, putRetention } from "../../lib/api/endpoints";
+  import type { RetentionSettingsDto } from "../../lib/api/types";
   import Button from "../../lib/ui/Button.svelte";
   import ErrorLine from "../../lib/ui/ErrorLine.svelte";
   import Field from "../../lib/ui/Field.svelte";
@@ -16,8 +17,9 @@
 
   let loaded = $state(false);
   let loadError = $state<unknown>(undefined);
-  let saved = $state({ saves: "", configs: "", vault: "" });
-  let form = $state({ saves: "", configs: "", vault: "" });
+  const AGE_MAX = 3650;
+  let saved = $state({ saves: "", configs: "", vault: "", age: "" });
+  let form = $state({ saves: "", configs: "", vault: "", age: "" });
   let busy = $state(false);
   let error = $state<string | null>(null);
   let done = $state(false);
@@ -25,7 +27,7 @@
   onMount(() => {
     getRetention().then(
       (r) => {
-        saved = { saves: String(r.saveVersions), configs: String(r.configVersions), vault: String(r.vaultVersions) };
+        saved = fromDto(r);
         form = { ...saved };
         loaded = true;
       },
@@ -33,9 +35,13 @@
     );
   });
 
+  const fromDto = (r: RetentionSettingsDto) => ({
+    saves: String(r.saveVersions), configs: String(r.configVersions), vault: String(r.vaultVersions), age: String(r.stateMaxAgeDays ?? 90),
+  });
+  const validAge = (v: string) => /^\d+$/.test(v) && Number(v) <= AGE_MAX;
   const valid = (v: string) => /^\d+$/.test(v) && Number(v) >= MIN && Number(v) <= MAX;
-  const allValid = $derived(valid(form.saves) && valid(form.configs) && valid(form.vault));
-  const dirty = $derived(form.saves !== saved.saves || form.configs !== saved.configs || form.vault !== saved.vault);
+  const allValid = $derived(valid(form.saves) && valid(form.configs) && valid(form.vault) && validAge(form.age));
+  const dirty = $derived(form.saves !== saved.saves || form.configs !== saved.configs || form.vault !== saved.vault || form.age !== saved.age);
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
@@ -44,8 +50,8 @@
     error = null;
     done = false;
     try {
-      const r = await putRetention({ saveVersions: Number(form.saves), configVersions: Number(form.configs), vaultVersions: Number(form.vault) });
-      saved = { saves: String(r.saveVersions), configs: String(r.configVersions), vault: String(r.vaultVersions) };
+      const r = await putRetention({ saveVersions: Number(form.saves), configVersions: Number(form.configs), vaultVersions: Number(form.vault), stateMaxAgeDays: Number(form.age) });
+      saved = fromDto(r);
       form = { ...saved };
       done = true;
     } catch (err) {
@@ -71,6 +77,10 @@
           {#if !valid(form[key])}<p class="fault">Enter a whole number from {MIN} to {MAX}.</p>{/if}
         </div>
       {/each}
+      <div>
+        <Field label="Drop older save states after (days)" type="number" min={0} max={AGE_MAX} step={1} mono bind:value={form.age} oninput={() => (done = false)} />
+        {#if !validAge(form.age)}<p class="fault">Enter a whole number from 0 to {AGE_MAX}.</p>{:else}<p class="note">The newest state is always kept. 0 keeps them all.</p>{/if}
+      </div>
       {#if error}<p class="fault" role="alert">{error}</p>{/if}
       {#if done}<p class="done" role="status">Saved.</p>{/if}
       <div class="actions"><Button type="submit" variant="primary" disabled={!allValid || !dirty || busy}>Save</Button></div>

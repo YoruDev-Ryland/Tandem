@@ -19,7 +19,7 @@ id show game names. Set `TITLE_NAMES=false` to turn all downloading off; games t
 - [titledb](https://github.com/blawar/titledb) (Switch), MIT licence.
 - [3dsdb](https://github.com/hax0kartik/3dsdb) (3DS). The repository states no licence. It is fetched at runtime only and
   never redistributed by Tandem.
-- GameTDB (wiitdb): this version of Tandem does not use it. If a later one does, see https://www.gametdb.com for its terms.
+- GameTDB (`wiitdb.txt`, GameCube and Wii titles): fetched at runtime and cached only in your own data directory, not redistributed. See https://www.gametdb.com for its terms. Turn it off with `TITLE_NAMES=false`.
 
 ## Server (.NET 10)
 

@@ -19,6 +19,7 @@
     ["shizukuOff", "Shizuku turned off"],
     ["backupFailed", "Backup failed"],
     ["silentDevices", "A device stops checking in"],
+    ["storageLow", "Server disk nearly full"],
   ];
 
   interface Target {
@@ -39,7 +40,7 @@
   let loaded = $state(false);
   let loadError = $state<unknown>(undefined);
   let targets = $state<Target[]>([]);
-  let events = $state<NotifyEvents>({ conflicts: true, failedSyncs: true, shizukuOff: true, backupFailed: true, silentDevices: true });
+  let events = $state<NotifyEvents>({ conflicts: true, failedSyncs: true, shizukuOff: true, backupFailed: true, silentDevices: true, storageLow: true });
   let baseline = $state("");
   let busy = $state(false);
   let error = $state<string | null>(null);
@@ -52,8 +53,8 @@
     targets = s.targets.map((t) => ({
       id: nextId++, kind: t.kind, url: t.url, token: "", tokenSet: !!t.tokenSet, removeToken: false, editingUrl: false, original: t.url,
     }));
-    // An older server has no silentDevices: it is on by default.
-    events = { ...s.events, silentDevices: s.events.silentDevices ?? true };
+    // An older server has no silentDevices or storageLow: both are on by default.
+    events = { ...s.events, silentDevices: s.events.silentDevices ?? true, storageLow: s.events.storageLow ?? true };
     baseline = snapshot();
   }
 
