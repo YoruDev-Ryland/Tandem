@@ -45,7 +45,7 @@ public sealed partial class GameNames(TitleNamesHolder titles)
 
     private const string Tag =
         @"(?:USA|Europe|Japan|World|Asia|Korea|China|Taiwan|Australia|Brazil|Canada|France|Germany|Italy|Spain|UK|Netherlands|Sweden" +
-        @"|En|Fr|De|Es|It|Ja|Nl|Pt|Sv|No|Da|Fi|Zh|Ko|Ru|Pl|Rev\s*[\w.]+|v\d[\w.]*|Beta\s*\d*|Proto\s*\d*|Demo|Sample|Unl)";
+        @"|En|Fr|De|Es|It|Ja|Nl|Pt|Sv|No|Da|Fi|Zh|Ko|Ru|Pl|English|Japanese|French|German|Spanish|Italian|Chinese|Korean|Rev\s*[\w.]+|v\d[\w.]*|Beta\s*\d*|Proto\s*\d*|Demo|Sample|Unl)";
 
     [GeneratedRegex(@"\(\s*" + Tag + @"(?:\s*,\s*" + Tag + @")*\s*\)", RegexOptions.IgnoreCase)]
     private static partial Regex RomParens();

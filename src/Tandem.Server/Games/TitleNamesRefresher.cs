@@ -4,32 +4,31 @@ using Microsoft.Extensions.Options;
 
 namespace Tandem.Server.Games;
 
-/// <summary>Fills names that are missing or just the raw title id from the current title list.</summary>
-public sealed class TitleNamesBackfill(IServiceScopeFactory scopes, TitleNamesHolder holder, ILogger<TitleNamesBackfill> log)
+/// <summary>Cleans stored names of ROM-site tags and fills missing or raw-id Switch names from the title list.</summary>
+public sealed class TitleNamesBackfill(IServiceScopeFactory scopes, ILogger<TitleNamesBackfill> log)
 {
     public async Task RunAsync(CancellationToken ct)
     {
-        if (holder.Current is null) return;
         using var scope = scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
         var names = scope.ServiceProvider.GetRequiredService<GameNames>();
-        var emulators = GameNames.SwitchEmulators.ToList();
         var changed = 0;
-        foreach (var item in await db.SaveItems.Where(i => emulators.Contains(i.EmulatorId)).ToListAsync(ct))
-        {
-            if (!GameNames.NeedsName(item.DisplayName, item.GameKey)) continue;
-            if (names.Resolve(item.EmulatorId, item.GameKey, null) is { } name) { item.DisplayName = name; changed++; }
-        }
-        foreach (var r in await db.InstallRecords.Where(r => emulators.Contains(r.EmulatorId)).ToListAsync(ct))
-        {
-            if (!GameNames.NeedsName(r.DisplayName, r.GameKey)) continue;
-            if (names.Resolve(r.EmulatorId, r.GameKey, null) is { } name) { r.DisplayName = name; changed++; }
-        }
+        foreach (var item in await db.SaveItems.ToListAsync(ct))
+            if (Improve(names, item.EmulatorId, item.GameKey, item.DisplayName) is { } name) { item.DisplayName = name; changed++; }
+        foreach (var r in await db.InstallRecords.ToListAsync(ct))
+            if (Improve(names, r.EmulatorId, r.GameKey, r.DisplayName) is { } name) { r.DisplayName = name; changed++; }
         if (changed > 0)
         {
             await db.SaveChangesAsync(ct);
-            log.LogInformation("Named {Count} Switch games from the title list", changed);
+            log.LogInformation("Improved {Count} game names", changed);
         }
+    }
+
+    /// <summary>A better name than [current] (tags cleaned, or a title for a raw id), or null to keep it.</summary>
+    private static string? Improve(GameNames names, string emulatorId, string gameKey, string? current)
+    {
+        var better = names.Resolve(emulatorId, gameKey, current);
+        return better is not null && better != current ? better : null;
     }
 }
 
@@ -46,7 +45,11 @@ public sealed class TitleNamesRefresher(IOptions<ServerOptions> options, TitleNa
     protected override async Task ExecuteAsync(CancellationToken stop)
     {
         var o = options.Value;
-        if (!o.EnableTitleNames || string.IsNullOrWhiteSpace(o.TitleNamesUrl)) return;
+        if (!o.EnableTitleNames || string.IsNullOrWhiteSpace(o.TitleNamesUrl))
+        {
+            await backfill.RunAsync(stop);   // still cleans tags from stored names
+            return;
+        }
         var cache = Path.Combine(o.DataDirectory, "titles.json");
         var maxAge = TimeSpan.FromDays(Math.Max(1, o.TitleNamesRefreshDays));
 

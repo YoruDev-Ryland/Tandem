@@ -20,6 +20,7 @@ public class GameNamesTests
     [InlineData("Pokemon Mystery Dungeon - Red Rescue Team (Red)", "Pokemon Mystery Dungeon - Red Rescue Team (Red)")]
     [InlineData("Atelier Lulua ~The Scion of Arland~", "Atelier Lulua ~The Scion of Arland~")]
     [InlineData("  Zelda  [!] ", "Zelda")]
+    [InlineData("(English) Pokémon FireRed Version", "Pokémon FireRed Version")]
     public void Clean_strips_rom_site_tags_but_keeps_real_parts_of_names(string raw, string expected)
         => Assert.Equal(expected, GameNames.Clean(raw));
 
@@ -107,5 +108,26 @@ public class GameNamesTests
         using var scope2 = f.Services.CreateScope();
         Assert.Equal("Some Game", (await scope2.ServiceProvider.GetRequiredService<TandemDbContext>().SaveItems.AsNoTracking()
             .SingleAsync(i => i.GameKey == "0100AC20128AC000")).DisplayName);
+    }
+
+    [Fact]
+    public async Task Backfill_also_cleans_tags_from_names_stored_before_cleaning_existed()
+    {
+        var holder = new TitleNamesHolder { Current = Db() };
+        using var f = NewFactory(holder);
+        await f.Register("a@example.com");
+        using (var scope = f.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+            var user = await db.Users.SingleAsync();
+            db.SaveItems.Add(new SaveItem { Id = Guid.NewGuid(), UserId = user.Id, EmulatorId = "eden", GameKey = "0100B1400CD50000", DisplayName = "Atelier Lulua [v0]" });
+            db.SaveItems.Add(new SaveItem { Id = Guid.NewGuid(), UserId = user.Id, EmulatorId = "retroarch", GameKey = "Metroid (USA).gba", DisplayName = "Metroid (USA)" });
+            await db.SaveChangesAsync();
+        }
+        await f.Services.GetRequiredService<TitleNamesBackfill>().RunAsync(CancellationToken.None);
+        using var check = f.Services.CreateScope();
+        var names = await check.ServiceProvider.GetRequiredService<TandemDbContext>().SaveItems.AsNoTracking()
+            .OrderBy(i => i.EmulatorId).Select(i => i.DisplayName).ToListAsync();
+        Assert.Equal(["Atelier Lulua", "Metroid"], names);
     }
 }
