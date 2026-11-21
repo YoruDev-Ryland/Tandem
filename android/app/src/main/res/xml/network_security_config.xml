@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  HTTPS to a self-hosted server often uses a private or self-signed CA installed by the user (Settings › Security ›
+  Encryption & credentials), so user CAs are trusted next to the system's. Cleartext stays permitted: Tandem servers
+  are commonly reached over Tailscale or a home LAN by plain http, and the app says so (see InsecureUrl) when the
+  address is http:// outside those networks.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

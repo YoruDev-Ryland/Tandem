@@ -2,6 +2,14 @@ package dev.tandem.app.service
 
 import dev.tandem.app.sync.ApplyReport
 import dev.tandem.app.sync.StateStore
+import dev.tandem.app.sync.SyncConfig
+
+/**
+ * How long the process monitor waits before its next probe: [SyncConfig.monitorIdleMillis] while the screen is off
+ * and no emulator runs (nobody is playing, so a start is caught a little later), else [SyncConfig.monitorMillis].
+ */
+fun monitorDelay(screenOn: Boolean, anyRunning: Boolean): Long =
+    if (!screenOn && !anyRunning) SyncConfig.monitorIdleMillis else SyncConfig.monitorMillis
 
 /** A unit of engine or applier work, run one at a time by the session's [WorkQueue]. */
 sealed interface SyncWork {
@@ -52,6 +60,19 @@ class WorkPlanner(private val autoApply: Boolean, private val flags: ApplyOnExit
 
     /** The periodic delivery poll. */
     fun poll(): List<SyncWork> = applyIfAuto()
+
+    private var lastPollAt: Long? = null
+
+    /**
+     * The delivery poll's tick at [now] (ms, monotonic). While the event stream is [streamHealthy] its nudges bring
+     * deliveries, so the poll runs only every [fallbackMillis]; otherwise on every tick.
+     */
+    fun pollTick(streamHealthy: Boolean, now: Long, fallbackMillis: Long = SyncConfig.pollFallbackMillis): List<SyncWork> {
+        val last = lastPollAt
+        if (streamHealthy && last != null && now - last in 0 until fallbackMillis) return emptyList()
+        lastPollAt = now
+        return poll()
+    }
 
     /** The event stream opened; [reconnect] is false for the session's first open. */
     fun streamOpened(reconnect: Boolean): List<SyncWork> =

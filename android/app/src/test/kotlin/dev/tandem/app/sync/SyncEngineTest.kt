@@ -492,6 +492,45 @@ class SyncEngineTest {
         assertEquals(0, e.queuedCount())
     }
 
+    @Test fun a_failed_item_that_disappears_is_no_longer_queued() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.failSaveFor = "GAME1"
+        val e = engine()
+        e.fullScan()
+        assertEquals(1, e.queuedCount())
+        File(root, "saves/GAME1").deleteRecursively()   // the user deleted the game's save
+        e.fullScan()
+        assertEquals("a vanished item can't be retried, so it isn't counted as failing", 0, e.queuedCount())
+    }
+
+    @Test fun an_emulator_that_is_no_longer_detected_drops_its_queued_items() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.failSaveFor = "GAME1"
+        val f = fs()
+        val e = engine(f)
+        e.fullScan()
+        assertEquals(1, e.queuedCount())
+        f.packages.remove("com.fake.emu")   // uninstalled
+        e.fullScan()
+        assertEquals(0, e.queuedCount())
+    }
+
+    @Test fun accepted_uploads_count_as_synced() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        var synced = 0
+        val e = SyncEngine(
+            fs(), api, store, ModuleRegistry(listOf(module)), DeviceSettings(emptyList(), emptyMap()),
+            clock = { now }, log = { logs += it }, versionOf = { null }, appVersion = "0", shizukuOk = { true },
+            onConflict = {}, storageRoot = storage, onSynced = { synced++ },
+        )
+        e.fullScan()
+        assertEquals(1, synced)
+        api.saveStatus = SaveUploadStatus.Conflict
+        put("saves/GAME1/a.sav", "changed")
+        e.fullScan()
+        assertEquals("a conflict is not in sync", 1, synced)
+    }
+
     @Test fun exposes_detected_watch_dirs_and_item_counts() = runBlocking {
         put("saves/GAME1/a.sav", "hello")
         put("saves/GAME2/a.sav", "world")

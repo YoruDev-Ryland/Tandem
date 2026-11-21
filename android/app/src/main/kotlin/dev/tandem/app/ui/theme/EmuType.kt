@@ -35,14 +35,28 @@ object EmuFonts {
  */
 object EmuType {
     val title = TextStyle(
-        fontFamily = EmuFonts.BarlowSemiCondensed, fontWeight = FontWeight.SemiBold, fontSize = 26.sp,
-        letterSpacing = (-0.01).em,
+        fontFamily = EmuFonts.BarlowSemiCondensed, fontWeight = FontWeight.SemiBold, fontSize = 30.sp,
+        letterSpacing = (-0.015).em,
+    )
+
+    /** The one numeric display style, for a screen's hero count ("3 saves to choose"), with tabular figures. */
+    val display = TextStyle(
+        fontFamily = EmuFonts.BarlowSemiCondensed, fontWeight = FontWeight.SemiBold, fontSize = 36.sp,
+        letterSpacing = (-0.01).em, fontFeatureSettings = "tnum",
     )
     val section = TextStyle(fontFamily = EmuFonts.BarlowSemiCondensed, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
     val tab = TextStyle(fontFamily = EmuFonts.BarlowSemiCondensed, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
     val rowPrimary = TextStyle(fontFamily = EmuFonts.Barlow, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
     val body = TextStyle(fontFamily = EmuFonts.Barlow, fontWeight = FontWeight.Normal, fontSize = 14.sp)
     val meta = TextStyle(fontFamily = EmuFonts.Barlow, fontWeight = FontWeight.Normal, fontSize = 13.sp)
+
+    /** Relative and clock times ("5 min ago", "Nov 19, 22:14"): one face everywhere, Barlow with tabular figures. */
+    val time = meta.copy(fontFeatureSettings = "tnum")
+
+    /** The text on a system mark (SWITCH, GBA): the cartridge-label caps. Callers pass it uppercased. */
+    val mark = TextStyle(
+        fontFamily = EmuFonts.BarlowSemiCondensed, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, letterSpacing = 0.04.em,
+    )
 
     /** Column headers. Compose has no text-transform, so callers pass the text uppercased. */
     val header = TextStyle(

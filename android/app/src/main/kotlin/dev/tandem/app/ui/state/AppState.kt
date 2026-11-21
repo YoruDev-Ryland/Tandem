@@ -14,9 +14,21 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
-enum class ServerConn { Connected, Offline, SignedOut }
+/** [Revoked]: the server answered device_revoked; sync is stopped until a sign-in. */
+enum class ServerConn { Connected, Offline, SignedOut, Revoked }
 
-data class TopStatus(val deviceName: String?, val server: ServerConn, val shizuku: ShizukuState, val signedIn: Boolean, val lastSync: java.time.Instant? = null)
+/**
+ * The top bar's status. [lastSync] is when the server cache last refreshed; [lastSyncedAt] when this device last
+ * synced with nothing left failing (a clean scan, apply pass or accepted upload), kept across restarts.
+ */
+data class TopStatus(
+    val deviceName: String?,
+    val server: ServerConn,
+    val shizuku: ShizukuState,
+    val signedIn: Boolean,
+    val lastSync: java.time.Instant? = null,
+    val lastSyncedAt: java.time.Instant? = null,
+)
 
 sealed interface EmuRowState {
     data class Open(val waiting: Int) : EmuRowState
@@ -25,6 +37,10 @@ sealed interface EmuRowState {
     data object NotSetUp : EmuRowState
     /** The service has not finished its first scan: nothing is known about this emulator yet. */
     data object Looking : EmuRowState
+    /** No scan can run: Shizuku is off or not allowed (the top bar says so). */
+    data object NoShizuku : EmuRowState
+    /** Sync isn't running (signed out, or removed on the server): nothing is being looked at. */
+    data object Idle : EmuRowState
     data object Ok : EmuRowState
 }
 
@@ -57,6 +73,7 @@ class AppState(
             deviceName = name,
             server = when {
                 key == null -> ServerConn.SignedOut
+                store.revoked -> ServerConn.Revoked
                 games.offline -> ServerConn.Offline
                 snap.online || games.updatedAt != null -> ServerConn.Connected
                 else -> ServerConn.Offline
@@ -64,17 +81,21 @@ class AppState(
             shizuku = z,
             signedIn = key != null,
             lastSync = games.updatedAt,
+            lastSyncedAt = store.lastSyncedAt?.let(java.time.Instant::ofEpochMilli),
         )
     }.stateIn(scope, SharingStarted.Eagerly, TopStatus(null, ServerConn.SignedOut, ShizukuState.NotRunning, false))
 
     val emulators: StateFlow<List<EmulatorRowUi>> =
-        combine(graph.snapshots, graph.waiting, graph.running, server.configGroups) { snap, waits, run, groups ->
+        combine(graph.snapshots, graph.waiting, graph.running, server.configGroups, shizuku) { snap, waits, run, groups, z ->
             val found = snap.emulators.associateBy { it.detected.emulatorId }
             registry.all().map { m ->
                 val info = found[m.emulatorId]
                 val n = waits.count { it.emulatorId == m.emulatorId }
                 val state = when {
                     n > 0 || m.emulatorId in run -> EmuRowState.Open(n)
+                    // No first scan can come without Shizuku, or while sync isn't running at all: say so, not "looking".
+                    !snap.live && z != ShizukuState.Ready -> EmuRowState.NoShizuku
+                    !snap.live && !snap.running -> EmuRowState.Idle
                     // Until the service's first scan, an emulator it has not reported is not known to be missing.
                     !snap.live -> EmuRowState.Looking
                     info == null -> EmuRowState.NotSetUp

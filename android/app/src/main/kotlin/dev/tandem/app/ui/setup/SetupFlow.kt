@@ -46,17 +46,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.tandem.app.api.ApiException
 import dev.tandem.app.fs.ShizukuState
+import dev.tandem.app.ui.feedback.Cue
+import dev.tandem.app.ui.feedback.LocalCueSink
 import dev.tandem.app.ui.input.Action
 import dev.tandem.app.ui.input.OnAction
 import dev.tandem.app.ui.input.textEntry
 import dev.tandem.app.ui.kit.ConsoleScaffold
 import dev.tandem.app.ui.kit.EmuRadius
 import dev.tandem.app.ui.kit.Hint
+import dev.tandem.app.ui.kit.LocalReadout
+import dev.tandem.app.ui.kit.SystemReadout
 import dev.tandem.app.ui.kit.Tone
 import dev.tandem.app.ui.kit.describeError
 import dev.tandem.app.ui.kit.noKeyFocus
 import dev.tandem.app.ui.kit.serverCopy
 import dev.tandem.app.ui.kit.tone
+import dev.tandem.app.ui.setup.steps.BackgroundStep
 import dev.tandem.app.ui.setup.steps.EmulatorsStep
 import dev.tandem.app.ui.setup.steps.FirstSyncStep
 import dev.tandem.app.ui.setup.steps.ServerStep
@@ -77,16 +82,20 @@ fun SetupFlow(
     status: TopStatus,
     openShizuku: (() -> Unit)?,
     onDone: () -> Unit,
-    diagnostics: () -> Unit,
+    /** Opens the diagnostics screen; null in release builds. */
+    diagnostics: (() -> Unit)?,
     now: () -> Long = { SystemClock.uptimeMillis() },
+    /** Opens a web page in the browser (Shizuku's download page). */
+    openUrl: (String) -> Unit = {},
 ) {
     val step by vm.step.collectAsState()
     val signedIn by vm.signedIn.collectAsState()
     // Signed in, every step after the first can be left for the tabs; Settings › Set up again comes back.
-    val later: (() -> Unit)? = if (signedIn) ({ vm.finish(); onDone() }) else null
+    val later: (() -> Unit)? = if (signedIn) ({ vm.finishLater(); onDone() }) else null
     when (step) {
         SetupStep.Server -> ServerStep(vm, status, diagnostics)
-        SetupStep.Shizuku -> ShizukuStep(vm, status, openShizuku, later)
+        SetupStep.Shizuku -> ShizukuStep(vm, status, openShizuku, later, openUrl)
+        SetupStep.Background -> BackgroundStep(vm, status, later)
         SetupStep.Emulators -> EmulatorsStep(vm, status, later)
         SetupStep.SyncChoice -> SyncChoiceStep(vm, status, later, now)
         SetupStep.FirstSync -> FirstSyncStep(vm, status, onDone, later, now)
@@ -154,13 +163,11 @@ private fun RowScope.SetupTop(status: TopStatus) {
                 BasicText(it, Modifier.weight(1f, fill = false), style = meta.copy(fontWeight = FontWeight.SemiBold, color = c.ink),
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            val (server, tone) = serverCopy(status)
-            BasicText(server, style = meta.copy(color = c.tone(tone, false)), maxLines = 1)
+            serverCopy(status)?.let { (server, tone) -> BasicText(server, style = meta.copy(color = c.tone(tone, false)), maxLines = 1) }
         }
-        BasicText(
-            if (status.shizuku == ShizukuState.Ready) "Shizuku on" else "Shizuku off",
-            style = meta.copy(color = c.ink2), maxLines = 1,
-        )
+        // Setup is where Shizuku gets started, so off is not a fault here; on is not labelled.
+        if (status.shizuku != ShizukuState.Ready) BasicText("Shizuku off", style = meta.copy(color = c.ink2), maxLines = 1)
+        LocalReadout.current?.let { SystemReadout(it) }
     }
 }
 
@@ -211,6 +218,34 @@ internal fun StepNote(text: String, modifier: Modifier = Modifier) {
     BasicText(text, modifier.padding(top = 14.dp).widthIn(max = 560.dp), style = EmuType.meta.copy(color = LocalEmu.current.ink3))
 }
 
+/**
+ * One setting as a hairline row: what it does, and On or Off at the right. A tap (or the hint bar's button the
+ * caller gives it) flips it.
+ */
+@Composable
+internal fun ToggleLine(text: String, on: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    val c = LocalEmu.current
+    Row(
+        modifier
+            .widthIn(max = 640.dp)
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .drawBehind {
+                drawLine(c.rule, Offset(0f, 0.5f), Offset(size.width, 0.5f), strokeWidth = 1.dp.toPx())
+                drawLine(c.rule, Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), strokeWidth = 1.dp.toPx())
+            }
+            .noKeyFocus()
+            .clickable(interactionSource = null, indication = null, onClick = onToggle)
+            .semantics(mergeDescendants = true) { selected = on }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        BasicText(text, Modifier.weight(1f), style = EmuType.body.copy(color = c.ink))
+        BasicText(if (on) "On" else "Off", style = EmuType.meta.copy(color = c.ink2))
+    }
+}
+
 /** Waiting for the server or the service, as the web shows it. */
 @Composable
 internal fun Loading() {
@@ -237,10 +272,13 @@ internal fun <T> Options(
 ) {
     val c = LocalEmu.current
     val cursor = at.coerceIn(0, maxOf(0, items.lastIndex))
+    val cues = LocalCueSink.current
     OnAction(enabled = enabled && items.isNotEmpty()) { a ->
         when (a) {
             Action.Up, Action.Down -> {
-                onSelect((cursor + if (a == Action.Down) 1 else -1).coerceIn(0, items.lastIndex))
+                val to = (cursor + if (a == Action.Down) 1 else -1).coerceIn(0, items.lastIndex)
+                cues?.cue(if (to == cursor) Cue.Reject else Cue.Move)
+                onSelect(to)
                 true
             }
             Action.A -> { onChoose(items[cursor]); true }

@@ -23,7 +23,33 @@ class MainActivityServiceTest {
     private val app: Application = ApplicationProvider.getApplicationContext()
     private val store = AppGraph.store(app)
 
-    @After fun signOut() { store.deviceKey = null }
+    @After fun signOut() { store.signOut(emptyList()) }
+
+    @Test fun aRevokedDeviceStopsSyncNotifiesOnceAndStaysOff() {
+        store.signIn("http://nas:5100", "k", "d", emptyList())
+        AppGraph.revoked(app)
+        assertTrue(store.revoked)
+        assertEquals(SyncService::class.java.name, shadowOf(app).nextStoppedService?.component?.className)
+        val nm = shadowOf(app.getSystemService(android.app.NotificationManager::class.java))
+        assertEquals(1, nm.allNotifications.size)
+        AppGraph.revoked(app)   // every later 401 is quiet
+        assertEquals(1, nm.allNotifications.size)
+        Robolectric.buildActivity(MainActivity::class.java).setup().use {
+            assertNull("the launcher doesn't restart a removed device", shadowOf(app).nextStartedService)
+        }
+        dev.tandem.app.service.BootReceiver().onReceive(app, android.content.Intent(android.content.Intent.ACTION_BOOT_COMPLETED))
+        assertNull(shadowOf(app).nextStartedService)
+        assertFalse(dev.tandem.app.service.Watchdog.check(store, running = false) { true })
+    }
+
+    @Test fun theWatchdogStartsSyncOnlyWhenSignedInAndStopped() {
+        var starts = 0
+        assertFalse(dev.tandem.app.service.Watchdog.check(store, running = false) { starts++; true })
+        store.signIn("http://nas:5100", "k", "d", emptyList())
+        assertFalse(dev.tandem.app.service.Watchdog.check(store, running = true) { starts++; true })
+        assertTrue(dev.tandem.app.service.Watchdog.check(store, running = false) { starts++; true })
+        assertEquals(1, starts)
+    }
 
     @Test fun signedInStartsTheSyncService() {
         store.deviceKey = "test-key"

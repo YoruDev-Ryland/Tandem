@@ -160,6 +160,14 @@ class EdenModule(private val internalRoot: String = "/storage/emulated/0") : Emu
         return existing?.path ?: "$base/$profile/${gameKey.uppercase()}"
     }
 
+    /**
+     * Keys (prod.keys, title.keys) go to the yuzu-family `keys` folder next to `config` and `nand` in Eden's data
+     * folder. Firmware is not placed: it is installed from inside Eden, and this module doesn't know the NAND's
+     * registered-content layout well enough to write into it.
+     */
+    override fun vaultTarget(fs: Fs, d: Detected, category: String, name: String): String? =
+        if (category == "keys") "${d.dataRoot}/keys" else null
+
     private fun avatarProfile(fs: Fs, d: Detected): String? =
         fs.list("${nandOf(d)}/system/save/8000000000000010/su/avators").asSequence()
             .map { it.path.substringAfterLast('/').substringBeforeLast('.') }

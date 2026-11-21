@@ -6,7 +6,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -81,9 +81,12 @@ internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus, later: (() ->
             val options = configOptions(data.emulators.firstOrNull { it.emulatorId == emu }, me)
             val chosen = choices[emu]
             // The cursor starts on the earlier choice, per emulator, else on "Only back up", which changes nothing here.
-            var cursor by rememberSaveable(emu) {
-                mutableIntStateOf(options.indexOfFirst { it.key == chosen }.takeIf { it >= 0 } ?: options.indexOfFirst { it.choice == ConfigChoice.Own }.coerceAtLeast(0))
+            // Kept by option key, so a reload of the server's groups (after a choice) never moves it to another option.
+            val ownAt = options.indexOfFirst { it.choice == ConfigChoice.Own }.coerceAtLeast(0)
+            var cursorKey by rememberSaveable(emu) {
+                mutableStateOf(options.firstOrNull { it.key == chosen }?.key ?: options.getOrNull(ownAt)?.key.orEmpty())
             }
+            val cursor = options.indexOfFirst { it.key == cursorKey }.takeIf { it >= 0 } ?: ownAt
             SideEffect { seen.show(emu, now) }
             fun choose(o: ConfigOption) { if (seen.settled(emu, now)) vm.choose(emu, o) }
             val pick = options.getOrNull(cursor.coerceIn(0, options.lastIndex))
@@ -92,7 +95,7 @@ internal fun SyncChoiceStep(vm: SetupViewModel, status: TopStatus, later: (() ->
                 StepTitle("$name settings")
                 StepSub(SYNC_CHOICE_SUB)
                 Options(
-                    options, cursor, { cursor = it }, ::choose,
+                    options, cursor, { i -> options.getOrNull(i)?.let { cursorKey = it.key } }, ::choose,
                     text = { OptionText(it.title, it.detail, if (it.key == chosen) "Your choice" else null) },
                     enabled = choosing == null,
                     below = { o ->

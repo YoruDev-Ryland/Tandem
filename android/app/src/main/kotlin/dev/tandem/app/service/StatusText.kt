@@ -13,7 +13,9 @@ fun statusText(
     queued: Int,
     online: Boolean = true,
     signedIn: Boolean = true,
+    revoked: Boolean = false,
 ): String = when {
+    signedIn && revoked -> "Removed from the server: open Tandem"
     state == ShizukuState.NotRunning -> "Shizuku is off: open Tandem"
     state == ShizukuState.NoPermission -> "Shizuku permission needed: open Tandem"
     !signedIn -> "Not signed in: open Tandem"

@@ -5,11 +5,19 @@ import dev.tandem.app.model.DeviceGameState
 import dev.tandem.app.model.GameRow
 import dev.tandem.app.service.ReceivedAt
 import dev.tandem.app.sync.WaitingDelivery
+import dev.tandem.app.ui.kit.Presence
 import dev.tandem.app.ui.kit.Tone
+import dev.tandem.app.ui.state.DeviceColumn
+import dev.tandem.app.ui.state.bareKey
+import dev.tandem.app.ui.state.deviceColumns
+import dev.tandem.app.ui.state.presenceOf
+import dev.tandem.app.ui.state.presenceText
+import dev.tandem.app.ui.state.systemLabel
 import dev.tandem.app.ui.state.AppState
 import dev.tandem.app.ui.state.EmuRowState
 import dev.tandem.app.ui.state.EmulatorRowUi
 import dev.tandem.app.ui.state.Loaded
+import dev.tandem.app.ui.state.ServerConn
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -17,8 +25,23 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import java.time.Duration
 
-/** One game in the right pane: GAME, NEWEST ON and HERE, with the tones of NEWEST ON and HERE. */
-data class GameLine(val key: String, val name: String, val newestOn: String, val here: String, val tone: Tone, val newestTone: Tone = Tone.Ink2)
+/** One device's presence mark in a game row, and what it reads as. */
+data class PresenceCell(val presence: Presence, val description: String)
+
+/**
+ * One game in the right pane: its system mark ([system], null when unknown), GAME, a presence mark per other device
+ * ([presence], in the order of [DeviceUi.devices]), NEWEST ON (shown when there is no presence column) and HERE.
+ */
+data class GameLine(
+    val key: String,
+    val name: String,
+    val newestOn: String,
+    val here: String,
+    val tone: Tone,
+    val newestTone: Tone = Tone.Ink2,
+    val system: String? = null,
+    val presence: List<PresenceCell> = emptyList(),
+)
 
 /** "Close {emulator} to get the newer {game} save from {device}." */
 data class WaitLine(val emulator: String, val game: String, val device: String) {
@@ -26,8 +49,26 @@ data class WaitLine(val emulator: String, val game: String, val device: String) 
     val rest: String get() = "Nothing is written while $emulator is open."
 }
 
-/** "Received {game}": a held-back delivery landed. Shown in ink, with no status colour. */
+/**
+ * "{game} from {device} is in place.": a held-back delivery landed, and the amber close line it replaces becomes this
+ * ink line, with no status colour.
+ */
 data class ReceivedLine(val text: String)
+
+/** The received line's words; [from] is the device the save came from, when known. */
+fun receivedText(game: String, from: String?, config: Boolean = false): String = when {
+    config -> "$game are in place."
+    from != null -> "$game from $from is in place."
+    else -> "$game is in place."
+}
+
+/**
+ * The words for a delivery that landed: "Pokémon Sword from Odin 3 is in place.", or "Eden settings are in place."
+ * for a config. [row] is the game on the server, for its name and the device the newest save came from.
+ */
+fun receivedLine(d: dev.tandem.app.sync.ReceivedDelivery, emulator: String, row: GameRow?): String =
+    if (d.gameKey == null) receivedText("$emulator settings", null, config = true)
+    else receivedText(d.displayName ?: row?.displayName ?: bareKey(d.emulatorId, d.gameKey), row?.newestOnDeviceName)
 
 /**
  * How long after a delivery lands a games refresh still keeps its "Received" line. The refresh the emulator's exit
@@ -46,8 +87,28 @@ data class EmuPane(
     val received: List<ReceivedLine> = emptyList(),
 )
 
-/** Everything the "This device" tab shows. [loaded] is false until the first games list arrives. */
-data class DeviceUi(val signedIn: Boolean, val panes: List<EmuPane>, val loaded: Boolean, val error: ApiException?)
+/**
+ * Everything the "This device" tab shows. [loaded] is false until the first games list arrives. [revoked]: the server
+ * removed this device. (How long ago it synced is the hint bar's line on every tab: LocalStatusLine.)
+ */
+data class DeviceUi(
+    val signedIn: Boolean,
+    val panes: List<EmuPane>,
+    val loaded: Boolean,
+    val error: ApiException?,
+    val revoked: Boolean = false,
+    /** The other devices, one presence column each (none when this is the only device). */
+    val devices: List<DeviceColumn> = emptyList(),
+)
+
+const val REVOKED_LINE = "This device was removed from the server."
+const val REVOKED_REST = "Sync is off here. Sign in again or pair this device to use it with Tandem."
+
+/** "Synced just now", "Synced 5 min ago", "Synced 3 h ago", else "Synced Nov 19, 22:14"; null when never. */
+fun syncedAgo(at: java.time.Instant?, now: java.time.Instant = java.time.Instant.now(), zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String? {
+    at ?: return null
+    return "Synced " + activityTime(at.toString(), now, zone)
+}
 
 private fun plural(n: Int, one: String) = if (n == 1) "1 $one" else "$n ${one}s"
 
@@ -73,8 +134,11 @@ fun deviceUi(
     deviceId: String?,
     signedIn: Boolean,
     received: List<ReceivedAt> = emptyList(),
+    /** The RetroArch core a game's saves were made with, from this device's own sync state, for its system mark. */
+    core: (emulatorId: String, gameKey: String) -> String? = { _, _ -> null },
 ): DeviceUi {
     val rows = if (signedIn) games.value.orEmpty() else emptyList()
+    val columns = deviceColumns(rows, deviceId)
     val panes = emulators.map { emu ->
         val mine = rows.filter { it.emulatorId == emu.id }
         val byKey = mine.associateBy { it.gameKey }
@@ -84,11 +148,11 @@ fun deviceUi(
         val waits = LinkedHashMap<String, WaitLine>()
         for (w in waiting.filter { it.emulatorId == emu.id }) {
             val row = w.gameKey?.let(byKey::get)
-            val game = w.displayName ?: row?.displayName ?: w.gameKey ?: continue
+            val game = w.displayName ?: row?.displayName ?: w.gameKey?.let { bareKey(emu.id, it) } ?: continue
             waits.putIfAbsent(w.gameKey ?: "delivery:${w.deliveryId}", WaitLine(emu.name, game, row?.newestOnDeviceName ?: "another device"))
         }
         for (g in mine.filter { here(it) == DeviceGameState.Waiting }) {
-            waits.putIfAbsent(g.gameKey, WaitLine(emu.name, g.displayName ?: g.gameKey, g.newestOnDeviceName ?: "another device"))
+            waits.putIfAbsent(g.gameKey, WaitLine(emu.name, g.displayName ?: bareKey(emu.id, g.gameKey), g.newestOnDeviceName ?: "another device"))
         }
 
         val (state, tone) = when {
@@ -99,6 +163,8 @@ fun deviceUi(
                 is EmuRowState.ConfigGroup -> "config group" to Tone.Ink2
                 EmuRowState.NotSetUp -> "not set up" to Tone.Ink3
                 EmuRowState.Looking -> "looking…" to Tone.Ink3
+                EmuRowState.NoShizuku -> "Shizuku off" to Tone.Ink3
+                EmuRowState.Idle -> "—" to Tone.Ink3
                 EmuRowState.Ok -> "no saves yet" to Tone.Ink2
             }
         }
@@ -106,7 +172,11 @@ fun deviceUi(
             val (text, t) = hereCopy(here(g), emu.name)
             // No newest device (nothing uploaded yet): a dash in ink3, as the web's Games page shows it.
             val newest = g.newestOnDeviceName
-            GameLine(g.gameKey, g.displayName ?: g.gameKey, newest ?: "—", text, t, if (newest == null) Tone.Ink3 else Tone.Ink2)
+            GameLine(
+                g.gameKey, g.displayName ?: bareKey(emu.id, g.gameKey), newest ?: "—", text, t, if (newest == null) Tone.Ink3 else Tone.Ink2,
+                system = systemLabel(emu.id, g.gameKey, core(emu.id, g.gameKey)),
+                presence = columns.map { col -> presenceOf(g, col.id).let { PresenceCell(it, presenceText(it, col.name, emu.name)) } },
+            )
         }
         // Held deliveries that landed since the last refresh, newest first, each game once; none for a waiting game.
         val updated = games.updatedAt
@@ -117,20 +187,27 @@ fun deviceUi(
             if (updated != null && updated >= r.at + RECEIVED_GRACE) continue
             val key = d.gameKey ?: "config"
             if (key in waits) continue
-            val name = if (d.gameKey == null) "${emu.name} settings" else d.displayName ?: byKey[d.gameKey]?.displayName ?: d.gameKey
-            got.putIfAbsent(key, ReceivedLine("Received $name"))
+            got.putIfAbsent(key, ReceivedLine(receivedLine(d, emu.name, byKey[d.gameKey])))
         }
         EmuPane(emu.id, emu.name, state, tone, lines, waits.values.toList(), got.values.toList())
     }
-    return DeviceUi(signedIn, panes, loaded = games.value != null, error = if (signedIn) games.error else null)
+    return DeviceUi(signedIn, panes, loaded = games.value != null, error = if (signedIn) games.error else null, devices = columns)
 }
 
 /**
  * Feeds [deviceUi] from the app state and the server's games. Not an androidx ViewModel: the activity's AppViewModel
  * owns it, so it lives as long as the AppState it reads.
  */
-class DeviceViewModel(app: AppState, games: StateFlow<Loaded<List<GameRow>>>, deviceId: () -> String?, scope: CoroutineScope) {
+class DeviceViewModel(
+    app: AppState,
+    games: StateFlow<Loaded<List<GameRow>>>,
+    deviceId: () -> String?,
+    scope: CoroutineScope,
+    core: (emulatorId: String, gameKey: String) -> String? = { _, _ -> null },
+) {
     val ui: StateFlow<DeviceUi> = combine(app.emulators, games, app.waiting, app.top, app.received) { emus, g, w, top, got ->
-        deviceUi(emus, g, w, deviceId(), top.signedIn, got)
+        deviceUi(emus, g, w, deviceId(), top.signedIn, got, core).copy(
+            revoked = top.server == ServerConn.Revoked,
+        )
     }.stateIn(scope, SharingStarted.Eagerly, DeviceUi(false, emptyList(), false, null))
 }

@@ -112,6 +112,22 @@ class SettingsScreenTest {
         assertEquals(0, reloads)   // colours are the app's own: sync is not restarted
     }
 
+    @Test fun appearanceTurnsHapticsOffAndSoundsOnWithoutRestartingSync() {
+        val st = store()
+        assertTrue(st.settings.haptics)    // haptics on, sounds off for everyone to begin with
+        assertFalse(st.settings.sounds)
+        show(st, vm(st))
+        r2(2)   // Sync › Emulators › Appearance
+        compose.onNodeWithText(HAPTICS_COPY).assertIsDisplayed()
+        repeat(3) { compose.key(KeyEvent.KEYCODE_DPAD_DOWN) }   // System, Light, Dark, then Haptics
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertFalse(st.settings.haptics)
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertTrue(st.settings.sounds)
+        assertEquals(0, reloads)
+    }
+
     @Test fun signOutClearsTheKeyAndTheTopBarSaysSignedOut() {
         val st = store().apply {
             put("eden|Save|0100ABF008968000||", ItemState("v1", "m", "m"))
@@ -229,16 +245,18 @@ class SettingsScreenTest {
     @Test fun autoApplyToggleSavesAndReloads() {
         val st = store()
         show(st, vm(st))
-        compose.onNodeWithText("Apply newer saves automatically when the emulator is closed").assertIsDisplayed()
+        compose.onNodeWithText("Apply arriving saves automatically when the emulator is closed").assertIsDisplayed()
+        assertTrue("on for a new install", st.settings.autoApply)
+        compose.onNodeWithText("Turn off").assertExists()
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
-        assertTrue(st.settings.autoApply)
+        assertFalse(st.settings.autoApply)
         assertEquals(1, reloads)
     }
 
     @Test fun addingARomFolderByTouch() {
         val st = store()
         show(st, vm(st))
-        compose.onNodeWithText("Add a ROM folder").performClick().performClick()
+        compose.onNodeWithText(ADD_ROM_DIR).performClick().performClick()
         compose.onNodeWithTag("settings-field").performTextReplacement("/sdcard/Roms")
         compose.onNodeWithTag("settings-field").performImeAction()
         assertEquals(listOf("/sdcard/Roms"), st.settings.romDirs)
@@ -248,7 +266,7 @@ class SettingsScreenTest {
     @Test fun aDuplicateRomFolderIsRefusedInTheSheet() {
         val st = store().apply { settings = settings.copy(romDirs = listOf("/sdcard/Roms")) }
         show(st, vm(st))
-        compose.onNodeWithText("Add a ROM folder").performClick().performClick()
+        compose.onNodeWithText(ADD_ROM_DIR).performClick().performClick()
         compose.onNodeWithTag("settings-field").performTextReplacement("/storage/emulated/0/Roms/")
         compose.onNodeWithTag("settings-field").performImeAction()
         compose.onNodeWithText("That folder is already in the list.").assertIsDisplayed()
@@ -258,7 +276,7 @@ class SettingsScreenTest {
     @Test fun removingARomFolderAsksFirstAndBKeepsIt() {
         val st = store().apply { settings = settings.copy(romDirs = listOf("/sdcard/Roms")) }
         show(st, vm(st))
-        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)   // the folder's row
+        repeat(3) { compose.key(KeyEvent.KEYCODE_DPAD_DOWN) }   // past notifications and battery, to the folder's row
         compose.key(KeyEvent.KEYCODE_BUTTON_X)
         compose.onNodeWithText("Remove /sdcard/Roms?").assertIsDisplayed()
         compose.onNodeWithText("Games found only in this folder stop receiving saves on this device.").assertIsDisplayed()
@@ -293,6 +311,128 @@ class SettingsScreenTest {
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertEquals(DUO, st.settings.variants["eden"])
         assertNull(st.settings.variants["ppsspp"])
+    }
+
+    // ---- notifications, battery, server address, licences ----
+
+    private val perms = dev.tandem.app.ui.state.FixedPermissions(dev.tandem.app.ui.state.PermissionState(notifications = false, battery = false))
+    private var serverInfo = dev.tandem.app.model.ServerInfo("Home", 1, false)
+    private var meId = "dev-thor"
+    private val asked = mutableListOf<String>()
+
+    private val unusedApi: dev.tandem.app.api.Api = java.lang.reflect.Proxy.newProxyInstance(
+        dev.tandem.app.api.Api::class.java.classLoader, arrayOf(dev.tandem.app.api.Api::class.java),
+    ) { _, m, _ -> throw UnsupportedOperationException(m.name) } as dev.tandem.app.api.Api
+
+    private fun fakeServer(url: String) = object : dev.tandem.app.api.Api by unusedApi {
+        override suspend fun serverInfo() = serverInfo.also { asked += "info $url" }
+        override suspend fun me() = dev.tandem.app.model.DeviceSummary(meId, "Thor", "android", isCurrent = true).also { asked += "me $url" }
+    }
+
+    private fun fullVm(store: StateStore) = SettingsViewModel(
+        store, ModuleRegistry.default().all(), installed = { installed }, label = { null },
+        deviceName = MutableStateFlow("Thor"), reload = { reloads++ }, stopSync = { stops++ }, afterSignOut = {}, scope = scope,
+        permissions = perms, anon = ::fakeServer, keyed = ::fakeServer, appVersion = "1.2.3",
+    )
+
+    private fun showFull(store: StateStore, vm: SettingsViewModel, licences: String = "") {
+        compose.setContent {
+            StoredTheme(store) {
+                val ui by vm.ui.collectAsState()
+                SettingsScreen(ui, top = {}, actions = vm.actions(null, {}, {}) { licences }, now = { clock })
+            }
+        }
+    }
+
+    @Test fun notificationsAndBatteryRowsAskForWhatIsMissing() {
+        val st = store()
+        val vm = fullVm(st)
+        showFull(st, vm)
+        compose.onNodeWithText(NOTIFICATIONS_COPY).assertIsDisplayed()
+        compose.onNodeWithText("Optimised").assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(
+            listOf(dev.tandem.app.ui.state.PermissionRequest.Notifications, dev.tandem.app.ui.state.PermissionRequest.Battery),
+            perms.requested,
+        )
+        perms.set(dev.tandem.app.ui.state.PermissionState(true, true))
+        compose.waitForIdle()
+        assertEquals(2, compose.onAllNodesWithText("Allowed").fetchSemanticsNodes().size)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // granted: nothing more to ask
+        assertEquals(2, perms.requested.size)
+    }
+
+    @Test fun releaseBuildsHaveNoDiagnosticsSectionButHaveAbout() {
+        val st = store()
+        showFull(st, fullVm(st), licences = "Barlow — SIL Open Font License 1.1")
+        compose.onNodeWithText("Diagnostics").assertDoesNotExist()
+        r2(4)   // Sync › Emulators › Appearance › Account › About
+        compose.onNodeWithText("1.2.3").assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        compose.onNodeWithText("Barlow — SIL Open Font License 1.1").assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_BUTTON_B)
+        compose.onNodeWithText("Barlow — SIL Open Font License 1.1").assertDoesNotExist()
+    }
+
+    @Test fun theLicenceTextListsTheLibrariesAndEachBundledFont() {
+        val text = licenceText { p -> "text of $p" }
+        assertTrue(text.contains("OkHttp"))
+        assertTrue(text.contains("Shizuku"))
+        assertTrue(text.contains("text of licenses/barlow-OFL.txt"))
+        assertTrue(text.contains("text of licenses/jetbrains-mono-OFL.txt"))
+        // The assets are really there.
+        for ((_, path) in FONT_LICENCES) assertTrue(path, File("src/main/assets/$path").isFile)
+    }
+
+    @Test fun aPlainHttpAddressOutsideTailscaleIsWarnedAbout() {
+        val st = store()   // http://nas:5100
+        showFull(st, fullVm(st))
+        r2(3)
+        compose.onNodeWithText(dev.tandem.app.ui.state.INSECURE_URL_WARNING).assertIsDisplayed()
+        st.serverUrl = "http://nas.tail1234.ts.net:5100"
+        compose.waitForIdle()
+        compose.onNodeWithText(dev.tandem.app.ui.state.INSECURE_URL_WARNING).assertDoesNotExist()
+    }
+
+    @Test fun changingTheServerAddressChecksItAndKeepsTheSyncState() {
+        val st = store().apply {
+            put("eden|Save|0100ABF008968000||", ItemState("v1", "m", "m"))
+            putConfigState("eden", ConfigState("b", "c1", "m", "m"))
+        }
+        val vm = fullVm(st)
+        showFull(st, vm)
+        r2(3)   // Account
+        compose.key(KeyEvent.KEYCODE_BUTTON_Y)
+        compose.onNodeWithText(CHANGE_SERVER_COPY).assertIsDisplayed()
+        meId = "dev-other"   // the key belongs to another device there
+        compose.onNodeWithTag("settings-field").performTextReplacement("https://tandem.example.com")
+        compose.onNodeWithTag("settings-field").performImeAction()   // Done: the sheet's A
+        compose.waitUntil(5_000) { vm.ui.value.serverChange is dev.tandem.app.ui.state.ServerChange.Failed }
+        compose.onNodeWithText("That server knows this key as another device. Check the address.").assertIsDisplayed()
+        assertEquals("http://nas:5100", st.serverUrl)
+        meId = "dev-thor"
+        compose.onNodeWithTag("settings-field").performImeAction()
+        compose.waitUntil(5_000) { st.serverUrl == "https://tandem.example.com" }
+        compose.waitForIdle()
+        compose.onNodeWithText(CHANGE_SERVER_COPY).assertDoesNotExist()   // the sheet closed
+        assertEquals("secret-key", st.deviceKey)
+        assertEquals(ItemState("v1", "m", "m"), st.get("eden|Save|0100ABF008968000||"))
+        assertEquals(ConfigState("b", "c1", "m", "m"), st.configState("eden"))
+        assertTrue(st.pendingForget.isEmpty())
+        assertEquals(1, reloads)
+        assertEquals(0, stops)
+        assertTrue(asked.containsAll(listOf("info https://tandem.example.com", "me https://tandem.example.com")))
+    }
+
+    @Test fun theMelonDsExportFolderIsExplainedWhenMelonDsIsInstalled() {
+        installed = setOf("me.magnum.melonds")
+        val st = store()
+        showFull(st, fullVm(st))
+        r2(1)
+        compose.onNodeWithText(MELONDS_EXPORT_NOTE).assertIsDisplayed()
     }
 }
 
@@ -337,8 +477,8 @@ class SettingsViewModelTest {
 
     @Test fun settingsChangedWhileSignedOutDoNotStartSync() {
         val (st, vm) = setup(signedIn = false)
-        vm.setAutoApply(true)
-        assertTrue(st.settings.autoApply)
+        vm.setAutoApply(false)
+        assertFalse(st.settings.autoApply)
         assertEquals(0, reloads)
     }
 

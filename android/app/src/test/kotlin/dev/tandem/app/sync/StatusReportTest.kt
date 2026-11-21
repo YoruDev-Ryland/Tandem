@@ -104,12 +104,12 @@ class StatusReportTest {
         assertTrue(statusBodies().isEmpty())
     }
 
-    @Test fun resends_every_90_seconds_while_running_and_once_on_exit() = runBlocking {
+    @Test fun resends_every_60_seconds_while_running_and_once_on_exit() = runBlocking {
         val e = engine()
         e.fullScan(); statusBodies()
         e.reportRunning(setOf("eden"))
         assertEquals(1, statusBodies().size)
-        now += 89_000L
+        now += 59_000L
         e.reportRunning(setOf("eden"))
         assertTrue("not due yet", statusBodies().isEmpty())
         now += 1_000L
@@ -126,7 +126,7 @@ class StatusReportTest {
         assertTrue(statusBodies().isEmpty())
     }
 
-    @Test fun a_failed_report_is_retried_after_90_seconds_not_every_tick() = runBlocking {
+    @Test fun a_failed_report_is_retried_after_60_seconds_not_every_tick() = runBlocking {
         val e = engine()
         e.fullScan(); statusBodies()
         statusCode = 503
@@ -136,7 +136,7 @@ class StatusReportTest {
         now += 5_000L
         e.reportRunning(setOf("eden"))
         assertTrue(statusBodies().isEmpty())
-        now += 85_000L
+        now += 55_000L
         e.reportRunning(setOf("eden"))
         assertEquals(1, statusBodies().size)
     }
@@ -174,10 +174,12 @@ class StatusReportTest {
     @Test(timeout = 10_000L) fun a_hung_server_does_not_hold_the_engine_or_pile_up_reports() = runBlocking {
         val release = CountDownLatch(1)
         val puts = AtomicInteger()
+        val started = CountDownLatch(1)   // the background PUT is in flight (it runs on another thread)
         val hung = object : Api by client {
             override suspend fun putStatus(req: DeviceStatusRequest) {
                 if (req.runningEmulators.orEmpty().isEmpty()) return client.putStatus(req)   // the full scan's report
                 puts.incrementAndGet()
+                started.countDown()
                 release.await()   // blocking, non-cancellable
             }
             override suspend fun putStatus(req: DeviceStatusRequest, callTimeoutMillis: Long) = putStatus(req)
@@ -185,6 +187,8 @@ class StatusReportTest {
         val e = engine(hung, statusTimeoutMillis = 0L)   // gives up at once instead of waiting 10 s
         e.fullScan(); statusBodies()
         withTimeout(5_000) { e.reportRunning(setOf("eden")) }   // returns although the PUT hangs
+        // With a zero timeout reportRunning returns before the PUT has even started: wait for it, never race it.
+        assertTrue("the first report reached the server", started.await(5, TimeUnit.SECONDS))
         withTimeout(5_000) { e.onEmulatorExited("eden"); e.tick() }   // the engine lock is free
         now += 90_000L
         e.reportRunning(setOf("eden"))   // due, but the previous report is still in flight: not resent

@@ -20,21 +20,22 @@ import dev.tandem.app.ui.state.ServerConn
 import dev.tandem.app.ui.state.TopStatus
 import dev.tandem.app.ui.theme.EmuType
 import dev.tandem.app.ui.theme.LocalEmu
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
-private val HHMM = DateTimeFormatter.ofPattern("HH:mm")
-
-/** The server half of the top bar's status: what it says and its tone. */
-fun serverCopy(status: TopStatus, zone: ZoneId = ZoneId.systemDefault()): Pair<String, Tone> = when (status.server) {
-    ServerConn.Connected -> "Server connected" to Tone.Ink2
-    ServerConn.Offline -> (status.lastSync?.let { "Offline · last updated ${HHMM.format(it.atZone(zone))}" } ?: "Offline") to Tone.Wait
+/**
+ * The server half of the top bar's status, only when something is wrong: null while connected (nothing is labelled
+ * when all is well). How long ago this device last synced is the hint bar's status line, not this.
+ */
+fun serverCopy(status: TopStatus): Pair<String, Tone>? = when (status.server) {
+    ServerConn.Connected -> null
+    ServerConn.Offline -> "Server unreachable" to Tone.Wait
     ServerConn.SignedOut -> "Signed out" to Tone.Fault
+    ServerConn.Revoked -> "Removed from server" to Tone.Fault
 }
 
 /**
- * The console top bar, for ConsoleScaffold's top slot: the wordmark, the page tabs (L1/R1), then this device's name,
- * the server connection and Shizuku. While Shizuku is not ready the Shizuku status is a button running
+ * The console top bar, for ConsoleScaffold's top slot: the wordmark, the page tabs (L1/R1), then this device's name and
+ * only what is wrong (the server unreachable, Shizuku off), then the clock and battery as a console's system bar shows
+ * them ([SystemReadout], from [LocalReadout]). While Shizuku is not ready its status is a button running
  * [onShizukuFix]; with no fix to offer (Shizuku not installed) it only says it is off.
  */
 @Composable
@@ -45,7 +46,6 @@ fun RowScope.TopBar(
     status: TopStatus,
     onShizukuFix: (() -> Unit)?,
     badge: (Int) -> String? = { null },
-    zone: ZoneId = ZoneId.systemDefault(),
 ) {
     val c = LocalEmu.current
     val meta = EmuType.meta.copy(fontWeight = FontWeight.Medium)
@@ -64,10 +64,9 @@ fun RowScope.TopBar(
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
-        val (server, tone) = serverCopy(status, zone)
-        BasicText(server, style = meta.copy(color = c.tone(tone, false)), maxLines = 1)
+        serverCopy(status)?.let { (server, tone) -> BasicText(server, style = meta.copy(color = c.tone(tone, false)), maxLines = 1) }
         if (status.shizuku == ShizukuState.Ready) {
-            BasicText("Shizuku on", style = meta.copy(color = c.ink2), maxLines = 1)
+            // Nothing to say.
         } else if (onShizukuFix == null) {
             BasicText("Shizuku is off", style = meta.copy(color = c.fault), maxLines = 1)
         } else {
@@ -81,5 +80,6 @@ fun RowScope.TopBar(
                 BasicText("Shizuku is off: tap to fix", style = meta.copy(color = c.fault), maxLines = 1)
             }
         }
+        LocalReadout.current?.let { SystemReadout(it) }
     }
 }

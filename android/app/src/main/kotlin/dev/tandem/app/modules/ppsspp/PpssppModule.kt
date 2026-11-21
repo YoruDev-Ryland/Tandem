@@ -66,16 +66,20 @@ class PpssppModule(
                 if (slot.isNotEmpty()) Paths.requireSafeSegment(slot)
                 val files = fs.walk(e.path).filter { !it.isDir }.map { it.path.removePrefix(e.path + "/") }.sorted()
                 if (files.isEmpty()) continue
-                out += LocalItem(ItemKind.Save, n.substring(0, 9), slot, "", e.path, files)
+                // The game's own name, from the save's PARAM.SFO TITLE (C12); the server prefers a cleaned one.
+                val sfo = files.firstOrNull { it.equals("PARAM.SFO", ignoreCase = true) }
+                val title = sfo?.let { Sfo.titleAt(fs, "${e.path}/$it") }
+                out += LocalItem(ItemKind.Save, n.substring(0, 9), slot, "", e.path, files, title)
             } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
+        val titles = out.mapNotNull { s -> s.displayName?.let { s.gameKey to it } }.toMap()
         val states = LinkedHashMap<Pair<String, String>, LocalItem>()
         for (e in fs.list(stateDir(d))) {
             try {
                 if (e.isDir) continue
                 val m = stateRe.matchEntire(name(e.path)) ?: continue
                 states.putIfAbsent(m.groupValues[1] to m.groupValues[3],
-                    LocalItem(ItemKind.State, m.groupValues[1], m.groupValues[3], "", stateDir(d), listOf(name(e.path))))
+                    LocalItem(ItemKind.State, m.groupValues[1], m.groupValues[3], "", stateDir(d), listOf(name(e.path)), titles[m.groupValues[1]]))
             } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
         return (out + states.values).sortedWith(compareBy({ it.kind }, { it.gameKey }, { it.slot }))
@@ -85,7 +89,9 @@ class PpssppModule(
 
     override fun installedGames(fs: Fs, d: Detected, settings: DeviceSettings): List<InstalledGame> {
         val found = sortedSetOf<String>()
-        saveItems(fs, d).filter { it.kind == ItemKind.Save }.mapTo(found) { it.gameKey }
+        val saves = saveItems(fs, d).filter { it.kind == ItemKind.Save }
+        saves.mapTo(found) { it.gameKey }
+        val titles = saves.mapNotNull { s -> s.displayName?.let { s.gameKey to it } }.toMap()
         for (dir in settings.romDirs.map { rooted(it).trimEnd('/') }.distinct()) {
             for (e in try { fs.list(dir) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }) {
                 val n = name(e.path)
@@ -93,7 +99,7 @@ class PpssppModule(
                 idRe.find(n)?.let { found += it.value }
             }
         }
-        return found.map { InstalledGame(it) }
+        return found.map { InstalledGame(it, titles[it]) }
     }
 
     override fun configBundle(fs: Fs, d: Detected): ConfigBundleFiles {

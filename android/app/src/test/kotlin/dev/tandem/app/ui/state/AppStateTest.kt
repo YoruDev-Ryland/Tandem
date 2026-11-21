@@ -88,6 +88,28 @@ class AppStateTest {
         assertEquals(EmuRowState.NotSetUp, rows.getValue("azahar").state)
     }
 
+    @Test fun without_shizuku_or_a_running_service_rows_never_say_looking() = runTest {
+        val s = state(store())
+        shizuku.value = ShizukuState.NotRunning
+        AppGraph.snapshot.value = ServiceSnapshot(running = true, live = false)
+        assertEquals(EmuRowState.NoShizuku, s.emulators.value.first { it.id == "eden" }.state)
+        shizuku.value = ShizukuState.Ready
+        AppGraph.snapshot.value = ServiceSnapshot(running = false, live = false)
+        assertEquals(EmuRowState.Idle, s.emulators.value.first { it.id == "eden" }.state)
+    }
+
+    @Test fun a_revoked_device_and_its_last_sync_show_in_the_top_status() = runTest {
+        val st = store()
+        val s = state(st)
+        st.signIn("http://nas:5100", "k", "d", emptyList())
+        assertEquals(null, s.top.value.lastSyncedAt)
+        st.markSynced(1_700_000_000_000)
+        assertEquals(Instant.ofEpochMilli(1_700_000_000_000), s.top.value.lastSyncedAt)
+        st.markRevoked()
+        assertEquals(ServerConn.Revoked, s.top.value.server)
+        assertEquals(true, s.top.value.signedIn)
+    }
+
     @Test fun before_the_first_scan_rows_are_looking_not_not_set_up() = runTest {
         val s = state(store())
         AppGraph.snapshot.value = ServiceSnapshot(running = true, live = false)

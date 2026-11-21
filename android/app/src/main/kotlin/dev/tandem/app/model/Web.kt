@@ -162,3 +162,13 @@ import kotlinx.serialization.Serializable
     // added by the web-UI server work; absent on older servers
     val runningEmulators: List<String> = emptyList(),
 )
+
+/** GET /v1/vault (device key or web session): the user's vault items. [emulatorId] is null for an item of none. */
+@Serializable data class VaultItemDto(
+    val id: String,
+    val category: String,
+    val emulatorId: String? = null,
+    val name: String,
+    val headVersionId: String? = null,
+    val totalSize: Long = 0,
+)

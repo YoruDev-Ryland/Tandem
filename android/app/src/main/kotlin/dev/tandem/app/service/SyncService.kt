@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import dev.tandem.app.BuildConfig
 import dev.tandem.app.api.Api
 import dev.tandem.app.api.ApiClient
@@ -46,7 +47,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Structure: one [CoroutineScope] on [Dispatchers.IO]. A supervisor coroutine follows the Shizuku state and a
  * reload counter; each `Ready` (or reload) starts a fresh *session* and cancels the previous one. A session binds the
  * shell, builds [RemoteFs], the [SyncEngine] and [DeliveryApplier], runs a full scan, starts watching, and then feeds
- * a single [WorkQueue] from a 1 s ticker, a 5 s process monitor, the server event stream, a 60 s delivery poll and a
+ * a single [WorkQueue] from a 1 s ticker, a 5 s process monitor (20 s with the screen off and nothing running), the
+ * server event stream (75 s read timeout), a delivery poll (every 60 s while the stream is down, else every 5 min) and a
  * 15 min full scan. The queue's one consumer runs the work, so scans, ticks, applies and exit handling never overlap.
  *
  * Errors never crash the service: each work item is caught and logged. [FsUnavailableException] (the shell died or
@@ -60,7 +62,6 @@ class SyncService : Service() {
         const val ACTION_RELOAD = "dev.tandem.app.action.RELOAD"
 
         private const val TICK_MS = 1_000L
-        private const val MONITOR_MS = 5_000L
         private const val FULL_SCAN_MS = 15 * 60_000L
         private const val RESTART_DELAY_MS = 5_000L
         private const val BIND_TIMEOUT_MS = 30_000L
@@ -122,8 +123,8 @@ class SyncService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        notifier = Notifier(this).also { it.ensureChannels() }
         store = AppGraph.store(this)
+        notifier = Notifier(this) { store.serverUrl }.also { it.ensureChannels() }
         gate   // starts the Shizuku listeners on the main thread
         goForeground()
         log("service started (app ${BuildConfig.VERSION_NAME})")
@@ -132,6 +133,11 @@ class SyncService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         goForeground()   // required after every startForegroundService
+        if (store.revoked) {
+            log("this device was removed from the server: sync stays off")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_SCAN -> session?.let { s -> s.planner.explicitScan().forEach { s.queue.offer(it) } }
                 ?: log("scan requested, but sync isn't running")
@@ -204,6 +210,11 @@ class SyncService : Service() {
             publish()
             awaitCancellation()
         }
+        if (store.revoked) {
+            log("this device was removed from the server: not syncing")
+            publish()
+            awaitCancellation()
+        }
         val shell = try {
             withContext(Dispatchers.Main) { withTimeout(BIND_TIMEOUT_MS) { gate.bind() } }
         } catch (e: TimeoutCancellationException) {
@@ -213,7 +224,7 @@ class SyncService : Service() {
         val fs = RemoteFs(shell)
         val flows = AppGraph.sessionFlows.begin()
         try {
-            val api = StatusRecordingApi(ApiClient(url, key), AppGraph.sessionFlows, flows) {
+            val api = StatusRecordingApi(ApiClient(url, key, onRevoked = ::onRevoked), AppGraph.sessionFlows, flows) {
                 lastStatus = SentStatus(url, key, it)
             }
             val stored = store.settings
@@ -227,6 +238,7 @@ class SyncService : Service() {
                 appVersion = BuildConfig.VERSION_NAME,
                 shizukuOk = { gate.state.value == ShizukuState.Ready },
                 onConflict = notifier::conflict,
+                onSynced = { AppGraph.synced(this@SyncService) },
             )
             val applier = DeliveryApplier(
                 fs, api, store, registry, engine, notifier::alert, s, cacheDir,
@@ -254,6 +266,7 @@ class SyncService : Service() {
                     if (up) offer(planner.streamOpened(reconnect = opens.getAndIncrement() > 0))
                     publish()
                 },
+                onRevoked = ::onRevoked,
             )
             // An emulator an asked-for apply waits on may have closed while the service was down: the first monitor
             // that finds it closed finishes the apply as an exit would.
@@ -261,8 +274,15 @@ class SyncService : Service() {
             try {
                 launch { sess.queue.consume { handle(sess, it) } }
                 launch { every(TICK_MS) { offer(planner.tick()) } }
-                launch { every(MONITOR_MS) { offer(planner.monitor()) } }
-                launch { every(SyncConfig.pollMillis) { offer(planner.poll()) } }
+                // Slower while nobody plays: the screen off and no emulator running.
+                launch {
+                    while (true) {
+                        delay(monitorDelay(screenOn(), AppGraph.running.value.isNotEmpty()))
+                        offer(planner.monitor())
+                    }
+                }
+                // A healthy stream's nudges bring deliveries; the poll then runs only as a slow fallback.
+                launch { every(SyncConfig.pollMillis) { offer(planner.pollTick(events.healthy, android.os.SystemClock.elapsedRealtime())) } }
                 launch { every(FULL_SCAN_MS) { offer(planner.periodicScan()) } }
                 offer(planner.sessionStarted())
                 events.start()
@@ -300,6 +320,7 @@ class SyncService : Service() {
                 SyncWork.ApplyAll, SyncWork.ApplyRequested -> {
                     val r = s.applier.applyAll()
                     s.planner.applied(w, r)
+                    if (r.reachedServer && r.failed == 0) AppGraph.synced(this)
                     if (r.applied + r.failed + r.waitingForEmulator > 0)
                         log("deliveries: ${r.applied} applied, ${r.skipped} skipped, ${r.failed} failed, ${r.waitingForEmulator} waiting")
                 }
@@ -316,7 +337,11 @@ class SyncService : Service() {
             log("$w failed: ${e.javaClass.simpleName}: ${e.message}")
         } finally {
             // Whoever waits for a scan hears how it ended: only one that got every upload through is a success.
-            if (w == SyncWork.FullScan) countScan(scanSucceeded(error, s.engine.queuedCount()))
+            if (w == SyncWork.FullScan) {
+                val ok = scanSucceeded(error, s.engine.queuedCount())
+                countScan(ok)
+                if (ok) AppGraph.synced(this)
+            }
             if (w != SyncWork.Tick && w != SyncWork.Monitor) publish()
         }
     }
@@ -370,7 +395,7 @@ class SyncService : Service() {
         if (sent.url != url || sent.key != key || !sent.req.shizukuOk) return   // only for the same server and device
         try {
             val off = sent.req.copy(shizukuOk = false)
-            withTimeoutOrNull(20_000) { ApiClient(url, key).putStatus(off) } ?: return
+            withTimeoutOrNull(20_000) { ApiClient(url, key, onRevoked = ::onRevoked).putStatus(off) } ?: return
             lastStatus = SentStatus(url, key, off)
             log("reported Shizuku off to the server")
         } catch (e: CancellationException) {
@@ -379,6 +404,11 @@ class SyncService : Service() {
             log("couldn't report Shizuku off: ${e.message}")
         }
     }
+
+    /** 401 device_revoked from any of the session's calls or its event stream: no retries, no reconnects. */
+    private fun onRevoked() = AppGraph.revoked(this)
+
+    private fun screenOn(): Boolean = runCatching { getSystemService(PowerManager::class.java).isInteractive }.getOrDefault(true)
 
     private fun versionOf(pkg: String): String? = try {
         packageManager.getPackageInfo(pkg, 0).versionName
@@ -396,6 +426,7 @@ class SyncService : Service() {
             queued = e?.queuedCount() ?: 0,
             online = online != false,
             signedIn = !store.serverUrl.isNullOrBlank() && !store.deviceKey.isNullOrBlank(),
+            revoked = store.revoked,
         )
     }
 

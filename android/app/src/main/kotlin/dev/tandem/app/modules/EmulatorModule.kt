@@ -70,4 +70,11 @@ interface EmulatorModule {
     fun configBundle(fs: Fs, d: Detected): ConfigBundleFiles
     fun targetDirFor(fs: Fs, d: Detected, kind: ItemKind, gameKey: String, slot: String, core: String): String  // where a delivered item is written
     fun cores(fs: Fs, d: Detected): List<String>? = null
+
+    /**
+     * The emulator folder a vault item of [category] ("bios", "keys", "firmware", "sysdata", "system") goes into, its
+     * files at their manifest paths below it; null when this module doesn't know where (the item is then staged in
+     * Tandem/vault). Only folders the module itself knows the layout of. [name] is the item's name (a file or folder).
+     */
+    fun vaultTarget(fs: Fs, d: Detected, category: String, name: String): String? = null
 }

@@ -36,4 +36,8 @@ class StatusTextTest {
     @Test fun no_emulators() {
         assertEquals("No emulators found", statusText(ShizukuState.Ready, 0, 0))
     }
+
+    @Test fun removed_from_the_server_wins_over_everything() {
+        assertEquals("Removed from the server: open Tandem", statusText(ShizukuState.NotRunning, 2, 1, online = false, revoked = true))
+    }
 }

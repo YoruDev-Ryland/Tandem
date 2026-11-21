@@ -1,5 +1,9 @@
 package dev.tandem.app.ui.kit
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,6 +19,18 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import dev.tandem.app.ui.feedback.Notice
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -71,13 +87,25 @@ fun Glyph(action: Action, modifier: Modifier = Modifier, inverted: Boolean = fal
 }
 
 /**
- * The 44 dp bar along the bottom: [status] on the left, then what each button does on this screen. Every hint is
- * also a button with a 48 dp target that reads as its label, so a touch user can do everything a pad user can.
+ * The hint bar's line on a screen with no status of its own: how long ago this device last synced ("Synced 2 min
+ * ago"). The activity provides it and keeps it ticking; null when signed out or never synced.
+ */
+val LocalStatusLine = compositionLocalOf<String?> { null }
+
+/** The success line showing now, if any (Notices); it stands in for any status while it lasts. */
+val LocalNotice = compositionLocalOf<Notice?> { null }
+
+/**
+ * The 44 dp bar along the bottom: on the left a success line while one lasts ([LocalNotice], in ink after a drawn
+ * tick), else [status], else the synced line ([LocalStatusLine]); then what each button does on this screen. Every
+ * hint is also a button with a 48 dp target that reads as its label, so a touch user can do everything a pad user can.
  */
 @Composable
 fun HintBar(status: String?, hints: List<Hint>) {
     val c = LocalEmu.current
     val text = EmuType.meta.copy(fontWeight = FontWeight.Medium)
+    val notice = LocalNotice.current
+    val line = status ?: LocalStatusLine.current
     Row(
         Modifier
             .fillMaxWidth()
@@ -88,8 +116,16 @@ fun HintBar(status: String?, hints: List<Hint>) {
         horizontalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         Box(Modifier.weight(1f)) {
-            if (status != null) {
-                BasicText(status, style = text.copy(color = c.ink3), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (notice != null) {
+                Row(
+                    Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Tick(notice.id)
+                    BasicText(notice.text, style = text.copy(color = c.ink), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            } else if (line != null) {
+                BasicText(line, style = text.copy(color = c.ink3), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         for (h in hints) {
@@ -106,5 +142,26 @@ fun HintBar(status: String?, hints: List<Hint>) {
                 BasicText(h.label, style = text.copy(color = c.ink2), maxLines = 1)
             }
         }
+    }
+}
+
+/**
+ * The success line's drawn tick (the checklist's 2 dp stroke): it strokes in over 200 ms each time a new line arrives.
+ * With the system's animations off it is simply there.
+ */
+@Composable
+private fun Tick(key: Long) {
+    val c = LocalEmu.current
+    val drawn = remember(key) { Animatable(0f) }
+    LaunchedEffect(key) { drawn.animateTo(1f, tween(200, easing = LinearOutSlowInEasing)) }
+    Canvas(Modifier.size(14.dp).clearAndSetSemantics {}) {
+        val path = Path().apply {
+            moveTo(size.width * 0.12f, size.height * 0.55f)
+            lineTo(size.width * 0.4f, size.height * 0.8f)
+            lineTo(size.width * 0.9f, size.height * 0.22f)
+        }
+        val part = Path()
+        PathMeasure().apply { setPath(path, false); getSegment(0f, length * drawn.value, part, true) }
+        drawPath(part, c.ink, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }

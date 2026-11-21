@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import dev.tandem.app.fs.ShizukuState
+import dev.tandem.app.ui.kit.Chrome
 import dev.tandem.app.ui.kit.TopBar
 import dev.tandem.app.ui.kit.key
 import dev.tandem.app.ui.state.ServerConn
@@ -30,12 +31,12 @@ class ActivityScreenshotTest {
     @get:Rule val compose = createComposeRule()
 
     private val entries = listOf(
-        ActivityEntry(9, "just now", "Uploaded Pokémon Sword (Eden)", false),
-        ActivityEntry(8, "12 min ago", "Applied the newer Xenoblade Chronicles X save from Odin 3", false),
-        ActivityEntry(7, "3 h ago", "Pokémon Brilliant Diamond has two saves waiting for a choice", true),
-        ActivityEntry(6, "9 h ago", "Uploaded Pokémon FireRed (RetroArch)", false),
-        ActivityEntry(5, "Nov 19, 22:14", "Joined the Handhelds config group for RetroArch", false),
-        ActivityEntry(4, "Nov 19, 21:48", "Uploaded Pokémon Platinum (melonDS)", false),
+        ActivityEntry(9, "just now", "Uploaded save for Pokémon Sword", false, "Thor"),
+        ActivityEntry(8, "12 min ago", "Received save for Xenoblade Chronicles X", false, "Thor"),
+        ActivityEntry(7, "3 h ago", "Uploaded save for Pokémon Brilliant Diamond, which conflicts", true, "Thor"),
+        ActivityEntry(6, "9 h ago", "Uploaded save for Pokémon FireRed", false, "Thor"),
+        ActivityEntry(5, "Nov 19, 22:14", "Joined RetroArch group Handhelds", false, "Thor"),
+        ActivityEntry(4, "Nov 19, 21:48", "The Eden config file qt-config.ini was edited in the browser", false),
     )
     private val log = listOf(
         "14:02:11.204 sync started", "14:02:11.388 scan eden: 3 games", "14:02:12.011 upload 0100ABF008968000 ok",
@@ -44,15 +45,18 @@ class ActivityScreenshotTest {
 
     @Test fun dark() = shoot(ThemeMode.Dark, "activity-dark.png", logTab = false)
     @Test fun light() = shoot(ThemeMode.Light, "activity-light.png", logTab = true)
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceDark() = shoot(ThemeMode.Dark, "robo-activity-dark.png", logTab = false)
 
     private fun shoot(mode: ThemeMode, name: String, logTab: Boolean) {
         val ui = ActivityUi(signedIn = true, entries = entries, loaded = true, hasOlder = true)
         val status = TopStatus("Thor", ServerConn.Connected, ShizukuState.Ready, signedIn = true)
         compose.setContent {
             EmuTheme(mode) {
-                ActivityScreen(ui, log, top = {
-                    TopBar(listOf("This device", "Activity", "Conflicts", "Settings"), 1, {}, status, {})
-                }, actions = ActivityActions())
+                Chrome {
+                    ActivityScreen(ui, log, top = {
+                        TopBar(listOf("This device", "Activity", "Conflicts", "Settings"), 1, {}, status, {})
+                    }, actions = ActivityActions())
+                }
             }
         }
         if (logTab) { compose.key(KeyEvent.KEYCODE_BUTTON_R2); compose.key(KeyEvent.KEYCODE_DPAD_DOWN) }

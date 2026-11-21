@@ -6,15 +6,28 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import dev.tandem.app.MainActivity
 import dev.tandem.app.sync.SyncConflict
 import java.util.concurrent.atomic.AtomicInteger
 
+/** The web app's Configs page, where a config conflict is chosen (the device has no config conflict view). */
+fun configsUrl(serverUrl: String): String = "${serverUrl.trimEnd('/')}/configs"
+
+/**
+ * Where tapping a conflict notification goes: a config conflict opens the web Configs page in the browser, as A opens
+ * web pages elsewhere in the app; a save conflict (or no server) opens the app, whose Conflicts tab lists it.
+ */
+internal fun conflictTarget(ctx: Context, c: SyncConflict, serverUrl: String?): Intent =
+    if (c.kind == null && !serverUrl.isNullOrBlank()) Intent(Intent.ACTION_VIEW, Uri.parse(configsUrl(serverUrl))).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    else Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
 /**
  * Notification channels and ids. `sync` (low importance) carries the persistent foreground notification;
  * `alerts` (default importance) carries the "close the emulator", conflict, restore and vault messages.
+ * [serverUrl] is read when a config conflict is posted, for its link to the web.
  */
-class Notifier(context: Context) {
+class Notifier(context: Context, private val serverUrl: () -> String? = { null }) {
     private val ctx = context.applicationContext
     private val nm = ctx.getSystemService(NotificationManager::class.java)
     private val nextOther = AtomicInteger(0)
@@ -25,8 +38,11 @@ class Notifier(context: Context) {
         const val ID_STATUS = 1
         const val ID_CLOSE_EMULATOR = 2
         const val ID_CONFLICT = 3
+        const val ID_REVOKED = 4
         private const val ID_OTHER_BASE = 100
         private const val ID_OTHER_COUNT = 20
+        const val REVOKED_TITLE = "This device was removed from the server"
+        const val REVOKED_TEXT = "Tandem stopped syncing here. Open Tandem to sign in again or pair this device."
     }
 
     fun ensureChannels() {
@@ -43,10 +59,10 @@ class Notifier(context: Context) {
         )
     }
 
-    private fun openApp(): PendingIntent = PendingIntent.getActivity(
-        ctx, 0, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-    )
+    private fun openApp(): PendingIntent = pending(Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), 0)
+
+    private fun pending(i: Intent, code: Int): PendingIntent =
+        PendingIntent.getActivity(ctx, code, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     fun status(text: String): Notification = Notification.Builder(ctx, CHANNEL_SYNC)
         .setSmallIcon(android.R.drawable.stat_notify_sync)
@@ -73,10 +89,15 @@ class Notifier(context: Context) {
             else -> "${c.emulatorName} ${c.kind.name.lowercase()} for ${c.displayName ?: c.gameKey}" +
                 (if (c.slot.isNotEmpty()) " (slot ${c.slot})" else "")
         }
-        post(ID_CONFLICT, "Sync conflict", "$what changed on another device too. Both versions are kept on the server.")
+        val next = if (c.kind == null) " Choose one on the web's Configs page." else ""
+        post(ID_CONFLICT, "Sync conflict", "$what changed on another device too. Both versions are kept on the server.$next",
+            pending(conflictTarget(ctx, c, serverUrl()), 1))
     }
 
-    private fun post(id: Int, title: String, text: String) {
+    /** Once, when the server first answers device_revoked: the persistent state lives in the app. */
+    fun revoked() = post(ID_REVOKED, REVOKED_TITLE, REVOKED_TEXT)
+
+    private fun post(id: Int, title: String, text: String, open: PendingIntent = openApp()) {
         runCatching {
             nm.notify(
                 id,
@@ -86,7 +107,7 @@ class Notifier(context: Context) {
                     .setContentText(text)
                     .setStyle(Notification.BigTextStyle().bigText(text))
                     .setAutoCancel(true)
-                    .setContentIntent(openApp())
+                    .setContentIntent(open)
                     .build(),
             )
         }

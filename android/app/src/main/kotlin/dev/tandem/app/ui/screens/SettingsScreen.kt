@@ -44,6 +44,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.tandem.app.ui.feedback.Cue
+import dev.tandem.app.ui.feedback.LocalCueSink
 import dev.tandem.app.ui.input.Action
 import dev.tandem.app.ui.input.ActionLayer
 import dev.tandem.app.ui.input.OnAction
@@ -58,12 +60,21 @@ import dev.tandem.app.ui.kit.SheetChoice
 import dev.tandem.app.ui.kit.rememberSheetChoice
 import dev.tandem.app.ui.kit.EmuRadius
 import dev.tandem.app.ui.kit.Fact
+import dev.tandem.app.ui.kit.Glyph
+import dev.tandem.app.ui.kit.LocalRowFocused
 import dev.tandem.app.ui.kit.Facts
 import dev.tandem.app.ui.kit.Hint
 import dev.tandem.app.ui.kit.Tone
 import dev.tandem.app.ui.theme.EmuType
 import dev.tandem.app.ui.theme.LocalEmu
 import dev.tandem.app.ui.theme.ThemeMode
+import dev.tandem.app.ui.state.INSECURE_URL_WARNING
+import dev.tandem.app.ui.state.PermissionRequest
+import dev.tandem.app.ui.state.ServerChange
+import dev.tandem.app.ui.state.insecureUrl
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.verticalScroll
+import kotlinx.coroutines.launch
 
 /** What the tab asks its host to do. */
 class SettingsActions(
@@ -76,20 +87,42 @@ class SettingsActions(
     val chooseVariant: (emulatorId: String, pkg: String) -> Unit = { _, _ -> },
     val consumeFocus: () -> Unit = {},
     val setTheme: (ThemeMode) -> Unit = {},
+    val setHaptics: (Boolean) -> Unit = {},
+    val setSounds: (Boolean) -> Unit = {},
     val signOut: () -> Unit = {},
-    val diagnostics: () -> Unit = {},
+    /** Opens the diagnostics screen; null in release builds, which have no Diagnostics section. */
+    val diagnostics: (() -> Unit)? = {},
     /** Opens the setup flow (Account › Set up again). */
     val setUp: () -> Unit = {},
+    /** Shows the system prompt for notifications or the battery exemption. */
+    val requestPermission: (PermissionRequest) -> Unit = {},
+    /** Account › Change server address: checks the address, then switches (see SettingsViewModel.changeServer). */
+    val changeServer: (String) -> Unit = {},
+    val clearServerChange: () -> Unit = {},
+    /** About › Open-source licences: the bundled font licences and the dependency list, as text. */
+    val licences: () -> String = { "" },
     val back: () -> Unit = {},
 )
 
-fun SettingsViewModel.actions(diagnostics: () -> Unit, setUp: () -> Unit, back: () -> Unit) = SettingsActions(
+fun SettingsViewModel.actions(diagnostics: (() -> Unit)?, setUp: () -> Unit, back: () -> Unit, licences: () -> String = { "" }) = SettingsActions(
     select = ::select, setAutoApply = ::setAutoApply, addRomDir = ::addRomDir, removeRomDir = ::removeRomDir,
-    setOverride = ::setOverride, chooseVariant = ::chooseVariant, consumeFocus = ::consumeFocus, setTheme = ::setTheme, signOut = ::signOut,
-    diagnostics = diagnostics, setUp = setUp, back = back,
+    setOverride = ::setOverride, chooseVariant = ::chooseVariant, consumeFocus = ::consumeFocus, setTheme = ::setTheme,
+    setHaptics = ::setHaptics, setSounds = ::setSounds, signOut = ::signOut,
+    diagnostics = diagnostics, setUp = setUp, requestPermission = ::requestPermission, changeServer = ::changeServer,
+    clearServerChange = ::clearServerChange, licences = licences, back = back,
 )
 
-const val AUTO_APPLY_COPY = "Apply newer saves automatically when the emulator is closed"
+const val AUTO_APPLY_COPY = "Apply arriving saves automatically when the emulator is closed"
+const val NOTIFICATIONS_COPY = "Notifications for conflicts and emulators to close"
+const val BATTERY_COPY = "Run in the background without battery optimisation"
+const val MELONDS_EXPORT_NOTE =
+    "melonDS settings back up only when you export them: in melonDS, export them to /sdcard/Tandem/melonds-export. " +
+        "On another device, import them from that folder in melonDS once they arrive."
+const val CHANGE_SERVER = "Change server address"
+const val CHANGE_SERVER_COPY =
+    "The same Tandem server at a new address, such as a new domain or proxy. Tandem checks that it answers for this " +
+        "device before it switches, and keeps everything it knows; nothing syncs again from scratch."
+const val LICENCES = "Open-source licences"
 const val REMOVE_ROM_COPY = "Games found only in this folder stop receiving saves on this device."
 const val SIGN_OUT_COPY = "This device stops syncing until you sign in again. Nothing on it is deleted."
 
@@ -97,6 +130,8 @@ const val SIGN_OUT_COPY = "This device stops syncing until you sign in again. No
 private sealed interface SyncRow {
     val key: String
     data class AutoApply(val on: Boolean) : SyncRow { override val key = "auto" }
+    data class Notifications(val on: Boolean) : SyncRow { override val key = "notifications" }
+    data class Battery(val on: Boolean) : SyncRow { override val key = "battery" }
     data class RomDir(val path: String) : SyncRow { override val key = "rom:$path" }
     data object AddRomDir : SyncRow { override val key = "add" }
     data class Override(val id: String, val label: String, val value: String, val default: String) : SyncRow {
@@ -105,7 +140,7 @@ private sealed interface SyncRow {
 }
 
 private fun syncRows(ui: SettingsUi): List<SyncRow> =
-    listOf<SyncRow>(SyncRow.AutoApply(ui.autoApply)) +
+    listOf(SyncRow.AutoApply(ui.autoApply), SyncRow.Notifications(ui.permissions.notifications), SyncRow.Battery(ui.permissions.battery)) +
         ui.romDirs.map { SyncRow.RomDir(it) } +
         SyncRow.AddRomDir +
         SyncRow.Override(AZAHAR_ROOT, "Azahar folder", ui.azaharRoot, "Azahar's own folder") +
@@ -116,6 +151,8 @@ private sealed interface Sheet {
     data object SignOut : Sheet
     data class RemoveRomDir(val path: String) : Sheet
     data class Path(val title: String, val detail: String, val confirm: String, val initial: String, val submit: (String) -> String?) : Sheet
+    data object Server : Sheet
+    data object Licences : Sheet
 }
 
 private val THEMES = listOf(
@@ -123,6 +160,22 @@ private val THEMES = listOf(
     ThemeMode.Light to "",
     ThemeMode.Dark to "",
 )
+
+const val HAPTICS_COPY = "Haptics"
+const val HAPTICS_DETAIL = "A tick as the cursor moves, when this device's touch feedback is on"
+const val SOUNDS_COPY = "UI sounds"
+const val SOUNDS_DETAIL = "Short, quiet clicks for move, open and back"
+
+/** A row of Settings › Appearance: the three themes, then the two feedback switches. */
+private sealed interface LookRow {
+    val key: String
+    data class Theme(val mode: ThemeMode, val meta: String) : LookRow { override val key = "theme:${mode.name}" }
+    data class Haptics(val on: Boolean) : LookRow { override val key = "haptics" }
+    data class Sounds(val on: Boolean) : LookRow { override val key = "sounds" }
+}
+
+private fun lookRows(ui: SettingsUi): List<LookRow> =
+    THEMES.map { (m, meta) -> LookRow.Theme(m, meta) } + LookRow.Haptics(ui.haptics) + LookRow.Sounds(ui.sounds)
 
 /**
  * The Settings tab. Its sections are sub-tabs (L2/R2): Sync, Emulators (which installed variant each emulator syncs),
@@ -136,6 +189,8 @@ fun SettingsScreen(
     actions: SettingsActions,
     now: () -> Long = { SystemClock.uptimeMillis() },
 ) {
+    // A release build has no diagnostics screen, so no Diagnostics section either.
+    val sections = SettingsSection.entries.filter { it != SettingsSection.Diagnostics || actions.diagnostics != null }
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var syncAt by remember { mutableIntStateOf(0) }
     var emuAt by remember { mutableIntStateOf(0) }
@@ -161,6 +216,8 @@ fun SettingsScreen(
     fun openSync(r: SyncRow) {
         when (r) {
             is SyncRow.AutoApply -> actions.setAutoApply(!r.on)
+            is SyncRow.Notifications -> if (!r.on) actions.requestPermission(PermissionRequest.Notifications)
+            is SyncRow.Battery -> if (!r.on) actions.requestPermission(PermissionRequest.Battery)
             is SyncRow.RomDir -> sheet = Sheet.RemoveRomDir(r.path)
             SyncRow.AddRomDir -> openPath(Sheet.Path(
                 "Add a ROM folder",
@@ -174,7 +231,15 @@ fun SettingsScreen(
         }
     }
     fun openVariant(v: VariantLine) { if (v.pkg != null && !v.active) actions.chooseVariant(v.emulatorId, v.pkg) }
-    fun chooseTheme(i: Int) = actions.setTheme(THEMES[i].first)
+    val looks = lookRows(ui)
+    val look = looks.getOrNull(themeAt.coerceIn(0, looks.lastIndex))
+    fun openLook(r: LookRow) {
+        when (r) {
+            is LookRow.Theme -> actions.setTheme(r.mode)
+            is LookRow.Haptics -> actions.setHaptics(!r.on)
+            is LookRow.Sounds -> actions.setSounds(!r.on)
+        }
+    }
 
     fun submitPath() {
         val p = sheet as? Sheet.Path ?: return
@@ -182,7 +247,12 @@ fun SettingsScreen(
         if (e == null) sheet = null else pathError = e
     }
     fun confirmSignOut() { sheet = null; actions.signOut() }
-    val cancel = Hint(Action.B, "Cancel") { sheet = null }
+    fun openServer() { pathText.setTextAndPlaceCursorAtEnd(ui.serverUrl.orEmpty()); actions.clearServerChange(); sheet = Sheet.Server }
+    fun submitServer() = actions.changeServer(pathText.text.toString())
+    fun closeServer() { sheet = null; actions.clearServerChange() }
+    // A switch that went through closes the sheet; the Account facts show the new address.
+    LaunchedEffect(ui.serverChange) { if (ui.serverChange is ServerChange.Done && sheet == Sheet.Server) closeServer() }
+    val cancel = Hint(Action.B, "Cancel") { if (sheet == Sheet.Server) closeServer() else sheet = null }
     val keep = Hint(Action.B, "Keep") { sheet = null }
     fun confirmRemove(path: String) { sheet = null; actions.removeRomDir(path) }
 
@@ -194,9 +264,15 @@ fun SettingsScreen(
         Sheet.SignOut -> listOf(choice.hint("Sign out", "Cancel", ::confirmSignOut, cancel.onClick), cancel)
         is Sheet.Path -> listOf(Hint(Action.A, open.confirm, ::submitPath), cancel)
         is Sheet.RemoveRomDir -> listOf(choice.hint("Remove", "Keep", { confirmRemove(open.path) }, keep.onClick), keep)
+        Sheet.Server -> listOfNotNull(
+            if (ui.serverChange == ServerChange.Checking) null else Hint(Action.A, "Check and switch", ::submitServer), cancel,
+        )
+        Sheet.Licences -> listOf(Hint(Action.B, "Close") { sheet = null })
         null -> when (ui.section) {
             SettingsSection.Sync -> when (syncRow) {
                 is SyncRow.AutoApply -> listOf(Hint(Action.A, if (syncRow.on) "Turn off" else "Turn on") { openSync(syncRow) }, back)
+                is SyncRow.Notifications, is SyncRow.Battery ->
+                    if (syncRow.isOn()) listOf(back) else listOf(Hint(Action.A, "Allow") { openSync(syncRow) }, back)
                 is SyncRow.RomDir -> listOf(Hint(Action.X, "Remove") { openSync(syncRow) }, back)
                 SyncRow.AddRomDir -> listOf(Hint(Action.A, "Add") { openSync(SyncRow.AddRomDir) }, back)
                 is SyncRow.Override -> listOf(Hint(Action.A, "Change") { openSync(syncRow) }, back)
@@ -205,14 +281,21 @@ fun SettingsScreen(
             SettingsSection.Emulators ->
                 if (variant?.pkg != null && !variant.active) listOf(Hint(Action.A, "Use this one") { openVariant(variant) }, back)
                 else listOf(back)
-            SettingsSection.Appearance ->
-                if (THEMES[themeAt.coerceIn(0, THEMES.lastIndex)].first != ui.theme) {
-                    listOf(Hint(Action.A, "Use this one") { chooseTheme(themeAt) }, back)
-                } else listOf(back)
+            SettingsSection.Appearance -> when (look) {
+                is LookRow.Theme -> if (look.mode != ui.theme) listOf(Hint(Action.A, "Use this one") { openLook(look) }, back) else listOf(back)
+                is LookRow.Haptics -> listOf(Hint(Action.A, if (look.on) "Turn off" else "Turn on") { openLook(look) }, back)
+                is LookRow.Sounds -> listOf(Hint(Action.A, if (look.on) "Turn off" else "Turn on") { openLook(look) }, back)
+                null -> listOf(back)
+            }
             SettingsSection.Account ->
-                if (ui.signedIn) listOf(Hint(Action.A, "Sign out") { sheet = Sheet.SignOut }, Hint(Action.X, SET_UP_AGAIN, actions.setUp), back)
+                if (ui.signedIn && !ui.revoked) listOf(
+                    Hint(Action.A, "Sign out") { sheet = Sheet.SignOut }, Hint(Action.X, SET_UP_AGAIN, actions.setUp),
+                    Hint(Action.Y, CHANGE_SERVER, ::openServer), back,
+                )
+                else if (ui.signedIn) listOf(Hint(Action.A, "Sign out") { sheet = Sheet.SignOut }, back)
                 else listOf(Hint(Action.A, SET_UP, actions.setUp), back)
-            SettingsSection.Diagnostics -> listOf(Hint(Action.A, "Open", actions.diagnostics), back)
+            SettingsSection.About -> listOf(Hint(Action.A, LICENCES) { sheet = Sheet.Licences }, back)
+            SettingsSection.Diagnostics -> listOfNotNull(actions.diagnostics?.let { Hint(Action.A, "Open", it) }, back)
         }
     }
     val status = when (ui.section) {
@@ -223,7 +306,7 @@ fun SettingsScreen(
     ConsoleScaffold(
         top = top,
         tabs = {
-            BumperTabs(SettingsSection.entries.map { it.label }, ui.section.ordinal, { actions.select(SettingsSection.entries[it]) }, level = 2)
+            BumperTabs(sections.map { it.label }, sections.indexOf(ui.section).coerceAtLeast(0), { actions.select(sections[it]) }, level = 2)
         },
         hints = hints,
         status = if (open == null) status else null,
@@ -241,22 +324,32 @@ fun SettingsScreen(
                             onOpen = ::openVariant, modifier = Modifier.weight(1f, fill = false),
                         ) { v, _ -> VariantCells(v) }
                         Note("Each emulator syncs the saves of its active variant.")
+                        if (ui.variants.any { it.emulatorId == "melonds" && it.pkg != null }) Note(MELONDS_EXPORT_NOTE)
                     }
                     SettingsSection.Appearance -> CursorList(
-                        THEMES, key = { it.first }, selected = themeAt, onSelect = { themeAt = it },
-                        onOpen = { chooseTheme(THEMES.indexOf(it)) }, modifier = Modifier.weight(1f, fill = false),
-                    ) { (mode, meta), _ ->
-                        Cell(mode.name, Modifier.width(160.dp), style = EmuType.rowPrimary)
-                        Cell(meta, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.meta)
-                        if (mode == ui.theme) Cell("active", tone = Tone.Ink2, style = EmuType.meta)
+                        looks, key = { it.key }, selected = themeAt, onSelect = { themeAt = it },
+                        onOpen = ::openLook, modifier = Modifier.weight(1f, fill = false),
+                    ) { r, _ ->
+                        when (r) {
+                            is LookRow.Theme -> {
+                                Cell(r.mode.name, Modifier.width(160.dp), style = EmuType.rowPrimary)
+                                Cell(r.meta, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.meta)
+                                if (r.mode == ui.theme) Cell("active", tone = Tone.Ink2, style = EmuType.meta)
+                            }
+                            is LookRow.Haptics -> SwitchCells(HAPTICS_COPY, HAPTICS_DETAIL, r.on)
+                            is LookRow.Sounds -> SwitchCells(SOUNDS_COPY, SOUNDS_DETAIL, r.on)
+                        }
                     }
-                    SettingsSection.Account -> Account(ui, actions.setUp) { sheet = Sheet.SignOut }
-                    SettingsSection.Diagnostics -> Diagnostics(actions.diagnostics)
+                    SettingsSection.Account -> Account(ui, actions.setUp, ::openServer) { sheet = Sheet.SignOut }
+                    SettingsSection.About -> About(ui) { sheet = Sheet.Licences }
+                    SettingsSection.Diagnostics -> actions.diagnostics?.let { Diagnostics(it) }
                 }
             }
             when (open) {
+                Sheet.Server -> ServerSheet(pathText, ui.serverChange, ::submitServer, ::closeServer)
+                Sheet.Licences -> LicencesSheet(remember { actions.licences() }) { sheet = null }
                 Sheet.SignOut -> SheetFrame("Sign out?", SIGN_OUT_COPY, "Sign out", ::confirmSignOut, cancel.onClick, choice = choice) {}
-                is Sheet.Path -> PathSheet(open.title, open.detail, open.confirm, pathText, pathError, ::submitPath, cancel.onClick)
+                is Sheet.Path -> PathSheet(open.title, open.detail, open.confirm, pathText, pathError, ::submitPath, cancel = cancel.onClick)
                 is Sheet.RemoveRomDir -> SheetFrame(
                     "Remove ${open.path}?", REMOVE_ROM_COPY, "Remove", { confirmRemove(open.path) }, keep.onClick,
                     cancelLabel = "Keep", choice = choice,
@@ -274,11 +367,25 @@ private fun RowScope.SyncCells(r: SyncRow) {
             Cell(AUTO_APPLY_COPY, Modifier.weight(1f), style = EmuType.rowPrimary)
             Cell(if (r.on) "On" else "Off", tone = Tone.Ink2, style = EmuType.meta)
         }
+        // Off is a problem for sync (alerts never arrive, the system kills it): the one place these rows use colour.
+        is SyncRow.Notifications -> {
+            Cell(NOTIFICATIONS_COPY, Modifier.weight(1f), style = EmuType.rowPrimary)
+            Cell(if (r.on) "Allowed" else "Off", tone = if (r.on) Tone.Ink2 else Tone.Fault, style = EmuType.meta)
+        }
+        is SyncRow.Battery -> {
+            Cell(BATTERY_COPY, Modifier.weight(1f), style = EmuType.rowPrimary)
+            Cell(if (r.on) "Allowed" else "Optimised", tone = if (r.on) Tone.Ink2 else Tone.Wait, style = EmuType.meta)
+        }
         is SyncRow.RomDir -> {
             Cell("ROM folder", Modifier.width(160.dp), style = EmuType.rowPrimary)
             Cell(r.path, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.mono)
         }
-        SyncRow.AddRomDir -> Cell("Add a ROM folder", Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.rowPrimary)
+        // An action, not a heading: it reads as one (the ellipsis says a field opens) and shows its button.
+        SyncRow.AddRomDir -> {
+            Cell(ADD_ROM_DIR, Modifier.weight(1f), style = EmuType.rowPrimary)
+            Glyph(Action.A, inverted = LocalRowFocused.current)
+            Cell("Add", tone = Tone.Ink2, style = EmuType.meta)
+        }
         is SyncRow.Override -> {
             Cell(r.label, Modifier.width(160.dp), style = EmuType.rowPrimary)
             if (r.value.isEmpty()) Cell(r.default, Modifier.weight(1f), tone = Tone.Ink3, style = EmuType.meta)
@@ -286,6 +393,16 @@ private fun RowScope.SyncCells(r: SyncRow) {
         }
     }
 }
+
+/** A switch row: what it is, what it does, then On or Off. */
+@Composable
+private fun RowScope.SwitchCells(label: String, detail: String, on: Boolean) {
+    Cell(label, Modifier.width(160.dp), style = EmuType.rowPrimary)
+    Cell(detail, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.meta)
+    Cell(if (on) "On" else "Off", tone = Tone.Ink2, style = EmuType.meta)
+}
+
+const val ADD_ROM_DIR = "Add a ROM folder…"
 
 @Composable
 private fun RowScope.VariantCells(v: VariantLine) {
@@ -307,22 +424,87 @@ private fun Note(text: String) {
 const val SET_UP_AGAIN = "Set up again"
 const val SET_UP = "Set up this device"
 
+private fun SyncRow.isOn() = when (this) {
+    is SyncRow.Notifications -> on
+    is SyncRow.Battery -> on
+    else -> true
+}
+
 @Composable
-private fun Account(ui: SettingsUi, setUp: () -> Unit, signOut: () -> Unit) {
+private fun Account(ui: SettingsUi, setUp: () -> Unit, changeServer: () -> Unit, signOut: () -> Unit) {
+    val c = LocalEmu.current
     Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
         Facts(
             listOf(
                 Fact("Server", ui.serverUrl ?: "Not set", mono = ui.serverUrl != null),
-                Fact("This device", if (ui.signedIn) ui.deviceName ?: "Signed in" else "Not signed in"),
+                Fact("This device", when {
+                    ui.revoked -> "Removed from the server"
+                    ui.signedIn -> ui.deviceName ?: "Signed in"
+                    else -> "Not signed in"
+                }),
             ),
-            Modifier.padding(bottom = 16.dp),
+            Modifier.padding(bottom = if (insecureUrl(ui.serverUrl)) 8.dp else 16.dp),
         )
+        if (insecureUrl(ui.serverUrl)) {
+            BasicText(INSECURE_URL_WARNING, Modifier.padding(bottom = 16.dp).widthIn(max = 620.dp), style = EmuType.meta.copy(color = c.wait))
+        }
+        if (ui.revoked) {
+            BasicText(REVOKED_REST, Modifier.padding(bottom = 16.dp).widthIn(max = 620.dp), style = EmuType.body.copy(color = c.ink2))
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (ui.signedIn) {
                 EmuButton("Sign out", glyph = Action.A, onClick = signOut)
-                EmuButton(SET_UP_AGAIN, glyph = Action.X, onClick = setUp)
+                if (!ui.revoked) {
+                    EmuButton(SET_UP_AGAIN, glyph = Action.X, onClick = setUp)
+                    EmuButton(CHANGE_SERVER, glyph = Action.Y, onClick = changeServer)
+                }
             } else {
                 EmuButton(SET_UP, glyph = Action.A, onClick = setUp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun About(ui: SettingsUi, licences: () -> Unit) {
+    Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Facts(listOf(Fact("Tandem", ui.appVersion.ifEmpty { "—" }, mono = true)), Modifier.padding(bottom = 16.dp))
+        EmuButton(LICENCES, glyph = Action.A, onClick = licences)
+    }
+}
+
+/** Account › Change server address: the new address, checked against the server before anything changes. */
+@Composable
+private fun ServerSheet(text: TextFieldState, state: ServerChange, submit: () -> Unit, cancel: () -> Unit) {
+    val error = (state as? ServerChange.Failed)?.message
+    val note = when {
+        state == ServerChange.Checking -> "Checking the new address…" to false
+        insecureUrl(text.text.toString()) -> INSECURE_URL_WARNING to true
+        else -> null
+    }
+    PathSheet(CHANGE_SERVER, CHANGE_SERVER_COPY, "Check and switch", text, error, submit, note = note, cancel = cancel)
+}
+
+/** About › Open-source licences, over the section: the text scrolls with Up and Down; B closes it. */
+@Composable
+private fun LicencesSheet(text: String, close: () -> Unit) {
+    val c = LocalEmu.current
+    val scroll = androidx.compose.foundation.rememberScrollState()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    ActionLayer {
+        OnAction { a ->
+            when (a) {
+                Action.B -> close()
+                Action.Up -> scope.launch { scroll.animateScrollBy(-240f) }
+                Action.Down -> scope.launch { scroll.animateScrollBy(240f) }
+                else -> {}
+            }
+            true
+        }
+        Box(Modifier.fillMaxSize().background(c.bg).pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } }) {
+            Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                BasicText(LICENCES, Modifier.padding(bottom = 10.dp), style = EmuType.section.copy(color = c.ink, fontSize = 20.sp))
+                BasicText(text, Modifier.widthIn(max = 720.dp), style = EmuType.mono.copy(color = c.ink2, fontSize = 12.sp))
             }
         }
     }
@@ -349,6 +531,8 @@ internal fun PathSheet(
     text: TextFieldState,
     error: String?,
     submit: () -> Unit,
+    /** A line under the field that is not a refusal, and whether it is a warning (amber). */
+    note: Pair<String, Boolean>? = null,
     cancel: () -> Unit,
 ) {
     val c = LocalEmu.current
@@ -374,6 +558,7 @@ internal fun PathSheet(
             decorator = { inner -> Box(contentAlignment = Alignment.CenterStart) { inner() } },
         )
         if (error != null) BasicText(error, Modifier.padding(top = 8.dp), style = EmuType.meta.copy(color = c.fault))
+        else if (note != null) BasicText(note.first, Modifier.padding(top = 8.dp).widthIn(max = 620.dp), style = EmuType.meta.copy(color = if (note.second) c.wait else c.ink2))
     }
     LaunchedEffect(title) { focus.requestFocus() }
 }
@@ -394,13 +579,14 @@ private fun SheetFrame(
     content: @Composable () -> Unit,
 ) {
     val c = LocalEmu.current
+    val cues = LocalCueSink.current
     ActionLayer {
         OnAction { a ->
             if (choice != null) return@OnAction choice.onAction(a, confirm, cancel)
             when (a) {
                 Action.A -> confirm()
                 Action.B -> cancel()
-                else -> {}
+                else -> cues?.cue(Cue.Reject)   // the sheet takes every button; the others do nothing here
             }
             true
         }

@@ -195,4 +195,19 @@ class ActivityViewModelTest {
         val vm = vm(f); vm.refresh(); runCurrent()
         assertEquals(listOf(false, false, false, false, true, false), vm.ui.value.entries.map { it.fault })
     }
+
+    @Test fun linesUseEmulatorAndGameNamesWhereTheAppHasThem() {
+        val names = mapOf("eden" to "Eden", "ppsspp" to "PPSSPP", "retroarch" to "RetroArch")
+        val titles = mapOf("ppsspp|ULUS10400" to "Crisis Core")
+        fun h(message: String, emu: String?, key: String? = null) = humanize(
+            ActivityItem(1, "2026-11-21T10:00:00Z", "x", message, null, null, emu, key), { names[it] }, { e, k -> titles["$e|$k"] },
+        )
+        assertEquals("Thor uploaded the Eden config", h("Thor uploaded the eden config", "eden"))
+        assertEquals("Thor uploaded a save for Crisis Core", h("Thor uploaded a save for ULUS10400", "ppsspp", "ULUS10400"))
+        assertEquals("Created RetroArch group Handhelds from Thor", h("Created retroarch group Handhelds from Thor", "retroarch"))
+        // The id inside a game key, or in a longer word, stays as it is.
+        assertEquals("Thor uploaded a save for retroarch/Super Metroid", h("Thor uploaded a save for retroarch/Super Metroid", "retroarch", "retroarch/Super Metroid"))
+        assertEquals("Odin 3 paired", h("Odin 3 paired", null))
+        assertEquals("unknown emu", h("unknown emu", "cemu"))
+    }
 }

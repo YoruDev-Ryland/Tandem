@@ -30,6 +30,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -39,14 +40,21 @@ import dev.tandem.app.api.encodeSegment
 import dev.tandem.app.service.AppGraph
 import dev.tandem.app.service.SyncService
 import dev.tandem.app.sync.StateStore
+import dev.tandem.app.ui.feedback.Cue
+import dev.tandem.app.ui.feedback.LocalCueSink
 import dev.tandem.app.ui.input.Action
 import dev.tandem.app.ui.input.OnAction
 import dev.tandem.app.ui.kit.Cell
 import dev.tandem.app.ui.kit.ConsoleScaffold
 import dev.tandem.app.ui.kit.CursorList
 import dev.tandem.app.ui.kit.EmptyLine
+import dev.tandem.app.ui.kit.EmuButton
 import dev.tandem.app.ui.kit.ErrorLine
 import dev.tandem.app.ui.kit.Hint
+import dev.tandem.app.ui.kit.MARK_W
+import dev.tandem.app.ui.kit.PRESENCE_W
+import dev.tandem.app.ui.kit.PresenceMark
+import dev.tandem.app.ui.kit.SystemMark
 import dev.tandem.app.ui.kit.Tone
 import dev.tandem.app.ui.theme.EmuType
 import dev.tandem.app.ui.theme.LocalEmu
@@ -57,6 +65,8 @@ class DeviceActions(
     val syncNow: () -> Unit = {},
     val settings: (emulatorId: String) -> Unit = {},
     val setup: () -> Unit = {},
+    /** Removed on the server: sign out (nothing on the device is deleted) and open sign-in. */
+    val pairAgain: () -> Unit = {},
     val back: () -> Unit = {},
 )
 
@@ -65,7 +75,7 @@ class DeviceActions(
  * nothing (sync stays stopped until a sign-in), and a start Android refuses is logged, not thrown.
  */
 fun syncNow(context: Context, store: StateStore = AppGraph.store(context)) {
-    if (store.deviceKey.isNullOrBlank()) return
+    if (!store.canSync) return
     SyncService.tryStart(context, SyncService.ACTION_SCAN)
     SyncService.tryStart(context, SyncService.ACTION_APPLY)
 }
@@ -112,7 +122,7 @@ fun DeviceScreen(ui: DeviceUi, top: @Composable RowScope.() -> Unit, actions: De
     fun openEmulator() = if (ui.signedIn) enterGames() else actions.setup()
     fun openGame(g: GameLine) { focused?.let { actions.openGame(it.id, g.key) } }
 
-    val hints = listOf(
+    val hints = if (ui.revoked) listOf(Hint(Action.A, "Sign in again", actions.pairAgain), Hint(Action.B, "Back", actions.back)) else listOf(
         Hint(Action.A, if (ui.signedIn) "Open" else "Sign in") {
             when {
                 !ui.signedIn -> actions.setup()
@@ -128,17 +138,19 @@ fun DeviceScreen(ui: DeviceUi, top: @Composable RowScope.() -> Unit, actions: De
     ConsoleScaffold(
         top = top,
         hints = hints,
-        onAction = { a ->
-            when (a) {
-                Action.Right -> { if (!inGames && ui.signedIn) enterGames(); true }
-                Action.Left -> { pane = Pane.Emulators; true }
-                else -> false
-            }
-        },
     ) {
+        // Removed on the server: nothing here syncs any more, so the only thing to show is that, and the way back.
+        if (ui.revoked) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                BasicText(REVOKED_LINE, Modifier.padding(top = 4.dp, bottom = 8.dp), style = EmuType.title.copy(color = LocalEmu.current.fault))
+                BasicText(REVOKED_REST, Modifier.widthIn(max = 560.dp).padding(bottom = 16.dp), style = EmuType.body.copy(color = LocalEmu.current.ink2))
+                EmuButton("Sign in again", primary = true, glyph = Action.A, onClick = actions.pairAgain)
+            }
+            return@ConsoleScaffold
+        }
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val portrait = maxWidth < 600.dp
-            val emuWidth = emulatorsWidth(maxWidth)
+            val emuWidth = emulatorsWidth(maxWidth, presenceColumns(ui))
             val emulators: @Composable (Modifier) -> Unit = { m ->
                 Column(m.onPress { touch.fromInactive = inGames; pane = Pane.Emulators }) {
                     BasicText("Emulators", Modifier.padding(top = 4.dp, bottom = 12.dp), style = EmuType.title.copy(color = LocalEmu.current.ink))
@@ -150,6 +162,7 @@ fun DeviceScreen(ui: DeviceUi, top: @Composable RowScope.() -> Unit, actions: De
                         onOpen = { if (touch.fromInactive) touch.fromInactive = false else openEmulator() },
                         modifier = Modifier.weight(1f),
                         active = !inGames,
+                        parked = inGames,
                     ) { p, _ ->
                         Cell(p.name, Modifier.weight(1f), style = EmuType.rowPrimary.copy(fontSize = 16.sp))
                         Cell(p.state, tone = p.tone, style = EmuType.meta)
@@ -177,6 +190,15 @@ fun DeviceScreen(ui: DeviceUi, top: @Composable RowScope.() -> Unit, actions: De
                 }
             }
         }
+        // Right goes into the games, Left comes back; where there is nowhere to go, the press pushes back.
+        val cues = LocalCueSink.current
+        OnAction { a ->
+            when (a) {
+                Action.Right -> { if (!inGames && ui.signedIn && games.isNotEmpty()) enterGames() else cues?.cue(Cue.Reject); true }
+                Action.Left -> { if (inGames) pane = Pane.Emulators else cues?.cue(Cue.Reject); true }
+                else -> false
+            }
+        }
         // Registered after the lists, so it sees every action first: a key press ends any touch in progress.
         OnAction { touch.fromInactive = false; false }
     }
@@ -199,17 +221,25 @@ private fun ColumnScope.GamesPane(
     when {
         !ui.signedIn -> EmptyLine("Sign in to see your games.")
         games.isNotEmpty() -> {
+            val matrix = presenceColumns(ui) > 0
             Row(Modifier.fillMaxWidth().height(24.dp).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 val h = EmuType.header.copy(color = c.ink3)
-                BasicText("GAME", Modifier.weight(1f), style = h)
-                BasicText("NEWEST ON", Modifier.width(NEWEST_W), style = h)
+                BasicText("GAME", Modifier.padding(start = MARK_W + 14.dp).weight(1f), style = h)
+                // One column per other device, headed by its name: the presence marks say what each one holds.
+                if (matrix) for (d in ui.devices) {
+                    BasicText(d.name.uppercase(), Modifier.width(PRESENCE_W), style = h, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                } else {
+                    BasicText("NEWEST ON", Modifier.width(NEWEST_W), style = h)
+                }
                 BasicText("HERE", Modifier.width(HERE_W), style = h)
             }
             CursorList(games, key = { it.key }, selected = selected, onSelect = onSelect, onOpen = onOpen,
                 modifier = Modifier.weight(1f, fill = false), active = active) { g, _ ->
+                SystemMark(g.system)
                 Cell(g.name, Modifier.weight(1f), style = EmuType.rowPrimary)
-                Cell(g.newestOn, Modifier.width(NEWEST_W), tone = g.newestTone, style = EmuType.meta)
+                if (matrix) for (p in g.presence) PresenceMark(p.presence, p.description)
+                else Cell(g.newestOn, Modifier.width(NEWEST_W), tone = g.newestTone, style = EmuType.meta)
                 Cell(g.here, Modifier.width(HERE_W), tone = g.tone, style = EmuType.meta)
             }
         }
@@ -236,11 +266,24 @@ private fun ColumnScope.GamesPane(
 private val NEWEST_W = 96.dp
 private val HERE_W = 192.dp   // the longest copy, "two saves · choose in Conflicts", whole even in SemiBold on the cursor row
 
-/** What the games table needs to stay readable: row padding, column gaps, NEWEST ON, HERE and a 200 dp GAME. */
-private val GAMES_MIN = 24.dp + 28.dp + NEWEST_W + HERE_W + 200.dp
+/** At most this many other devices get a presence column each; with more, NEWEST ON names the newest one instead. */
+internal const val MAX_PRESENCE = 3
+
+/** How many presence columns the games table shows: one per other device, none when there are none or too many. */
+internal fun presenceColumns(ui: DeviceUi): Int = ui.devices.size.takeIf { it in 1..MAX_PRESENCE } ?: 0
+
+/**
+ * What the games table needs to stay readable: row padding, the column gaps, the system mark, a presence column per
+ * other device (or NEWEST ON), HERE and a 180 dp GAME.
+ */
+private fun gamesMin(presence: Int): Dp {
+    val middle = if (presence > 0) PRESENCE_W * presence else NEWEST_W
+    val gaps = 14.dp * (2 + maxOf(1, presence))
+    return 24.dp + gaps + MARK_W + middle + HERE_W + 180.dp
+}
 
 /**
  * The emulators pane takes what the games table leaves, from 220 dp (the longest name and state) up to the mockup's
  * 380 dp. The Thor and the Odin 3 are 832 dp wide, not the mockup's 960, so a fixed 380 starved the GAME column.
  */
-internal fun emulatorsWidth(content: Dp): Dp = (content - 28.dp - GAMES_MIN).coerceIn(220.dp, 380.dp)
+internal fun emulatorsWidth(content: Dp, presence: Int = 1): Dp = (content - 28.dp - gamesMin(presence)).coerceIn(220.dp, 380.dp)

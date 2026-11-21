@@ -94,6 +94,11 @@ class SetupFlowTest {
     private var reloads = 0
     private var done = 0
     private var diagnostics = 0
+    /** Shizuku is installed unless a test says otherwise (null: not installed). */
+    private var openShizuku: (() -> Unit)? = { shizukuOpened++ }
+    private var shizukuOpened = 0
+    private val opened = mutableListOf<String>()
+    private val permissions = dev.tandem.app.ui.state.FixedPermissions()
     private var patience = 120_000L
     /** The flow's clock, in ms; tests move it by hand. */
     private var clock = 10_000L
@@ -146,6 +151,7 @@ class SetupFlowTest {
         shizuku = shizuku, askShizuku = { asked++ }, snapshot = snapshot, settings = settings,
         service = { services += it }, afterSignIn = {}, scope = scope, running = MutableStateFlow(emptySet()),
         emulatorName = { id -> modules.first { it.emulatorId == id }.displayName }, defaultDeviceName = "Thor", scanPatienceMillis = patience,
+        permissions = permissions,
     )
 
     private var shown: MutableState<SetupViewModel>? = null
@@ -157,7 +163,10 @@ class SetupFlowTest {
         val status = TopStatus("Thor", ServerConn.Connected, ShizukuState.Ready, signedIn = true)
         compose.setContent {
             EmuTheme(ThemeMode.Dark) {
-                key(holder.value) { SetupFlow(holder.value, status, openShizuku = null, onDone = { done++ }, diagnostics = { diagnostics++ }, now = { clock }) }
+                key(holder.value) {
+                    SetupFlow(holder.value, status, openShizuku = openShizuku, onDone = { done++ }, diagnostics = { diagnostics++ }, now = { clock },
+                        openUrl = { opened += it })
+                }
             }
         }
     }
@@ -296,11 +305,48 @@ class SetupFlowTest {
         compose.onNodeWithText("Join \"Handhelds\" with Odin 3").assertDoesNotExist()
         compose.onNodeWithText("Keep following \"Handhelds\"").assertIsDisplayed()
         compose.onNodeWithText("Copy Thor's settings once").assertDoesNotExist()
+        // In a group already, no other group is offered: one group per emulator (leave it on the web first).
+        compose.onNodeWithText("Join \"Living room\" with Deck").assertDoesNotExist()
         compose.key(KeyEvent.KEYCODE_DPAD_UP)
         clock += 1_000                           // the next emulator's screen has been read
-        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Join "Living room"
-        assertEquals(listOf("g4" to ME), joined)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Keep following "Handhelds": nothing to send
+        assertTrue(joined.isEmpty())
         assertEquals(SetupStep.FirstSync, vm.step.value)
+    }
+
+    @Test fun step4ReadsTheGroupsAgainAfterAChoiceAndOnEveryVisit() {
+        signedIn()
+        configs()
+        var reads = 0
+        val counting = object : Api by server { override suspend fun configs(): ConfigOverview { reads++; return overview } }
+        val vm = SetupViewModel(
+            handle = handleAt(SetupStep.SyncChoice), store = store, modules = modules, anon = { counting }, api = { counting },
+            shizuku = shizuku, askShizuku = {}, snapshot = snapshot, settings = settings, service = { services += it },
+            afterSignIn = {}, scope = scope, running = MutableStateFlow(emptySet()),
+            emulatorName = { id -> modules.first { it.emulatorId == id }.displayName }, defaultDeviceName = "Thor",
+        )
+        show(vm)
+        assertEquals(1, reads)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Eden: only back up
+        assertEquals(2, reads)
+        compose.key(KeyEvent.KEYCODE_BUTTON_B)   // back to Eden
+        compose.key(KeyEvent.KEYCODE_BUTTON_B)   // to step 3
+        clock += 1_000
+        vm.emulatorsDone()                         // and in again
+        assertEquals(3, reads)
+    }
+
+    @Test fun joinIsNeverOfferedWhileInAnotherGroup() {
+        val row = EmulatorConfigRow(
+            "retroarch",
+            groups = listOf(
+                GroupRow("g3", "Handhelds", listOf(DeviceRef(ME, "Me")), "hv", false),
+                GroupRow("g4", "Living room", listOf(DeviceRef("dev-deck", "Deck")), "lv", false),
+            ),
+            solo = emptyList(),
+        )
+        assertEquals(listOf(ConfigChoice.Follow, ConfigChoice.Own), configOptions(row, ME).map { it.choice })
+        assertEquals(ConfigChoice.Join("g3"), configOptions(row, "dev-other").first().choice)
     }
 
     @Test fun step4StartsOnOnlyBackUpSoAChangesNothing() {
@@ -420,6 +466,73 @@ class SetupFlowTest {
         assertEquals(SetupStep.Emulators, vm.step.value)
     }
 
+    @Test fun shizukuNotInstalledExplainsAndOpensItsDownloadPage() {
+        signedIn()
+        shizuku.value = ShizukuState.NotRunning
+        openShizuku = null
+        val vm = vm(handleAt(SetupStep.Shizuku))
+        show(vm)
+        compose.onNodeWithText("Install Shizuku").assertIsDisplayed()
+        compose.onNodeWithText(dev.tandem.app.ui.setup.steps.SHIZUKU_INSTALL_STEPS[0]).assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(listOf("https://shizuku.rikka.app/download/"), opened)
+    }
+
+    @Test fun shizukuInstalledButStoppedGivesTheWirelessDebuggingStepsAndTheRebootNote() {
+        signedIn()
+        shizuku.value = ShizukuState.NotRunning
+        val vm = vm(handleAt(SetupStep.Shizuku))
+        show(vm)
+        compose.onNodeWithText("Start Shizuku").assertIsDisplayed()
+        compose.onNodeWithText(dev.tandem.app.ui.setup.steps.SHIZUKU_START_STEPS[1]).assertIsDisplayed()
+        compose.onNodeWithText(dev.tandem.app.ui.setup.steps.SHIZUKU_REBOOT_NOTE).assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(1, shizukuOpened)
+    }
+
+    @Test fun withoutNotificationsOrTheBatteryExemptionTheBackgroundStepAsksForThem() {
+        signedIn()
+        permissions.set(dev.tandem.app.ui.state.PermissionState(notifications = false, battery = false))
+        shizuku.value = ShizukuState.NotRunning
+        val vm = vm(handleAt(SetupStep.Shizuku))
+        show(vm)
+        shizuku.value = ShizukuState.Ready
+        compose.waitForIdle()
+        assertEquals(SetupStep.Background, vm.step.value)
+        compose.onNodeWithText(dev.tandem.app.ui.setup.steps.NOTIFICATIONS_TITLE).assertIsDisplayed()
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // the cursor starts on notifications
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // battery
+        assertEquals(
+            listOf(dev.tandem.app.ui.state.PermissionRequest.Notifications, dev.tandem.app.ui.state.PermissionRequest.Battery),
+            permissions.requested,
+        )
+        permissions.set(dev.tandem.app.ui.state.PermissionState(notifications = true, battery = true))
+        compose.waitForIdle()
+        compose.onAllNodesWithText("allowed").fetchSemanticsNodes().let { assertEquals(2, it.size) }
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)   // Continue
+        assertEquals(SetupStep.Emulators, vm.step.value)
+        compose.key(KeyEvent.KEYCODE_BUTTON_B)   // back comes through the Background step
+        assertEquals(SetupStep.Background, vm.step.value)
+        compose.key(KeyEvent.KEYCODE_BUTTON_B)
+        assertEquals("it stays on Shizuku when coming back to look", SetupStep.Shizuku, vm.step.value)
+    }
+
+    @Test fun setUpAgainResumesWhereFinishLaterLeftIt() {
+        signedIn()
+        val vm = vm(handleAt(SetupStep.SyncChoice))
+        show(vm)
+        compose.key(KeyEvent.KEYCODE_BUTTON_Y)   // Finish later
+        assertFalse(vm.active.value)
+        vm.start(exitable = true)
+        assertEquals(SetupStep.SyncChoice, vm.step.value)
+        vm.completed()
+        vm.start(exitable = true)
+        // A finished setup starts again at Shizuku, which is on here, so it moves straight on.
+        assertEquals(SetupStep.Emulators, vm.step.value)
+    }
+
     @Test fun signedInBOnTheSignInSummaryLeavesEvenAtLaunch() {
         signedIn()
         val vm = vm(handleAt(SetupStep.Server))
@@ -453,6 +566,22 @@ class SetupFlowTest {
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         assertEquals(1, done)
         assertFalse(vm.active.value)
+    }
+
+    @Test fun step5ShowsAutoApplyOnAndXTurnsItOff() {
+        signedIn()
+        val vm = vm(handleAt(SetupStep.FirstSync))
+        show(vm)
+        compose.onNodeWithText("Apply arriving saves automatically when the emulator is closed").assertIsDisplayed()
+        compose.onNodeWithText("On").assertIsDisplayed()
+        assertTrue(store.settings.autoApply)
+        compose.key(KeyEvent.KEYCODE_BUTTON_X)
+        assertFalse(store.settings.autoApply)
+        compose.onNodeWithText("Off").assertIsDisplayed()
+        compose.onNodeWithText(dev.tandem.app.ui.setup.steps.AUTO_APPLY_OFF_NOTE).assertIsDisplayed()
+        assertEquals(1, reloads)   // the service picks the change up, as from Settings
+        compose.onNodeWithText("Apply arriving saves automatically when the emulator is closed").performClick()
+        assertTrue(store.settings.autoApply)
     }
 
     @Test fun firstSyncReviewDecidesWithTheFaceButtons() {

@@ -59,6 +59,8 @@ class SyncEngine(
     /** Runs [reportRunning]'s PUTs, so a hung (non-cancellable) call never blocks the caller past the timeout. */
     private val statusScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    /** Hears each upload the server took (accepted, unchanged or superseded): this device and the server agree on it. */
+    private val onSynced: () -> Unit = {},
 ) {
     private class Tracked(val module: EmulatorModule, val detected: Detected, val item: LocalItem)
 
@@ -122,6 +124,8 @@ class SyncEngine(
             detected.clear(); detected.putAll(found)
             watchDirs.clear(); watchDirs.putAll(dirs)
             tracked.entries.removeIf { it.value.module.emulatorId !in found }
+            // An emulator no longer detected has nothing left to retry.
+            queued.removeIf { k -> k.substringBefore('|') !in found }
         }
         reportStatus(found.values.toList())
         for ((m, d) in found.values) reportInstalls(m, d)
@@ -348,11 +352,13 @@ class SyncEngine(
                     val v = if (r.status == SaveUploadStatus.Accepted) r.versionId else r.headVersionId
                     store.put(key, ItemState(v, hash, hash))
                     log("$name: ${r.status} $v")
+                    onSynced()
                 }
                 SaveUploadStatus.Superseded -> {
                     // content equals a version the user already decided against; adopt the matched version
                     store.put(key, ItemState(r.versionId, hash, hash))
                     log("$name: superseded by ${r.versionId}")
+                    onSynced()
                 }
                 SaveUploadStatus.Conflict -> {
                     log("$name: conflict (head ${r.headVersionId})")
@@ -394,10 +400,12 @@ class SyncEngine(
                 SaveUploadStatus.Accepted, SaveUploadStatus.Unchanged -> {
                     store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash))
                     log("$name: ${r.status} ${r.versionId}")
+                    onSynced()
                 }
                 SaveUploadStatus.Superseded -> {
                     store.putConfigState(id, ConfigState(r.bundleId, r.versionId, hash, hash))
                     log("$name: superseded by ${r.versionId}")
+                    onSynced()
                 }
                 SaveUploadStatus.Conflict -> {
                     log("$name: conflict")
@@ -546,6 +554,9 @@ class SyncEngine(
         val byKey = items.associateBy { storeKey(m.emulatorId, it) }
         synchronized(ev) {
             tracked.entries.removeIf { it.value.module.emulatorId == m.emulatorId && it.key !in byKey }
+            // A failed item that is gone (deleted, moved) can't be retried: it must not count as failing forever.
+            val config = ItemKey.config(m.emulatorId)
+            queued.removeIf { k -> k.startsWith("${m.emulatorId}|") && k != config && k !in byKey }
             for ((k, item) in byKey) tracked[k] = Tracked(m, d, item)
             for (item in items) item.displayName?.takeIf { it.isNotBlank() }?.let { titles["${m.emulatorId}|${item.gameKey}"] = it }
             dirty.keys.retainAll(tracked.keys)

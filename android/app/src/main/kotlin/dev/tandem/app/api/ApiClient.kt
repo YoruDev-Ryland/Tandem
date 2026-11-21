@@ -29,10 +29,15 @@ fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .writeTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
     .build()
 
+/** A 401 `device_revoked` (C11): this device was removed on the server, and its key works nowhere now. */
+val ApiException.isRevoked: Boolean get() = status == 401 && code == "device_revoked"
+
+/** [onRevoked] hears every 401 `device_revoked` answer, before the call throws it. */
 class ApiClient(
     private val baseUrl: String,
     private val deviceKey: String?,
     private val http: OkHttpClient = defaultHttpClient(),
+    private val onRevoked: () -> Unit = {},
 ) : Api {
     private fun req(path: String): Request.Builder {
         val b = Request.Builder().url(baseUrl + path).header("Tandem-Protocol", PROTOCOL_VERSION)
@@ -44,7 +49,9 @@ class ApiClient(
         if (r.isSuccessful) return r
         val text = r.use { it.body.string() }
         val eb = runCatching { ProtocolJson.decodeFromString(ErrorBody.serializer(), text) }.getOrNull()
-        throw ApiException(r.code, eb?.code, eb?.message ?: text.ifBlank { r.message })
+        val e = ApiException(r.code, eb?.code, eb?.message ?: text.ifBlank { r.message })
+        if (e.isRevoked) onRevoked()
+        throw e
     }
 
     private fun <T> jsonBody(ser: KSerializer<T>, v: T): RequestBody =
@@ -176,6 +183,8 @@ class ApiClient(
         get("/v1/devices", ListSerializer(DeviceSummary.serializer()))
 
     override suspend fun me(): DeviceSummary = get("/v1/devices/me", DeviceSummary.serializer())
+
+    override suspend fun vault(): List<VaultItemDto> = get("/v1/vault", ListSerializer(VaultItemDto.serializer()))
 }
 
 private fun query(vararg params: Pair<String, Any?>): String =

@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.StateFlow
 import dev.tandem.app.model.ItemKey
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 
 @Serializable
 data class ItemState(val knownVersionId: String?, val knownManifestHash: String?, val lastUploadedHash: String?)
@@ -52,10 +54,18 @@ data class ApplyMarker(
 data class DeviceSettingsData(
     val romDirs: List<String> = emptyList(),
     val overrides: Map<String, String> = emptyMap(),
-    /** When false (the default) deliveries are applied only on an explicit request from the debug screen. */
-    val autoApply: Boolean = false,
+    /**
+     * When true (the default for a new install) arriving deliveries are applied as they come, or when their emulator
+     * closes; when false only on an explicit request (Sync now, a resolve, a setup choice). A state file written
+     * before this setting existed loads as false, so an existing install keeps what it did.
+     */
+    val autoApply: Boolean = true,
     /** The app's colours: "system" (follow the device), "light" or "dark". */
     val theme: String = "system",
+    /** A haptic tick per cursor step, a confirm on A, a reject at a list's end (the system's own setting still rules). */
+    val haptics: Boolean = true,
+    /** Short UI sounds (move, open, back); off unless chosen. */
+    val sounds: Boolean = false,
     /** The active variant (package) per emulator id; see EmulatorModule.activePackage. */
     val variants: Map<String, String> = emptyMap(),
 )
@@ -86,6 +96,12 @@ private data class StateData(
      * exit applies what waits for them, even with auto-apply off. Persisted so a session restart doesn't lose the ask.
      */
     val applyOnExit: Set<String> = emptySet(),
+    /** Epoch ms of the last sync that reached the server with nothing left failing (see StateStore.lastSyncedAt). */
+    val lastSyncedAt: Long? = null,
+    /** The server answered 401 device_revoked: this device was removed there. Cleared by signing in or out. */
+    val revoked: Boolean = false,
+    /** The setup step "Finish later" left, so Settings › Set up again resumes there; null when setup finished. */
+    val setupResume: String? = null,
 )
 
 /**
@@ -108,7 +124,11 @@ class StateStore(
     private fun load(): StateData {
         if (!file.exists()) return StateData()
         return try {
-            migrate(json.decodeFromString(StateData.serializer(), file.readText()))
+            val text = file.readText()
+            val d = json.decodeFromString(StateData.serializer(), text)
+            // Written before auto-apply existed: that install never applied on its own, so it still doesn't.
+            val settings = json.parseToJsonElement(text).jsonObject["settings"] as? JsonObject
+            migrate(if (settings != null && "autoApply" !in settings) d.copy(settings = d.settings.copy(autoApply = false)) else d)
         } catch (e: Exception) {
             if (e !is kotlinx.serialization.SerializationException && e !is IllegalArgumentException) throw e
             // Throws if the corrupt copy can't be preserved: never start empty and overwrite it.
@@ -147,6 +167,8 @@ class StateStore(
     }
 
     fun get(itemKey: String): ItemState? = synchronized(lock) { data.items[itemKey] }
+    /** Every item key this device has sync state for (ItemKey.of). */
+    fun itemKeys(): Set<String> = synchronized(lock) { data.items.keys.toSet() }
     fun put(itemKey: String, s: ItemState) = mutate { it.copy(items = it.items + (itemKey to s)) }
     fun configState(emulatorId: String): ConfigState? = synchronized(lock) { data.configs[emulatorId] }
     fun putConfigState(emulatorId: String, s: ConfigState) = mutate { it.copy(configs = it.configs + (emulatorId to s)) }
@@ -197,8 +219,48 @@ class StateStore(
      */
     fun signIn(serverUrl: String, deviceKey: String, deviceId: String, emulatorIds: Collection<String>) = mutate {
         it.copy(serverUrl = serverUrl, deviceKey = deviceKey, deviceId = deviceId, pendingForget = it.pendingForget + emulatorIds,
-            applyOnExit = emptySet())   // the ask was made of another account or device record
+            applyOnExit = emptySet(),   // the ask was made of another account or device record
+            revoked = false, lastSyncedAt = null)
     }
+
+    /**
+     * Moves this device to another address of the same server (a new domain or proxy), in one write. The key, the
+     * device id and every bit of sync state stay: the caller has checked the new address answers for this device.
+     */
+    fun changeServer(serverUrl: String) = mutate {
+        it.copy(serverUrl = serverUrl, signInForm = it.signInForm.copy(serverUrl = serverUrl))
+    }
+
+    /** See StateData.lastSyncedAt. */
+    val lastSyncedAt: Long? get() = synchronized(lock) { data.lastSyncedAt }
+
+    /**
+     * Records a sync at [at] (epoch ms). Written at most once per [minGapMillis], so a busy session doesn't rewrite the
+     * state file for every upload; returns whether it was written.
+     */
+    fun markSynced(at: Long, minGapMillis: Long = 60_000L): Boolean = synchronized(lock) {
+        val last = data.lastSyncedAt
+        if (last != null && at - last in 0 until minGapMillis) return false
+        mutate { it.copy(lastSyncedAt = at) }
+        true
+    }
+
+    /** See StateData.revoked. */
+    val revoked: Boolean get() = synchronized(lock) { data.revoked }
+    /** Marks this device removed on the server; returns true only the first time (one notification). */
+    fun markRevoked(): Boolean = synchronized(lock) {
+        if (data.revoked) return false
+        mutate { it.copy(revoked = true) }
+        true
+    }
+
+    /** Whether sync should run: signed in, and not removed on the server. */
+    val canSync: Boolean get() = synchronized(lock) { !data.deviceKey.isNullOrBlank() && !data.revoked }
+
+    /** See StateData.setupResume. */
+    var setupResume: String?
+        get() = synchronized(lock) { data.setupResume }
+        set(v) { if (v != setupResume) mutate { it.copy(setupResume = v) } }
 
     /**
      * Forgets the per-item and config sync state of every emulator in [pendingForget] and marks its server records
@@ -240,7 +302,7 @@ class StateStore(
     fun signOut(emulatorIds: Collection<String>) = mutate {
         // Cleared now, and again when the next sign-in's session starts: the stopping session may still write.
         it.copy(deviceKey = null, deviceId = null, items = emptyMap(), configs = emptyMap(), pendingForget = it.pendingForget + emulatorIds,
-            applyOnExit = emptySet())
+            applyOnExit = emptySet(), revoked = false, lastSyncedAt = null, setupResume = null)
     }
 
     /** See StateData.applyOnExit. */

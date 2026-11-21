@@ -2,7 +2,15 @@ package dev.tandem.app.ui.screens
 
 import android.view.KeyEvent
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import dev.tandem.app.ui.feedback.Notice
+import dev.tandem.app.ui.kit.LocalNotice
+import dev.tandem.app.ui.kit.LocalReadout
+import dev.tandem.app.ui.kit.LocalStatusLine
+import dev.tandem.app.ui.kit.Presence
+import dev.tandem.app.ui.kit.Readout
 import androidx.compose.ui.test.performClick
 import org.robolectric.RuntimeEnvironment
 import dev.tandem.app.fs.ShizukuState
@@ -69,7 +77,7 @@ class DeviceScreenTest {
         compose.setContent {
             EmuTheme(ThemeMode.Dark) {
                 DeviceScreen(ui, top = {
-                    TopBar(listOf("This device", "Activity", "Conflicts", "Settings"), 0, {}, status, fix, zone = ZoneOffset.UTC)
+                    TopBar(listOf("This device", "Activity", "Conflicts", "Settings"), 0, {}, status, fix)
                 }, actions = actions)
             }
         }
@@ -82,6 +90,49 @@ class DeviceScreenTest {
         compose.onNodeWithText(
             "Close Eden to get the newer Pokémon Sword save from Odin 3. Nothing is written while Eden is open.",
         ).assertExists()
+    }
+
+    @Test fun aRevokedDeviceSaysSoAndASignsInAgain() {
+        var again = 0
+        show(ui(emptyList()).copy(revoked = true), status(ServerConn.Revoked), DeviceActions(pairAgain = { again++ }))
+        compose.onNodeWithText(REVOKED_LINE).assertExists()
+        compose.onNodeWithText("Removed from server").assertExists()   // the top bar
+        compose.onNodeWithText("Emulators").assertDoesNotExist()
+        compose.key(android.view.KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(1, again)
+    }
+
+    @Test fun theStatusAreaSaysWhenThisDeviceLastSynced() {
+        compose.setContent {
+            EmuTheme(ThemeMode.Dark) {
+                CompositionLocalProvider(LocalStatusLine provides "Synced 5 min ago") {
+                    DeviceScreen(ui(emptyList()), top = {}, actions = DeviceActions())
+                }
+            }
+        }
+        compose.onNodeWithText("Synced 5 min ago").assertExists()
+    }
+
+    @Test fun syncedAgoTicksWithTheClockItIsGiven() {
+        val at = Instant.parse("2026-11-21T11:55:00Z")
+        assertEquals("Synced just now", syncedAgo(at, at.plusSeconds(30), ZoneOffset.UTC))
+        assertEquals("Synced 5 min ago", syncedAgo(at, Instant.parse("2026-11-21T12:00:00Z"), ZoneOffset.UTC))
+        assertEquals("Synced 6 min ago", syncedAgo(at, Instant.parse("2026-11-21T12:01:30Z"), ZoneOffset.UTC))
+        assertEquals("Synced 2 h ago", syncedAgo(at, Instant.parse("2026-11-21T14:00:00Z"), ZoneOffset.UTC))
+        assertEquals("Synced Nov 21, 11:55", syncedAgo(at, Instant.parse("2026-11-23T12:00:00Z"), ZoneOffset.UTC))
+        assertEquals(null, syncedAgo(null, at, ZoneOffset.UTC))
+    }
+
+    @Test fun aSuccessLineStandsInForTheStatusWithItsWords() {
+        compose.setContent {
+            EmuTheme(ThemeMode.Dark) {
+                CompositionLocalProvider(LocalStatusLine provides "Synced 5 min ago", LocalNotice provides Notice(1, "Pokémon Sword from Odin 3 is in place.")) {
+                    DeviceScreen(ui(emptyList()), top = {}, actions = DeviceActions())
+                }
+            }
+        }
+        compose.onNodeWithText("Pokémon Sword from Odin 3 is in place.").assertExists()
+        compose.onNodeWithText("Synced 5 min ago").assertDoesNotExist()
     }
 
     @Test fun theCloseLineShowsWhenOnlyTheServerSaysWaiting() {
@@ -121,6 +172,28 @@ class DeviceScreenTest {
         assertEquals("looking…" to Tone.Ink3, pane.state to pane.tone)
     }
 
+    @Test fun gamesCarryTheirSystemMarkAndAPresenceMarkPerOtherDevice() {
+        val u = ui(listOf(game("0100ABF008968000", "Pokémon Sword", DeviceGameState.Waiting)))
+        assertEquals(listOf(dev.tandem.app.ui.state.DeviceColumn("dev-odin", "Odin 3")), u.devices)
+        val line = u.panes.first { it.id == "eden" }.games.single()
+        assertEquals("SWITCH", line.system)
+        assertEquals(listOf(PresenceCell(Presence.Newest, "Odin 3 has the newest save")), line.presence)
+        show(u)
+        compose.onNodeWithText("ODIN 3").assertExists()   // the column, headed by the device
+        compose.onNodeWithContentDescription("Odin 3 has the newest save").assertExists()
+        compose.onNodeWithContentDescription("System: SWITCH").assertExists()
+    }
+
+    @Test fun aRetroArchGameTakesItsSystemFromTheCoreAndItsNameWithoutThePrefix() {
+        val row = game("retroarch/Pokemon - Emerald Version", "x", DeviceGameState.HasIt, emu = "retroarch").copy(displayName = null)
+        val u = deviceUi(sampleEmulators, Loaded(listOf(row), Instant.EPOCH), emptyList(), HERE, true, core = { _, _ -> "mgba" })
+        val line = u.panes.first { it.id == "retroarch" }.games.single()
+        assertEquals("GBA", line.system)
+        assertEquals("Pokemon - Emerald Version", line.name)
+        val unknown = deviceUi(sampleEmulators, Loaded(listOf(row), Instant.EPOCH), emptyList(), HERE, true)
+        assertEquals(null, unknown.panes.first { it.id == "retroarch" }.games.single().system)
+    }
+
     @Test fun aGameWithNoNewestDeviceShowsADashLikeTheWeb() {
         val line = ui(listOf(game("k", "K", DeviceGameState.HasIt, newestOn = null))).panes.first { it.id == "eden" }.games.single()
         assertEquals("—", line.newestOn)
@@ -150,16 +223,28 @@ class DeviceScreenTest {
         assertEquals(1, fixed)
     }
 
-    @Test fun shizukuReadyShowsOn() {
+    @Test fun whenAllIsWellTheTopBarOnlyNamesTheDevice() {
         show(ui(emptyList()))
-        compose.onNodeWithText("Shizuku on").assertExists()
-        compose.onNodeWithText("Server connected").assertExists()
         compose.onNodeWithText("Thor").assertExists()
+        compose.onNodeWithText("Shizuku on").assertDoesNotExist()
+        compose.onNodeWithText("Server connected").assertDoesNotExist()
+        compose.onNodeWithText("Server unreachable").assertDoesNotExist()
     }
 
-    @Test fun offlineShowsTheLastUpdateTime() {
+    @Test fun anUnreachableServerIsSaidInTheTopBar() {
         show(ui(emptyList()), status(server = ServerConn.Offline, lastSync = Instant.parse("2026-11-19T21:48:00Z")))
-        compose.onNodeWithText("Offline · last updated 21:48").assertExists()
+        compose.onNodeWithText("Server unreachable").assertExists()
+    }
+
+    @Test fun theTopBarShowsTheClockAndBatteryWhenGiven() {
+        compose.setContent {
+            EmuTheme(ThemeMode.Dark) {
+                CompositionLocalProvider(LocalReadout provides Readout("14:05", 82, charging = true)) {
+                    DeviceScreen(ui(emptyList()), top = { TopBar(listOf("This device"), 0, {}, status(), {}) }, actions = DeviceActions())
+                }
+            }
+        }
+        compose.onNodeWithContentDescription("14:05, battery 82 percent, charging").assertExists()
     }
 
     @Test fun signedOutAsksToSignInAndAGoesToSetup() {
@@ -203,10 +288,10 @@ class DeviceScreenTest {
 
     @Test fun aReceivedLineAppearsAfterADeliveredEvent() {
         val u = uiAt(landedAt.minusSeconds(30), listOf(sword()))
-        assertEquals(listOf(ReceivedLine("Received Pokémon Sword")), u.panes.first { it.id == "eden" }.received)
+        assertEquals(listOf(ReceivedLine("Pokémon Sword from Odin 3 is in place.")), u.panes.first { it.id == "eden" }.received)
         assertEquals(emptyList<ReceivedLine>(), u.panes.first { it.id == "azahar" }.received)
         show(u)
-        compose.onNodeWithText("Received Pokémon Sword").assertExists()
+        compose.onNodeWithText("Pokémon Sword from Odin 3 is in place.").assertExists()
     }
 
     @Test fun aReceivedLineSurvivesTheRefreshThatRacesItAndGoesOnTheNextOne() {
@@ -217,12 +302,12 @@ class DeviceScreenTest {
 
     @Test fun aReceivedConfigNamesTheEmulatorsSettings() {
         val cfg = ReceivedAt(ReceivedDelivery("d2", "eden", null, null), landedAt)
-        assertEquals(listOf(ReceivedLine("Received Eden settings")), uiAt(landedAt, listOf(cfg)).panes.first { it.id == "eden" }.received)
+        assertEquals(listOf(ReceivedLine("Eden settings are in place.")), uiAt(landedAt, listOf(cfg)).panes.first { it.id == "eden" }.received)
     }
 
     @Test fun aReceivedGameWithoutATitleUsesTheServersName() {
         val r = ReceivedAt(ReceivedDelivery("d3", "eden", "0100ABF008968000", null), landedAt)
-        assertEquals(listOf(ReceivedLine("Received Pokémon Sword")), uiAt(landedAt, listOf(r)).panes.first { it.id == "eden" }.received)
+        assertEquals(listOf(ReceivedLine("Pokémon Sword from Odin 3 is in place.")), uiAt(landedAt, listOf(r)).panes.first { it.id == "eden" }.received)
     }
 
     @Test fun rightThenAOpensTheFocusedGame() {

@@ -38,6 +38,20 @@ class Vita3kModuleTest {
         assertThrows(ModuleException::class.java) { m().targetDirFor(fs, d, ItemKind.Save, "../x", "", "") }
     }
 
+    @Test fun titles_come_from_the_apps_param_sfo_else_the_saves() {
+        val v = "${root()}/vita/ux0"
+        fun sfo(path: String, title: String) = File(path).also { it.parentFile.mkdirs() }.writeBytes(sfoBytes(mapOf("TITLE" to title)))
+        sfo("$v/app/PCSE00001/sce_sys/param.sfo", "Gravity Rush")
+        put("$v/user/00/savedata/PCSE00001/data.bin")
+        sfo("$v/user/00/savedata/PCSB00002/sce_sys/param.sfo", "Tearaway")
+        put("$v/user/00/savedata/PCSB00002/data.bin")
+        put("$v/user/00/savedata/PCSB00003/data.bin")
+        val d = m().detect(fs, none)!!
+        val names = m().saveItems(fs, d).associate { it.gameKey to it.displayName }
+        assertEquals(mapOf("PCSB00002" to "Tearaway", "PCSB00003" to null, "PCSE00001" to "Gravity Rush"), names)
+        assertEquals(listOf(dev.tandem.app.model.InstalledGame("PCSE00001", "Gravity Rush")), m().installedGames(fs, d, none))
+    }
+
     @Test fun pref_path_from_config() {
         val alt = "${internal()}/VitaFs"
         put("${root()}/config.yml", "foo: 1\npref-path: \"/storage/emulated/0/VitaFs/\"\nbar: 2\n")

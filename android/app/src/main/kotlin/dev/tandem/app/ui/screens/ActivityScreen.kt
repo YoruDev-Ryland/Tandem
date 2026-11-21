@@ -39,7 +39,8 @@ class ActivityActions(val loadOlder: () -> Unit = {}, val refresh: () -> Unit = 
 
 private val SUBS = listOf("This device", "Log")
 private const val SUB_LOG = 1
-private val TIME_W = 120.dp
+private val TIME_W = 104.dp
+private val DEVICE_W = 120.dp
 
 private sealed interface ActivityRow {
     data class Item(val entry: ActivityEntry) : ActivityRow
@@ -100,6 +101,7 @@ private fun DevicePane(ui: ActivityUi, selected: Int, onSelect: (Int) -> Unit, l
                 ) {
                     val h = EmuType.header.copy(color = c.ink3)
                     BasicText("TIME", Modifier.width(TIME_W), style = h)
+                    BasicText("DEVICE", Modifier.width(DEVICE_W), style = h)
                     BasicText("WHAT HAPPENED", Modifier.weight(1f), style = h)
                 }
                 CursorList(
@@ -111,11 +113,13 @@ private fun DevicePane(ui: ActivityUi, selected: Int, onSelect: (Int) -> Unit, l
                 ) { r, _ ->
                     when (r) {
                         is ActivityRow.Item -> {
-                            Cell(r.entry.time, Modifier.width(TIME_W), tone = Tone.Ink3, style = EmuType.mono)
-                            Cell(r.entry.message, Modifier.weight(1f), tone = if (r.entry.fault) Tone.Fault else Tone.Ink, style = EmuType.rowPrimary)
+                            Cell(r.entry.time, Modifier.width(TIME_W), tone = Tone.Ink3, style = EmuType.time)
+                            Cell(r.entry.device ?: "—", Modifier.width(DEVICE_W), tone = if (r.entry.device == null) Tone.Ink3 else Tone.Ink2, style = EmuType.meta)
+                            Cell(r.entry.message, Modifier.weight(1f), tone = if (r.entry.fault) Tone.Fault else Tone.Ink, style = EmuType.body)
                         }
                         ActivityRow.Older -> {
                             Cell("", Modifier.width(TIME_W))
+                            Cell("", Modifier.width(DEVICE_W))
                             Cell(if (ui.loadingOlder) "Loading…" else "Load older", Modifier.weight(1f),
                                 tone = if (ui.loadingOlder) Tone.Ink3 else Tone.Ink, style = EmuType.rowPrimary)
                         }
