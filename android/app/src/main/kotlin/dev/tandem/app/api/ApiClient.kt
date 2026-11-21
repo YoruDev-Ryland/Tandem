@@ -104,6 +104,10 @@ class ApiClient(
         call("POST", "/v1/blobs/missing", MissingBlobsRequest.serializer(),
             MissingBlobsRequest(hashes), MissingBlobsResponse.serializer())!!.missing
 
+    override suspend fun missingSaves(items: List<SaveItemKey>): List<SaveItemKey> =
+        call("POST", "/v1/saves/missing", MissingSavesRequest.serializer(),
+            MissingSavesRequest(items), MissingSavesResponse.serializer())!!.missing
+
     override suspend fun putBlob(hash: String, size: Long, source: () -> InputStream) {
         withContext(Dispatchers.IO) {
             val body = object : RequestBody() {

@@ -18,6 +18,8 @@ interface Api {
     /** Drops the server's record of what this device holds for [emulatorIds] (after a local forget). */
     suspend fun forget(emulatorIds: List<String>)
     suspend fun missingBlobs(hashes: List<String>): List<String>
+    /** Which of [items] the server has no copy of (a game deleted on the web). */
+    suspend fun missingSaves(items: List<SaveItemKey>): List<SaveItemKey> = emptyList()
     suspend fun putBlob(hash: String, size: Long, source: () -> InputStream)
     suspend fun getBlob(hash: String): InputStream
     suspend fun uploadSave(req: SaveUploadRequest): SaveUploadResponse

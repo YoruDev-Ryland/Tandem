@@ -40,3 +40,13 @@ public sealed record RestoreRequest(Guid DeviceId);
 
 /// <param name="VersionId">The new head: a copy of the chosen version.</param>
 public sealed record RestoreResponse(Guid ItemId, Guid VersionId);
+
+/// <summary>A save or state item by its identity. For Kind=Save, Core is not part of it and is ignored.</summary>
+public sealed record SaveItemKey(string EmulatorId, ItemKind Kind, string GameKey, string Slot, string Core);
+
+/// <summary>POST /v1/saves/missing: the items a device holds a known version of (at most 5000).</summary>
+public sealed record MissingSavesRequest(IReadOnlyList<SaveItemKey> Items);
+
+/// <summary>The asked items the server has no copy of (deleted on the web, say), echoed as sent. The device forgets
+/// what it knew of them, so its next scan uploads them again as new items.</summary>
+public sealed record MissingSavesResponse(IReadOnlyList<SaveItemKey> Missing);

@@ -20,6 +20,10 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
 @Serializable data class MissingBlobsRequest(val hashes: List<String>)
 @Serializable data class MissingBlobsResponse(val missing: List<String> = emptyList())
+/** A save or state item by identity (for a Save, core is ignored by the server). */
+@Serializable data class SaveItemKey(val emulatorId: String, val kind: ItemKind, val gameKey: String, val slot: String, val core: String)
+@Serializable data class MissingSavesRequest(val items: List<SaveItemKey>)
+@Serializable data class MissingSavesResponse(val missing: List<SaveItemKey> = emptyList())
 
 @Serializable data class EmulatorStatus(
     val emulatorId: String,

@@ -144,13 +144,14 @@
   let deleteBusy = $state(false);
   let deleteError = $state<unknown>(undefined);
   /** Frozen when the dialog opens. */
-  let deleteTarget = $state<{ title: string; versions: number; states: number } | undefined>();
+  let deleteTarget = $state<{ title: string; versions: number; states: number; pinned: number } | undefined>();
   function openDelete() {
     const items = game.data?.items ?? [];
     deleteTarget = {
       title,
       versions: items.filter((i) => i.kind === "Save").reduce((n, i) => n + i.versions.length, 0),
       states: items.filter((i) => i.kind === "State").length,
+      pinned: items.reduce((n, i) => n + i.versions.filter((v) => v.pinned).length, 0),
     };
     deleteError = undefined;
     deleting = true;
@@ -397,9 +398,9 @@
   <Dialog bind:open={deleting} locked={deleteBusy} title="Delete these saves from the server?">
     {#if deleteTarget}
       <p class="note first">
-        This removes {deleteTarget.title}'s {deleteTarget.versions} save {deleteTarget.versions === 1 ? "version" : "versions"}{#if deleteTarget.states > 0}{" "}and {deleteTarget.states} save {deleteTarget.states === 1 ? "state" : "states"}{/if} from the server, with their history. It can't be undone.
+        This removes {deleteTarget.title}'s {deleteTarget.versions} save {deleteTarget.versions === 1 ? "version" : "versions"}{#if deleteTarget.states > 0}{" "}and {deleteTarget.states} save {deleteTarget.states === 1 ? "state" : "states"}{/if} from the server, with their history{#if deleteTarget.pinned > 0}, including {deleteTarget.pinned} pinned {deleteTarget.pinned === 1 ? "version" : "versions"}{/if}. It can't be undone.
       </p>
-      <p class="note">Files on the devices are not touched. A device that still has them uploads them again as a new save.</p>
+      <p class="note">Devices keep their files. Devices that still have this save upload it again within about 15 minutes, as a new save without this history.</p>
       {#if deleteError}<div class="line"><ErrorLine error={deleteError} /></div>{/if}
       <div class="buttons row dialog">
         <Button variant="primary" onclick={confirmDelete} disabled={deleteBusy}>Delete from server</Button>

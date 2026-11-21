@@ -343,7 +343,8 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
     /// <summary>
     /// Deletes the user's save and state items of one game, with their versions (cascade), known-version records
     /// (cascade) and un-acked Save deliveries. Blobs no longer referenced are left to the pruner. A device that still
-    /// holds the files uploads them again as new items. 404 not_found when the game has no items.
+    /// holds the files learns of it from POST /v1/saves/missing on its next full scan (every 15 min)
+    /// and uploads them again as new items. 404 not_found when the game has no items.
     /// </summary>
     public async Task DeleteGameAsync(Guid userId, string emulatorId, string gameKey, CancellationToken ct)
     {
@@ -365,6 +366,30 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
         }
         foreach (var d in devices) hub.NotifyDevice(d);
         await activity.WriteAsync(userId, "game_deleted", $"Deleted the saves of {label}", null, emulatorId, gameKey);
+    }
+
+    public const int MaxMissingCheck = 5000;
+
+    /// <summary>
+    /// Which of the asked items the user has no copy of (no item, or one without a head). A device asks during its
+    /// full scan for the items it holds a known version of, so a game deleted on the web is re-seeded from devices
+    /// that still have it: they forget the item and upload it as new.
+    /// </summary>
+    public async Task<MissingSavesResponse> MissingAsync(Guid userId, MissingSavesRequest request, CancellationToken ct)
+    {
+        if (request.Items is null) throw new ApiException(400, "bad_request", "Items is required.");
+        if (request.Items.Count > MaxMissingCheck)
+            throw new ApiException(400, "bad_request", $"At most {MaxMissingCheck} items per check.");
+        foreach (var k in request.Items)
+            ValidateIdentity(new SaveUploadRequest(k.EmulatorId, k.Kind, k.GameKey, k.Slot, k.Core, null, [], null));
+        static string Id(string emu, ItemKind kind, string game, string? slot, string? core) =>
+            $"{emu}\0{kind}\0{game}\0{slot ?? ""}\0{(kind == ItemKind.Save ? "" : core ?? "")}";
+        var emulators = request.Items.Select(k => k.EmulatorId).Distinct().ToList();
+        var held = (await db.SaveItems.AsNoTracking()
+                .Where(i => i.UserId == userId && emulators.Contains(i.EmulatorId) && i.HeadVersionId != null)
+                .Select(i => new { i.EmulatorId, i.Kind, i.GameKey, i.Slot, i.Core }).ToListAsync(ct))
+            .Select(i => Id(i.EmulatorId, i.Kind, i.GameKey, i.Slot, i.Core)).ToHashSet(StringComparer.Ordinal);
+        return new MissingSavesResponse(request.Items.Where(k => !held.Contains(Id(k.EmulatorId, k.Kind, k.GameKey, k.Slot, k.Core))).ToList());
     }
 
     /// <summary>Under the user's lock, so a prune run never deletes a version pinned after it picked candidates.

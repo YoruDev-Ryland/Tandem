@@ -108,7 +108,10 @@ describe("Game", () => {
     await screen.findByRole("heading", { name: "v4 from Odin 3" });
     await fireEvent.click(screen.getByRole("button", { name: "Delete from server…" }));
     await screen.findByRole("heading", { name: "Delete these saves from the server?" });
-    expect(screen.getByText("Files on the devices are not touched. A device that still has them uploads them again as a new save.")).toBeTruthy();
+    expect(screen.getByText(/including 1 pinned version\. It can't be undone\.$/)).toBeTruthy();
+    expect(screen.getByText(
+      "Devices keep their files. Devices that still have this save upload it again within about 15 minutes, as a new save without this history.",
+    )).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Delete from server" }));
     await waitFor(() => expect(router.path).toBe("/games"));
     expect(calls).toContainEqual({ method: "DELETE", url: "/v1/web/games/melonds/nds/platinum", body: undefined });

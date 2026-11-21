@@ -74,6 +74,15 @@ class SyncEngineTest {
             putBlobs += hash; serverBlobs += hash
         }
         override suspend fun getBlob(hash: String): InputStream = error("unused")
+        /** Game keys the server has no copy of (deleted on the web); every check is recorded. */
+        val gone = mutableSetOf<String>()
+        val missingChecks = mutableListOf<List<SaveItemKey>>()
+        var missingFails = false
+        override suspend fun missingSaves(items: List<SaveItemKey>): List<SaveItemKey> {
+            missingChecks += items
+            if (missingFails) throw java.io.IOException("offline")
+            return items.filter { it.gameKey in gone }
+        }
         override suspend fun uploadSave(req: SaveUploadRequest): SaveUploadResponse {
             if (req.gameKey == failSaveFor) throw ApiException(500, "boom", "boom")
             if (req.gameKey == unparseableSaveFor) throw kotlinx.serialization.SerializationException("unknown enum")
@@ -188,6 +197,42 @@ class SyncEngineTest {
         engine().fullScan()
         assertEquals("v1", api.saves[1].baseVersionId)
         assertEquals("v2", store.get(saveKey("GAME1"))!!.knownVersionId)
+    }
+
+    @Test fun a_save_deleted_on_the_server_is_uploaded_again_as_new_by_the_next_full_scan() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        put("saves/GAME2/a.sav", "other")
+        val e = engine()
+        e.fullScan()
+        assertEquals(2, api.saves.size)
+        api.gone += "GAME1"
+        e.fullScan()
+        assertEquals(listOf(SaveItemKey("fake", ItemKind.Save, "GAME1", "", "core1"), SaveItemKey("fake", ItemKind.Save, "GAME2", "", "core1")),
+            api.missingChecks.last().sortedBy { it.gameKey })
+        assertEquals("only the vanished save goes up again", 3, api.saves.size)
+        val again = api.saves.last()
+        assertEquals("GAME1", again.gameKey)
+        assertNull("as a new item: no base the server no longer has", again.baseVersionId)
+        assertEquals("v3", store.get(saveKey("GAME1"))!!.knownVersionId)
+        api.gone.clear()
+        e.fullScan()
+        assertEquals("settled: not uploaded again", 3, api.saves.size)
+    }
+
+    @Test fun a_failed_existence_check_changes_nothing() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        val e = engine()
+        e.fullScan()
+        api.gone += "GAME1"; api.missingFails = true
+        e.fullScan()
+        assertEquals(1, api.saves.size)
+        assertEquals("v1", store.get(saveKey("GAME1"))!!.knownVersionId)
+    }
+
+    @Test fun items_never_synced_are_not_asked_about() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        engine().fullScan()
+        assertTrue(api.missingChecks.all { it.isEmpty() } || api.missingChecks.isEmpty())
     }
 
     private fun forgetFake() { store.setVariant("fake", "com.fake.emu.duo", forgetState = true); store.applyPendingForget() }

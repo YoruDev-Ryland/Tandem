@@ -13,6 +13,9 @@ public static class SaveEndpoints
         saves.MapPost("/upload", (HttpContext http, SaveUploadRequest request, SaveService svc, CancellationToken ct) =>
             svc.UploadAsync(http.User.UserId(), RequireDevice(http), request, ct)).RequireStorage();
 
+        saves.MapPost("/missing", (HttpContext http, MissingSavesRequest request, SaveService svc, CancellationToken ct) =>
+            svc.MissingAsync(http.User.UserId(), request, ct));
+
         saves.MapPost("/{itemId:guid}/pin/{versionId:guid}", async (HttpContext http, Guid itemId, Guid versionId, SaveService svc, CancellationToken ct) =>
         {
             await svc.SetPinnedAsync(http.User.UserId(), itemId, versionId, true, ct);

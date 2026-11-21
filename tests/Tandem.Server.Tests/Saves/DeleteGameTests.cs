@@ -56,4 +56,60 @@ public class DeleteGameTests
         Assert.Equal(HttpStatusCode.NotFound, (await other.DeleteAsync("/v1/web/games/eden/game")).StatusCode);
         Assert.Single(await (await f.WebLogin("a@example.com")).GetOk<List<GameRow>>("/v1/web/games"));
     }
+
+    [Fact]
+    public async Task A_device_learns_which_of_its_items_were_deleted_and_re_uploads_them_as_new()
+    {
+        using var f = new ServerFactory();
+        var (a, _) = await f.Register("a@example.com", deviceName: "Thor");
+        var (b, _) = await f.PairSecondDevice(a, "Odin");
+        var first = await a.UploadSave("game", "one", null);
+        var second = await a.UploadSave("game", "two", first.VersionId);
+        await a.UploadSave("other", "keep", null);
+        var manifest = await Fixtures.Manifest(a, ("s.state", "st"u8.ToArray()));
+        (await a.PostJsonAsync("/v1/saves/upload",
+            new SaveUploadRequest("eden", ItemKind.State, "game", "1", "core", null, manifest, null))).EnsureSuccessStatusCode();
+
+        var web = await f.WebLogin("a@example.com");
+        Assert.Equal(HttpStatusCode.NoContent, (await web.DeleteAsync("/v1/web/games/eden/game")).StatusCode);
+
+        // The device names the items it holds a known version of; the server answers which no longer exist.
+        var asked = new MissingSavesRequest([
+            new SaveItemKey("eden", ItemKind.Save, "game", "", "recorded-only"),
+            new SaveItemKey("eden", ItemKind.State, "game", "1", "core"),
+            new SaveItemKey("eden", ItemKind.Save, "other", "", ""),
+        ]);
+        var missing = await (await a.PostJsonAsync("/v1/saves/missing", asked)).ReadAsync<MissingSavesResponse>();
+        Assert.Equal([asked.Items[0], asked.Items[1]], missing.Missing);
+
+        // Its state cleared, the device uploads the unchanged save again with no base: a new item, cleanly accepted.
+        var again = await a.UploadSave("game", "two", null);
+        Assert.Equal(SaveUploadStatus.Accepted, again.Status);
+        Assert.NotEqual(second.ItemId, again.ItemId);
+        // A second device holding the same save, also cleared, matches it: no conflict.
+        Assert.Equal(SaveUploadStatus.Unchanged, (await b.UploadSave("game", "two", null)).Status);
+    }
+
+    [Fact]
+    public async Task A_change_uploaded_on_a_deleted_version_as_its_base_is_accepted_as_a_new_item()
+    {
+        using var f = new ServerFactory();
+        var (a, _) = await f.Register("a@example.com");
+        var first = await a.UploadSave("game", "one", null);
+        var web = await f.WebLogin("a@example.com");
+        Assert.Equal(HttpStatusCode.NoContent, (await web.DeleteAsync("/v1/web/games/eden/game")).StatusCode);
+        var next = await a.UploadSave("game", "changed", first.VersionId);
+        Assert.Equal(SaveUploadStatus.Accepted, next.Status);
+    }
+
+    [Fact]
+    public async Task The_missing_check_is_bounded_and_validated()
+    {
+        using var f = new ServerFactory();
+        var (a, _) = await f.Register("a@example.com");
+        var many = Enumerable.Range(0, 5001).Select(i => new SaveItemKey("eden", ItemKind.Save, $"g{i}", "", "")).ToList();
+        Assert.Equal(HttpStatusCode.BadRequest, (await a.PostJsonAsync("/v1/saves/missing", new MissingSavesRequest(many))).StatusCode);
+        var unknown = new MissingSavesRequest([new SaveItemKey("nope", ItemKind.Save, "g", "", "")]);
+        Assert.Equal(HttpStatusCode.BadRequest, (await a.PostJsonAsync("/v1/saves/missing", unknown)).StatusCode);
+    }
 }

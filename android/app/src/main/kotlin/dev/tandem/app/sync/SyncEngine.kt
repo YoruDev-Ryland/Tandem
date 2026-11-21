@@ -130,8 +130,9 @@ class SyncEngine(
         reportStatus(found.values.toList())
         for ((m, d) in found.values) reportInstalls(m, d)
         val now = clock()
-        for ((m, d) in found.values) {
-            val items = scanModule(m, d) ?: continue
+        val scanned = found.values.mapNotNull { (m, d) -> scanModule(m, d)?.let { Triple(m, d, it) } }
+        forgetVanished(scanned)
+        for ((m, d, items) in scanned) {
             for (item in items) {
                 val key = storeKey(m.emulatorId, item)
                 val pending = synchronized(ev) { dirty[key] }
@@ -433,6 +434,27 @@ class SyncEngine(
             store.forgetDone(ids)
             log("server forgot what this device held for ${ids.sorted()}")
         }
+    }
+
+    /**
+     * Asks the server which items this device holds a known version of no longer exist there (a game deleted on the
+     * web) and forgets what it knew of those, so this scan uploads them again as new items instead of concluding
+     * "unchanged". Only forgetting is done here: no file is touched. A failed check changes nothing. Called under
+     * [mutex], once per full scan.
+     */
+    private suspend fun forgetVanished(scanned: List<Triple<EmulatorModule, Detected, List<LocalItem>>>) {
+        val asked = LinkedHashMap<SaveItemKey, String>()
+        for ((m, _, items) in scanned) for (item in items) {
+            val key = storeKey(m.emulatorId, item)
+            if (store.get(key)?.knownVersionId == null || store.applyMarker(key) != null) continue
+            asked.putIfAbsent(SaveItemKey(m.emulatorId, item.kind, item.gameKey, item.slot, item.core), key)
+        }
+        if (asked.isEmpty()) return
+        val missing = apiCall("existence check") { api.missingSaves(asked.keys.toList()) } ?: return
+        val keys = missing.mapNotNull { asked[it] }.distinct()
+        if (keys.isEmpty()) return
+        store.forgetItems(keys)
+        log("the server no longer has ${keys.size} item(s); they upload again as new: ${keys.sorted()}")
     }
 
     /** Records whether the upload of [key] failed ([status] null from [apiCall]) for [queuedCount]. */

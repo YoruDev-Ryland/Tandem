@@ -170,6 +170,8 @@ class StateStore(
     /** Every item key this device has sync state for (ItemKey.of). */
     fun itemKeys(): Set<String> = synchronized(lock) { data.items.keys.toSet() }
     fun put(itemKey: String, s: ItemState) = mutate { it.copy(items = it.items + (itemKey to s)) }
+    /** Forgets what this device knew of [itemKeys] (the server no longer has them): they upload again as new. */
+    fun forgetItems(itemKeys: Collection<String>) = mutate { it.copy(items = it.items - itemKeys.toSet()) }
     fun configState(emulatorId: String): ConfigState? = synchronized(lock) { data.configs[emulatorId] }
     fun putConfigState(emulatorId: String, s: ConfigState) = mutate { it.copy(configs = it.configs + (emulatorId to s)) }
 
