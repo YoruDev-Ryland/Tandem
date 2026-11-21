@@ -1,6 +1,7 @@
 package dev.tandem.app.ui.kit
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -82,7 +83,9 @@ fun Cell(text: String, modifier: Modifier = Modifier, tone: Tone = Tone.Ink, sty
 
 /**
  * A 40 dp list row. The cursor row is drawn inverted with the 3 dp radius; every other row has a hairline on top,
- * except the one right under the cursor ([ruleAbove] false). There is no ripple: the inversion is the feedback.
+ * except the one right under the cursor ([ruleAbove] false). A [parked] row is where the cursor waits while another
+ * pane is driven: the secondary button's outline (1.5 dp rule2, 3 dp radius), text in its normal inks. There is no
+ * ripple: the inversion is the feedback.
  */
 @Composable
 fun CursorRow(
@@ -90,11 +93,14 @@ fun CursorRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     ruleAbove: Boolean = true,
+    parked: Boolean = false,
     content: @Composable RowScope.() -> Unit,
 ) {
     val c = LocalEmu.current
     val look = if (focused) {
         Modifier.background(c.focusBg, EmuRadius)
+    } else if (parked) {
+        Modifier.border(1.5.dp, c.rule2, EmuRadius)
     } else if (ruleAbove) {
         Modifier.drawBehind { drawLine(c.rule, Offset(0f, 0.5f), Offset(size.width, 0.5f), strokeWidth = 1.dp.toPx()) }
     } else {

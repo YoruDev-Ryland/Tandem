@@ -280,6 +280,8 @@ class ConflictsViewModel(
     private val afterResolve: () -> Unit,
     emulatorName: (String) -> String,
     zone: ZoneId = ZoneId.systemDefault(),
+    /** Says what a choice did once the server took it (the hint bar's success line). */
+    private val notice: (String) -> Unit = {},
 ) {
     private val busy = MutableStateFlow(false)
     private val failure = MutableStateFlow<Throwable?>(null)
@@ -297,12 +299,18 @@ class ConflictsViewModel(
         }
     }
 
-    fun resolve(itemId: String, req: ResolveConflictRequest) = send(listOf(itemId)) { it.resolveConflict(itemId, req) }
+    fun resolve(itemId: String, req: ResolveConflictRequest) {
+        val said = ui.value.entries.firstOrNull { it.itemId == itemId }?.let { resolvedLine(it, req) }
+        send(listOf(itemId), said) { it.resolveConflict(itemId, req) }
+    }
 
     /** Runs [calls] in order (the UseDevice ones come first in a [bulkPlan]). */
-    fun bulk(calls: List<BulkFirstSyncRequest>) = send(calls.flatMap { it.itemIds.orEmpty() }.distinct()) { a -> for (c in calls) a.firstSync(c) }
+    fun bulk(calls: List<BulkFirstSyncRequest>) {
+        val items = calls.flatMap { it.itemIds.orEmpty() }.distinct()
+        send(items, if (items.size == 1) "Decided 1 save" else "Decided ${items.size} saves") { a -> for (c in calls) a.firstSync(c) }
+    }
 
-    private fun send(items: List<String>, block: suspend (Api) -> Unit) {
+    private fun send(items: List<String>, said: String? = null, block: suspend (Api) -> Unit) {
         val a = api() ?: return
         if (!busy.compareAndSet(expect = false, update = true)) return
         failure.value = null
@@ -311,6 +319,7 @@ class ConflictsViewModel(
             try {
                 block(a)
                 hidden.update { it + decided }
+                said?.let(notice)
             } catch (e: CancellationException) {
                 busy.value = false
                 throw e
@@ -322,4 +331,17 @@ class ConflictsViewModel(
             afterResolve()
         }
     }
+}
+
+/**
+ * What a choice did, in the hint bar once the server took it: "Kept this Thor's save of Pokémon Sword", "Kept both
+ * saves of Pokémon Sword", and when the emulator is open, when it lands ("· applied when Eden closes").
+ */
+fun resolvedLine(e: ConflictEntry, req: ResolveConflictRequest): String {
+    val what = when (req) {
+        e.keepMine -> "Kept ${e.me.replaceFirstChar { it.lowercase() }}'s save of ${e.game}"
+        e.keepBoth -> "Kept both saves of ${e.game}"
+        else -> if (e.otherId == null) "Kept the earlier save of ${e.game}" else "Kept ${e.other}'s save of ${e.game}"
+    }
+    return if (e.running) "$what · applied when ${e.emulator} closes" else what
 }

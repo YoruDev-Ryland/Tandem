@@ -17,8 +17,25 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-/** One line of this device's server activity, with its time already worded. [fault]: a conflict was opened. */
-data class ActivityEntry(val id: Long, val time: String, val message: String, val fault: Boolean)
+/**
+ * One line of this device's server activity, with its time already worded. [device] is the device it happened on, in
+ * its own column, and [message] says the rest ("Uploaded save for Pokémon Sword"). [fault]: a conflict was opened.
+ */
+data class ActivityEntry(val id: Long, val time: String, val message: String, val fault: Boolean, val device: String? = null)
+
+/**
+ * [message] without the device that leads it, since the device has its own column: "Thor uploaded save for X" is
+ * "Uploaded save for X", "Thor's eden config was replaced" is "Eden config was replaced". Others stay as they are.
+ */
+internal fun withoutDevice(message: String, device: String?): String {
+    if (device.isNullOrBlank()) return message
+    val rest = when {
+        message.startsWith("$device's ") -> message.removePrefix("$device's ")
+        message.startsWith("$device ") -> message.removePrefix("$device ")
+        else -> return message
+    }
+    return rest.replaceFirstChar { it.uppercaseChar() }
+}
 
 data class ActivityUi(
     val signedIn: Boolean = false,
@@ -187,7 +204,10 @@ class ActivityViewModel(
         state.value = ActivityUi(
             signedIn = api() != null,
             entries = items.map {
-                ActivityEntry(it.id, activityTime(it.utc, now, z), humanize(it, emulatorName, gameTitle), it.kind == "conflict_opened")
+                ActivityEntry(
+                    it.id, activityTime(it.utc, now, z), withoutDevice(humanize(it, emulatorName, gameTitle), it.deviceName),
+                    it.kind == "conflict_opened", it.deviceName,
+                )
             },
             loaded = loaded, error = error, offline = offline, offlineNote = note,
             hasOlder = nextBefore != null, loadingOlder = loadingOlder, olderError = olderError,

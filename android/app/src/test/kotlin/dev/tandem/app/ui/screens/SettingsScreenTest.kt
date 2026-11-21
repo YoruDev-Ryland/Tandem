@@ -112,6 +112,22 @@ class SettingsScreenTest {
         assertEquals(0, reloads)   // colours are the app's own: sync is not restarted
     }
 
+    @Test fun appearanceTurnsHapticsOffAndSoundsOnWithoutRestartingSync() {
+        val st = store()
+        assertTrue(st.settings.haptics)    // haptics on, sounds off for everyone to begin with
+        assertFalse(st.settings.sounds)
+        show(st, vm(st))
+        r2(2)   // Sync › Emulators › Appearance
+        compose.onNodeWithText(HAPTICS_COPY).assertIsDisplayed()
+        repeat(3) { compose.key(KeyEvent.KEYCODE_DPAD_DOWN) }   // System, Light, Dark, then Haptics
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertFalse(st.settings.haptics)
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.key(KeyEvent.KEYCODE_BUTTON_A)
+        assertTrue(st.settings.sounds)
+        assertEquals(0, reloads)
+    }
+
     @Test fun signOutClearsTheKeyAndTheTopBarSaysSignedOut() {
         val st = store().apply {
             put("eden|Save|0100ABF008968000||", ItemState("v1", "m", "m"))
@@ -240,7 +256,7 @@ class SettingsScreenTest {
     @Test fun addingARomFolderByTouch() {
         val st = store()
         show(st, vm(st))
-        compose.onNodeWithText("Add a ROM folder").performClick().performClick()
+        compose.onNodeWithText(ADD_ROM_DIR).performClick().performClick()
         compose.onNodeWithTag("settings-field").performTextReplacement("/sdcard/Roms")
         compose.onNodeWithTag("settings-field").performImeAction()
         assertEquals(listOf("/sdcard/Roms"), st.settings.romDirs)
@@ -250,7 +266,7 @@ class SettingsScreenTest {
     @Test fun aDuplicateRomFolderIsRefusedInTheSheet() {
         val st = store().apply { settings = settings.copy(romDirs = listOf("/sdcard/Roms")) }
         show(st, vm(st))
-        compose.onNodeWithText("Add a ROM folder").performClick().performClick()
+        compose.onNodeWithText(ADD_ROM_DIR).performClick().performClick()
         compose.onNodeWithTag("settings-field").performTextReplacement("/storage/emulated/0/Roms/")
         compose.onNodeWithTag("settings-field").performImeAction()
         compose.onNodeWithText("That folder is already in the list.").assertIsDisplayed()

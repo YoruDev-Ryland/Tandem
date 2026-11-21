@@ -62,6 +62,10 @@ data class DeviceSettingsData(
     val autoApply: Boolean = true,
     /** The app's colours: "system" (follow the device), "light" or "dark". */
     val theme: String = "system",
+    /** A haptic tick per cursor step, a confirm on A, a reject at a list's end (the system's own setting still rules). */
+    val haptics: Boolean = true,
+    /** Short UI sounds (move, open, back); off unless chosen. */
+    val sounds: Boolean = false,
     /** The active variant (package) per emulator id; see EmulatorModule.activePackage. */
     val variants: Map<String, String> = emptyMap(),
 )
@@ -163,6 +167,8 @@ class StateStore(
     }
 
     fun get(itemKey: String): ItemState? = synchronized(lock) { data.items[itemKey] }
+    /** Every item key this device has sync state for (ItemKey.of). */
+    fun itemKeys(): Set<String> = synchronized(lock) { data.items.keys.toSet() }
     fun put(itemKey: String, s: ItemState) = mutate { it.copy(items = it.items + (itemKey to s)) }
     fun configState(emulatorId: String): ConfigState? = synchronized(lock) { data.configs[emulatorId] }
     fun putConfigState(emulatorId: String, s: ConfigState) = mutate { it.copy(configs = it.configs + (emulatorId to s)) }

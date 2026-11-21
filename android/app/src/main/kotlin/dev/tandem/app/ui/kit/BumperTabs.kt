@@ -16,6 +16,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import dev.tandem.app.ui.feedback.Cue
+import dev.tandem.app.ui.feedback.LocalCueSink
 import dev.tandem.app.ui.input.Action
 import dev.tandem.app.ui.input.OnAction
 import dev.tandem.app.ui.theme.EmuType
@@ -32,11 +34,12 @@ fun BumperTabs(items: List<String>, active: Int, onChange: (Int) -> Unit, level:
     val c = LocalEmu.current
     val prev = if (level == 1) Action.L1 else Action.L2
     val next = if (level == 1) Action.R1 else Action.R2
+    val cues = LocalCueSink.current
 
     OnAction(enabled = items.isNotEmpty()) { a ->
         if (a != prev && a != next) return@OnAction false
         val to = (active + if (a == next) 1 else -1).coerceIn(0, items.lastIndex)
-        if (to != active) onChange(to)
+        if (to != active) onChange(to) else cues?.cue(Cue.Reject)   // no tab further this way
         true
     }
 

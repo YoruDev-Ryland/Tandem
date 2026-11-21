@@ -44,6 +44,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.tandem.app.ui.feedback.Cue
+import dev.tandem.app.ui.feedback.LocalCueSink
 import dev.tandem.app.ui.input.Action
 import dev.tandem.app.ui.input.ActionLayer
 import dev.tandem.app.ui.input.OnAction
@@ -58,6 +60,8 @@ import dev.tandem.app.ui.kit.SheetChoice
 import dev.tandem.app.ui.kit.rememberSheetChoice
 import dev.tandem.app.ui.kit.EmuRadius
 import dev.tandem.app.ui.kit.Fact
+import dev.tandem.app.ui.kit.Glyph
+import dev.tandem.app.ui.kit.LocalRowFocused
 import dev.tandem.app.ui.kit.Facts
 import dev.tandem.app.ui.kit.Hint
 import dev.tandem.app.ui.kit.Tone
@@ -83,6 +87,8 @@ class SettingsActions(
     val chooseVariant: (emulatorId: String, pkg: String) -> Unit = { _, _ -> },
     val consumeFocus: () -> Unit = {},
     val setTheme: (ThemeMode) -> Unit = {},
+    val setHaptics: (Boolean) -> Unit = {},
+    val setSounds: (Boolean) -> Unit = {},
     val signOut: () -> Unit = {},
     /** Opens the diagnostics screen; null in release builds, which have no Diagnostics section. */
     val diagnostics: (() -> Unit)? = {},
@@ -100,7 +106,8 @@ class SettingsActions(
 
 fun SettingsViewModel.actions(diagnostics: (() -> Unit)?, setUp: () -> Unit, back: () -> Unit, licences: () -> String = { "" }) = SettingsActions(
     select = ::select, setAutoApply = ::setAutoApply, addRomDir = ::addRomDir, removeRomDir = ::removeRomDir,
-    setOverride = ::setOverride, chooseVariant = ::chooseVariant, consumeFocus = ::consumeFocus, setTheme = ::setTheme, signOut = ::signOut,
+    setOverride = ::setOverride, chooseVariant = ::chooseVariant, consumeFocus = ::consumeFocus, setTheme = ::setTheme,
+    setHaptics = ::setHaptics, setSounds = ::setSounds, signOut = ::signOut,
     diagnostics = diagnostics, setUp = setUp, requestPermission = ::requestPermission, changeServer = ::changeServer,
     clearServerChange = ::clearServerChange, licences = licences, back = back,
 )
@@ -153,6 +160,22 @@ private val THEMES = listOf(
     ThemeMode.Light to "",
     ThemeMode.Dark to "",
 )
+
+const val HAPTICS_COPY = "Haptics"
+const val HAPTICS_DETAIL = "A tick as the cursor moves, when this device's touch feedback is on"
+const val SOUNDS_COPY = "UI sounds"
+const val SOUNDS_DETAIL = "Short, quiet clicks for move, open and back"
+
+/** A row of Settings › Appearance: the three themes, then the two feedback switches. */
+private sealed interface LookRow {
+    val key: String
+    data class Theme(val mode: ThemeMode, val meta: String) : LookRow { override val key = "theme:${mode.name}" }
+    data class Haptics(val on: Boolean) : LookRow { override val key = "haptics" }
+    data class Sounds(val on: Boolean) : LookRow { override val key = "sounds" }
+}
+
+private fun lookRows(ui: SettingsUi): List<LookRow> =
+    THEMES.map { (m, meta) -> LookRow.Theme(m, meta) } + LookRow.Haptics(ui.haptics) + LookRow.Sounds(ui.sounds)
 
 /**
  * The Settings tab. Its sections are sub-tabs (L2/R2): Sync, Emulators (which installed variant each emulator syncs),
@@ -208,7 +231,15 @@ fun SettingsScreen(
         }
     }
     fun openVariant(v: VariantLine) { if (v.pkg != null && !v.active) actions.chooseVariant(v.emulatorId, v.pkg) }
-    fun chooseTheme(i: Int) = actions.setTheme(THEMES[i].first)
+    val looks = lookRows(ui)
+    val look = looks.getOrNull(themeAt.coerceIn(0, looks.lastIndex))
+    fun openLook(r: LookRow) {
+        when (r) {
+            is LookRow.Theme -> actions.setTheme(r.mode)
+            is LookRow.Haptics -> actions.setHaptics(!r.on)
+            is LookRow.Sounds -> actions.setSounds(!r.on)
+        }
+    }
 
     fun submitPath() {
         val p = sheet as? Sheet.Path ?: return
@@ -250,10 +281,12 @@ fun SettingsScreen(
             SettingsSection.Emulators ->
                 if (variant?.pkg != null && !variant.active) listOf(Hint(Action.A, "Use this one") { openVariant(variant) }, back)
                 else listOf(back)
-            SettingsSection.Appearance ->
-                if (THEMES[themeAt.coerceIn(0, THEMES.lastIndex)].first != ui.theme) {
-                    listOf(Hint(Action.A, "Use this one") { chooseTheme(themeAt) }, back)
-                } else listOf(back)
+            SettingsSection.Appearance -> when (look) {
+                is LookRow.Theme -> if (look.mode != ui.theme) listOf(Hint(Action.A, "Use this one") { openLook(look) }, back) else listOf(back)
+                is LookRow.Haptics -> listOf(Hint(Action.A, if (look.on) "Turn off" else "Turn on") { openLook(look) }, back)
+                is LookRow.Sounds -> listOf(Hint(Action.A, if (look.on) "Turn off" else "Turn on") { openLook(look) }, back)
+                null -> listOf(back)
+            }
             SettingsSection.Account ->
                 if (ui.signedIn && !ui.revoked) listOf(
                     Hint(Action.A, "Sign out") { sheet = Sheet.SignOut }, Hint(Action.X, SET_UP_AGAIN, actions.setUp),
@@ -294,12 +327,18 @@ fun SettingsScreen(
                         if (ui.variants.any { it.emulatorId == "melonds" && it.pkg != null }) Note(MELONDS_EXPORT_NOTE)
                     }
                     SettingsSection.Appearance -> CursorList(
-                        THEMES, key = { it.first }, selected = themeAt, onSelect = { themeAt = it },
-                        onOpen = { chooseTheme(THEMES.indexOf(it)) }, modifier = Modifier.weight(1f, fill = false),
-                    ) { (mode, meta), _ ->
-                        Cell(mode.name, Modifier.width(160.dp), style = EmuType.rowPrimary)
-                        Cell(meta, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.meta)
-                        if (mode == ui.theme) Cell("active", tone = Tone.Ink2, style = EmuType.meta)
+                        looks, key = { it.key }, selected = themeAt, onSelect = { themeAt = it },
+                        onOpen = ::openLook, modifier = Modifier.weight(1f, fill = false),
+                    ) { r, _ ->
+                        when (r) {
+                            is LookRow.Theme -> {
+                                Cell(r.mode.name, Modifier.width(160.dp), style = EmuType.rowPrimary)
+                                Cell(r.meta, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.meta)
+                                if (r.mode == ui.theme) Cell("active", tone = Tone.Ink2, style = EmuType.meta)
+                            }
+                            is LookRow.Haptics -> SwitchCells(HAPTICS_COPY, HAPTICS_DETAIL, r.on)
+                            is LookRow.Sounds -> SwitchCells(SOUNDS_COPY, SOUNDS_DETAIL, r.on)
+                        }
                     }
                     SettingsSection.Account -> Account(ui, actions.setUp, ::openServer) { sheet = Sheet.SignOut }
                     SettingsSection.About -> About(ui) { sheet = Sheet.Licences }
@@ -341,7 +380,12 @@ private fun RowScope.SyncCells(r: SyncRow) {
             Cell("ROM folder", Modifier.width(160.dp), style = EmuType.rowPrimary)
             Cell(r.path, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.mono)
         }
-        SyncRow.AddRomDir -> Cell("Add a ROM folder", Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.rowPrimary)
+        // An action, not a heading: it reads as one (the ellipsis says a field opens) and shows its button.
+        SyncRow.AddRomDir -> {
+            Cell(ADD_ROM_DIR, Modifier.weight(1f), style = EmuType.rowPrimary)
+            Glyph(Action.A, inverted = LocalRowFocused.current)
+            Cell("Add", tone = Tone.Ink2, style = EmuType.meta)
+        }
         is SyncRow.Override -> {
             Cell(r.label, Modifier.width(160.dp), style = EmuType.rowPrimary)
             if (r.value.isEmpty()) Cell(r.default, Modifier.weight(1f), tone = Tone.Ink3, style = EmuType.meta)
@@ -349,6 +393,16 @@ private fun RowScope.SyncCells(r: SyncRow) {
         }
     }
 }
+
+/** A switch row: what it is, what it does, then On or Off. */
+@Composable
+private fun RowScope.SwitchCells(label: String, detail: String, on: Boolean) {
+    Cell(label, Modifier.width(160.dp), style = EmuType.rowPrimary)
+    Cell(detail, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.meta)
+    Cell(if (on) "On" else "Off", tone = Tone.Ink2, style = EmuType.meta)
+}
+
+const val ADD_ROM_DIR = "Add a ROM folder…"
 
 @Composable
 private fun RowScope.VariantCells(v: VariantLine) {
@@ -525,13 +579,14 @@ private fun SheetFrame(
     content: @Composable () -> Unit,
 ) {
     val c = LocalEmu.current
+    val cues = LocalCueSink.current
     ActionLayer {
         OnAction { a ->
             if (choice != null) return@OnAction choice.onAction(a, confirm, cancel)
             when (a) {
                 Action.A -> confirm()
                 Action.B -> cancel()
-                else -> {}
+                else -> cues?.cue(Cue.Reject)   // the sheet takes every button; the others do nothing here
             }
             true
         }

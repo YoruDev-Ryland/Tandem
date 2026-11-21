@@ -51,6 +51,8 @@ data class SettingsUi(
     val variants: List<VariantLine> = emptyList(),
     val focus: EmulatorFocus? = null,
     val theme: ThemeMode = ThemeMode.System,
+    val haptics: Boolean = true,
+    val sounds: Boolean = false,
     val signedIn: Boolean = false,
     val serverUrl: String? = null,
     val deviceName: String? = null,
@@ -116,6 +118,8 @@ class SettingsViewModel(
             variants = variantLines(st, inst),
             focus = f,
             theme = themeModeOf(st.theme),
+            haptics = st.haptics,
+            sounds = st.sounds,
             signedIn = signedIn,
             serverUrl = store.serverUrl,
             deviceName = if (signedIn) name else null,
@@ -231,6 +235,16 @@ class SettingsViewModel(
 
     fun setTheme(mode: ThemeMode) {
         if (store.settings.theme != mode.setting) store.updateSettings { it.copy(theme = mode.setting) }
+    }
+
+    /** Appearance › Haptics; like the theme, the app's own, so sync carries on. */
+    fun setHaptics(on: Boolean) {
+        if (store.settings.haptics != on) store.updateSettings { it.copy(haptics = on) }
+    }
+
+    /** Appearance › UI sounds. */
+    fun setSounds(on: Boolean) {
+        if (store.settings.sounds != on) store.updateSettings { it.copy(sounds = on) }
     }
 
     /** Forgets this device's key, id and sync state (the server URL stays), stops sync and clears server data. */

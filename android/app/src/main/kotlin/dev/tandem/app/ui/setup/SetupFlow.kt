@@ -46,12 +46,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.tandem.app.api.ApiException
 import dev.tandem.app.fs.ShizukuState
+import dev.tandem.app.ui.feedback.Cue
+import dev.tandem.app.ui.feedback.LocalCueSink
 import dev.tandem.app.ui.input.Action
 import dev.tandem.app.ui.input.OnAction
 import dev.tandem.app.ui.input.textEntry
 import dev.tandem.app.ui.kit.ConsoleScaffold
 import dev.tandem.app.ui.kit.EmuRadius
 import dev.tandem.app.ui.kit.Hint
+import dev.tandem.app.ui.kit.LocalReadout
+import dev.tandem.app.ui.kit.SystemReadout
 import dev.tandem.app.ui.kit.Tone
 import dev.tandem.app.ui.kit.describeError
 import dev.tandem.app.ui.kit.noKeyFocus
@@ -159,13 +163,11 @@ private fun RowScope.SetupTop(status: TopStatus) {
                 BasicText(it, Modifier.weight(1f, fill = false), style = meta.copy(fontWeight = FontWeight.SemiBold, color = c.ink),
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            val (server, tone) = serverCopy(status)
-            BasicText(server, style = meta.copy(color = c.tone(tone, false)), maxLines = 1)
+            serverCopy(status)?.let { (server, tone) -> BasicText(server, style = meta.copy(color = c.tone(tone, false)), maxLines = 1) }
         }
-        BasicText(
-            if (status.shizuku == ShizukuState.Ready) "Shizuku on" else "Shizuku off",
-            style = meta.copy(color = c.ink2), maxLines = 1,
-        )
+        // Setup is where Shizuku gets started, so off is not a fault here; on is not labelled.
+        if (status.shizuku != ShizukuState.Ready) BasicText("Shizuku off", style = meta.copy(color = c.ink2), maxLines = 1)
+        LocalReadout.current?.let { SystemReadout(it) }
     }
 }
 
@@ -270,10 +272,13 @@ internal fun <T> Options(
 ) {
     val c = LocalEmu.current
     val cursor = at.coerceIn(0, maxOf(0, items.lastIndex))
+    val cues = LocalCueSink.current
     OnAction(enabled = enabled && items.isNotEmpty()) { a ->
         when (a) {
             Action.Up, Action.Down -> {
-                onSelect((cursor + if (a == Action.Down) 1 else -1).coerceIn(0, items.lastIndex))
+                val to = (cursor + if (a == Action.Down) 1 else -1).coerceIn(0, items.lastIndex)
+                cues?.cue(if (to == cursor) Cue.Reject else Cue.Move)
+                onSelect(to)
                 true
             }
             Action.A -> { onChoose(items[cursor]); true }

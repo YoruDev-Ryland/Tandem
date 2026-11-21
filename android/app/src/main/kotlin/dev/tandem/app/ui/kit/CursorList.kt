@@ -11,6 +11,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import dev.tandem.app.ui.feedback.Cue
+import dev.tandem.app.ui.feedback.LocalCueSink
 import dev.tandem.app.ui.input.Action
 import dev.tandem.app.ui.input.OnAction
 
@@ -40,7 +42,8 @@ private class CursorMemory {
  * Tapping a row moves the cursor there; tapping the cursor row opens it. The cursor follows its item by [key] when
  * the rows change. [selected] is hoisted: the list reports moves through [onSelect].
  *
- * Only an [active] list takes the cursor and the D-pad, so a screen with two lists marks the one being driven. The
+ * Only an [active] list takes the cursor and the D-pad, so a screen with two lists marks the one being driven; an
+ * inactive list that is [parked] keeps its row outlined, so it is clear what the other pane belongs to. The
  * list scrolls itself, so give it a bounded height (a weight) rather than putting it in another vertical scroll. An
  * empty list draws nothing; show an EmptyLine instead.
  */
@@ -53,9 +56,11 @@ fun <T> CursorList(
     onOpen: (T) -> Unit,
     modifier: Modifier = Modifier,
     active: Boolean = true,
+    parked: Boolean = false,
     row: @Composable RowScope.(T, focused: Boolean) -> Unit,
 ) {
     val memory = remember { CursorMemory() }
+    val cues = LocalCueSink.current
     val keys = items.map(key)
     val cursor = reconcileCursor(memory.keys, memory.focusKey, keys, selected)
 
@@ -76,7 +81,9 @@ fun <T> CursorList(
     OnAction(enabled = active && items.isNotEmpty()) { a ->
         when (a) {
             Action.Up, Action.Down -> {
-                moveTo((cursor + if (a == Action.Down) 1 else -1).coerceIn(0, keys.lastIndex))
+                val to = (cursor + if (a == Action.Down) 1 else -1).coerceIn(0, keys.lastIndex)
+                cues?.cue(if (to == cursor) Cue.Reject else Cue.Move)   // the end of the list pushes back
+                moveTo(to)
                 true
             }
             Action.A -> {
@@ -97,8 +104,9 @@ fun <T> CursorList(
             val focused = active && i == cursor
             CursorRow(
                 focused = focused,
-                onClick = { if (i == cursor) onOpen(item) else moveTo(i, tap = true) },
-                ruleAbove = !(active && i == cursor + 1),
+                onClick = { if (i == cursor) onOpen(item) else { cues?.cue(Cue.Move); moveTo(i, tap = true) } },
+                ruleAbove = !((active || parked) && i == cursor + 1),
+                parked = parked && !active && i == cursor,
             ) { row(item, focused) }
         }
     }

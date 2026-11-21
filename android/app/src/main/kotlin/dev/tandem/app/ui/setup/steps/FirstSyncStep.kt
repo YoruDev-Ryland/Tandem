@@ -3,6 +3,8 @@ package dev.tandem.app.ui.setup.steps
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -100,6 +102,10 @@ internal fun FirstSyncStep(vm: SetupViewModel, status: TopStatus, onDone: () -> 
         FirstSyncPhase.Done -> SetupFrame(status, SetupStep.FirstSync, listOf(Hint(Action.A, "Go to This device", ::done), toggle), vm::back) {
             StepTitle(ALL_SET)
             StepSub("Every save on this device matched or synced on its own. Tandem keeps them in sync from here.")
+            // The reward for a calm first sync: how much is now looked after, as the one hero count.
+            val snap by vm.snapshot.collectAsState()
+            val items = snap.emulators.sumOf { it.itemCount }
+            if (items > 0) HeroCount(items, if (items == 1) "save or state in sync" else "saves and states in sync")
             line()
         }
         FirstSyncPhase.Review -> Review(vm, status, later ?: ::done, now)
@@ -191,5 +197,15 @@ private fun Review(vm: SetupViewModel, status: TopStatus, done: () -> Unit, now:
         }
         // A uses this device's save rather than "opening" the row; in its own layer so it comes before the list.
         ActionLayer { OnAction(enabled = open == null) { a -> if (a == Action.A && focused != null) { mine(); true } else false } }
+    }
+}
+
+/** A hero count in the one numeric display style, with what it counts beside it on the same baseline. */
+@Composable
+internal fun HeroCount(n: Int, what: String) {
+    val c = LocalEmu.current
+    Row(Modifier.padding(top = 4.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        BasicText("$n", Modifier.alignByBaseline(), style = EmuType.display.copy(color = c.ink))
+        BasicText(what, Modifier.alignByBaseline(), style = EmuType.body.copy(color = c.ink2))
     }
 }
