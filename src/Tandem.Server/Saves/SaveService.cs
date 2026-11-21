@@ -14,7 +14,7 @@ namespace Tandem.Server.Saves;
 /// server decides head vs conflict from that alone. A conflict version is never head until resolved.
 /// </summary>
 public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks locks, IDomainEvents events, TimeProvider time,
-    IActivityLog activity, Games.GameNames names)
+    IActivityLog activity, Games.GameNames names, IEventHub hub)
 {
     public const int MaxGameKey = 300;
     public const int MaxSlot = 100;
@@ -325,6 +325,33 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
             await activity.WriteAsync(userId, "save_uploaded", $"Restored an earlier version of {label}", request.DeviceId, emulatorId, gameKey);
         }
         return response;
+    }
+
+    /// <summary>
+    /// Deletes the user's save and state items of one game, with their versions (cascade), known-version records
+    /// (cascade) and un-acked Save deliveries. Blobs no longer referenced are left to the pruner. A device that still
+    /// holds the files uploads them again as new items. 404 not_found when the game has no items.
+    /// </summary>
+    public async Task DeleteGameAsync(Guid userId, string emulatorId, string gameKey, CancellationToken ct)
+    {
+        string label;
+        List<Guid> devices;
+        using (await locks.Acquire(userId, ct))
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var items = await db.SaveItems.Where(i => i.UserId == userId && i.EmulatorId == emulatorId && i.GameKey == gameKey)
+                .ToListAsync(ct);
+            if (items.Count == 0) throw new ApiException(404, "not_found", "This game has no saves.");
+            label = items.Select(i => i.DisplayName).FirstOrDefault(n => !string.IsNullOrEmpty(n)) ?? gameKey;
+            var ids = items.Select(i => i.Id).ToList();
+            var pending = db.Deliveries.Where(d => d.Kind == DeliveryKind.Save && d.AckedUtc == null && ids.Contains(d.TargetId));
+            devices = await pending.Select(d => d.DeviceId).Distinct().ToListAsync(ct);
+            await pending.ExecuteDeleteAsync(ct);
+            await db.SaveItems.Where(i => ids.Contains(i.Id)).ExecuteDeleteAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        foreach (var d in devices) hub.NotifyDevice(d);
+        await activity.WriteAsync(userId, "game_deleted", $"Deleted the saves of {label}", null, emulatorId, gameKey);
     }
 
     /// <summary>Under the user's lock, so a prune run never deletes a version pinned after it picked candidates.

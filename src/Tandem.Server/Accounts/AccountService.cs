@@ -164,15 +164,34 @@ public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> o
         await db.WebSessions.Where(s => s.UserId == userId && s.TokenHash != currentSessionHash).ExecuteDeleteAsync(ct);
     }
 
-    /// <summary>Sets a new password for the account with this email (admin CLI). Existing devices stay signed in.</summary>
+    /// <summary>Sets a new password for the account with this email (admin CLI) and signs out every web session of
+    /// the user. Device keys stay valid (revoke a device separately).</summary>
     public async Task ResetPassword(string email, string newPassword, CancellationToken ct)
     {
-        CheckPassword(newPassword);
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email, ct)
             ?? throw new ApiException(404, "user_not_found", $"No account with email {email}.");
+        await ResetPassword(user, newPassword, ct);
+    }
+
+    /// <summary>The admin web reset: as <see cref="ResetPassword(string, string, CancellationToken)"/>, by id (404 not_found).</summary>
+    public async Task ResetPassword(Guid userId, string newPassword, CancellationToken ct)
+    {
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct)
+            ?? throw new ApiException(404, "not_found", "No such user.");
+        await ResetPassword(user, newPassword, ct);
+    }
+
+    private async Task ResetPassword(User user, string newPassword, CancellationToken ct)
+    {
+        CheckPassword(newPassword);
         user.PasswordHash = Hasher.HashPassword(user, newPassword);
         await db.SaveChangesAsync(ct);
+        await db.WebSessions.Where(s => s.UserId == user.Id).ExecuteDeleteAsync(ct);
     }
+
+    /// <summary>True when <paramref name="password"/> is the user's current password.</summary>
+    public static bool VerifyPassword(User user, string? password) =>
+        Hasher.VerifyHashedPassword(user, user.PasswordHash, password ?? "") != PasswordVerificationResult.Failed;
 
     private static string Clip(string s, int max) => s.Length > max ? s[..max] : s;
 }

@@ -32,7 +32,14 @@ public static class WebEndpoints
         web.MapGet("/games/{emulatorId}/{*gameKey}", (HttpContext http, WebQueryService q, string emulatorId, string gameKey, CancellationToken ct) =>
             q.GameAsync(http.User.UserId(), emulatorId, gameKey.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase), ct));
 
-        web.MapGet("/devices/{id:guid}", (HttpContext http, WebQueryService q, Guid id, CancellationToken ct) =>
+        web.MapDelete("/games/{emulatorId}/{*gameKey}", async (HttpContext http, SaveService saves, string emulatorId, string gameKey,
+            CancellationToken ct) =>
+        {
+            await saves.DeleteGameAsync(http.User.UserId(), emulatorId, gameKey.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase), ct);
+            return Results.NoContent();
+        }).RequireAuthorization(Auth.AuthSetup.WebSessionPolicy);
+
+        web.MapGet("/devices/{id:guid}",(HttpContext http, WebQueryService q, Guid id, CancellationToken ct) =>
             q.DeviceAsync(http.User.UserId(), id, http.User.DeviceId(), ct));
 
         web.MapGet("/devices/{id:guid}/setup", (HttpContext http, WebQueryService q, Guid id, CancellationToken ct) =>

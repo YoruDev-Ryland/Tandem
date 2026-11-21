@@ -54,6 +54,13 @@ public interface IEventHub
     /// <summary>Topics: saves, configs, devices, vault, activity, conflicts.</summary>
     void NotifyUser(Guid userId, string topic);
 
+    /// <summary>Ends every open stream of the device (it was revoked): the response completes and the client sees
+    /// 401 device_revoked when it reconnects.</summary>
+    void CloseDevice(Guid deviceId);
+
+    /// <summary>Ends every open stream of the user (the account was deleted).</summary>
+    void CloseUser(Guid userId);
+
     /// <summary>
     /// Registers the subscriber immediately (events raised after this call returns are not missed). The caller must
     /// dispose the result. A device subscriber gets a <c>deliveries</c> event first, so a reconnecting device re-polls.
@@ -72,6 +79,10 @@ public sealed class NoOpEventHub : IEventHub
     public void NotifyDevice(Guid deviceId) { }
 
     public void NotifyUser(Guid userId, string topic) { }
+
+    public void CloseDevice(Guid deviceId) { }
+
+    public void CloseUser(Guid userId) { }
 
     public IEventSubscription Subscribe(Guid userId, Guid? deviceId, CancellationToken ct) => new Empty();
 }
@@ -128,6 +139,9 @@ public sealed class EventHub(TimeProvider time, Microsoft.Extensions.Options.IOp
             }
         }
 
+        /// <summary>Ends the stream: the reader sees the end of its events.</summary>
+        public void Close() => Channel.Writer.TryComplete();
+
         public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
@@ -147,6 +161,18 @@ public sealed class EventHub(TimeProvider time, Microsoft.Extensions.Options.IOp
     public void NotifyDevice(Guid deviceId) => Fanout(s => s.DeviceId == deviceId, new ServerEvent("deliveries"));
 
     public void NotifyUser(Guid userId, string topic) => Fanout(s => s.UserId == userId, new ServerEvent("changed", topic));
+
+    public void CloseDevice(Guid deviceId) => Close(s => s.DeviceId == deviceId);
+
+    public void CloseUser(Guid userId) => Close(s => s.UserId == userId);
+
+    private void Close(Func<Subscriber, bool> match)
+    {
+        Subscriber[] snapshot;
+        lock (_gate) snapshot = [.. _subscribers];
+        foreach (var s in snapshot)
+            if (match(s)) s.Close();
+    }
 
     private void Fanout(Func<Subscriber, bool> match, ServerEvent evt)
     {

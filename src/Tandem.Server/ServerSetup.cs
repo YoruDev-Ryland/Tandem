@@ -32,6 +32,7 @@ public static class ServerSetup
         builder.Services.AddDatabase(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
         builder.Services.AddTandemAuth(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
         builder.Services.AddScoped<AccountService>();
+        builder.Services.AddScoped<UserDeletion>();
         builder.Services.AddScoped<PairingService>();
         builder.Services.AddSingleton<IBlobStore, BlobStore>();
         builder.Services.AddScoped<BlobService>();

@@ -62,6 +62,23 @@ public static class AccountEndpoints
             await accounts.ChangePassword(http.User.UserId(), request, current, ct);
             return Results.NoContent();
         }).RequireAuthorization(AuthSetup.WebSessionPolicy);
+
+        // Self-service account deletion: the password confirms it, and the only admin cannot leave other users without one.
+        account.MapDelete("", async ([Microsoft.AspNetCore.Mvc.FromBody] DeleteAccountRequest? request, HttpContext http,
+            UserDeletion deletion, TandemDbContext db, CancellationToken ct) =>
+        {
+            var userId = http.User.UserId();
+            await deletion.DeleteAsync(userId, ct, async user =>
+            {
+                if (!AccountService.VerifyPassword(user, request?.Password))
+                    throw new ApiException(403, "bad_password", "The password is incorrect.");
+                if (user.IsAdmin && !await db.Users.AnyAsync(u => u.IsAdmin && u.Id != userId, ct)
+                    && await db.Users.AnyAsync(u => u.Id != userId, ct))
+                    throw new ApiException(409, "last_admin", "You are the only admin. Make another account an admin first.");
+            });
+            WebSessionCookie.Delete(http);
+            return Results.NoContent();
+        }).RequireAuthorization(AuthSetup.WebSessionPolicy);
         return app;
     }
 }

@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Tandem.Server.Devices;
 
 public sealed partial class DeviceService(TandemDbContext db, TimeProvider time, IDomainEvents events, IActivityLog activity,
-    Games.GameNames names)
+    Games.GameNames names, IEventHub hub)
 {
     public const int MaxGames = 20000;
     public const int MaxCores = 500;
@@ -205,6 +205,7 @@ public sealed partial class DeviceService(TandemDbContext db, TimeProvider time,
         var firstRevoke = device.RevokedUtc is null;
         device.RevokedUtc ??= time.GetUtcNow();
         await db.SaveChangesAsync(ct);
+        hub.CloseDevice(device.Id); // its open event streams end now; the reconnect gets 401 device_revoked
         if (firstRevoke)
             await activity.WriteAsync(userId, "device_revoked", $"{device.Name} was revoked", device.Id);
     }
