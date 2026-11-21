@@ -16,7 +16,7 @@ services:
       # SERVER_NAME: Tandem
       # TRUST_FORWARDED_HEADERS: "true"  # when behind a reverse proxy
       # KNOWN_PROXIES: 172.18.0.0/16     # the proxy addresses to trust (comma-separated); narrower than trusting all
-      # ADMIN_EMAIL: you@example.com     # who gets admin-only notices
+      # ADMIN_EMAIL: you@example.com     # the first account created must use this email
       # SILENT_DEVICE_HOURS: 72          # flag a device not seen for this long
       # Tandem__MinFreeBytes: 1073741824 # refuse uploads below this much free disk (default 1 GiB)
     volumes:
