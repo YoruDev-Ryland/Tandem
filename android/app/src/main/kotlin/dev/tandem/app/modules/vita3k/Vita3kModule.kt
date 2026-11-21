@@ -61,7 +61,8 @@ class Vita3kModule(private val internalRoot: String = "/storage/emulated/0") : E
                 if (!e.isDir || !titleRe.matches(n)) continue
                 val files = fs.walk(e.path).filter { !it.isDir }.map { it.path.removePrefix(e.path + "/") }.sorted()
                 if (files.isEmpty()) continue
-                out += LocalItem(ItemKind.Save, n, "", "", e.path, files)
+                // The game's name: the installed app's PARAM.SFO TITLE, else the save's own (C12).
+                out += LocalItem(ItemKind.Save, n, "", "", e.path, files, appTitle(fs, d, n) ?: Sfo.titleAt(fs, "${e.path}/sce_sys/param.sfo"))
             } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
         return out.sortedBy { it.gameKey }
@@ -71,7 +72,10 @@ class Vita3kModule(private val internalRoot: String = "/storage/emulated/0") : E
 
     override fun installedGames(fs: Fs, d: Detected, settings: DeviceSettings): List<InstalledGame> =
         fs.list("${vitaFs(fs, d)}/ux0/app").filter { it.isDir }.map { name(it.path) }
-            .filter { titleRe.matches(it) }.sorted().map { InstalledGame(it) }
+            .filter { titleRe.matches(it) }.sorted().map { InstalledGame(it, appTitle(fs, d, it)) }
+
+    /** TITLE from `ux0/app/<id>/sce_sys/param.sfo`, or null. */
+    private fun appTitle(fs: Fs, d: Detected, id: String): String? = Sfo.titleAt(fs, "${vitaFs(fs, d)}/ux0/app/$id/sce_sys/param.sfo")
 
     override fun configBundle(fs: Fs, d: Detected): ConfigBundleFiles {
         val out = sortedMapOf<String, String>()

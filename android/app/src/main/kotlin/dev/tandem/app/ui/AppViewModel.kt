@@ -69,6 +69,8 @@ class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewMode
         deviceId = { store.deviceId },
         scope = viewModelScope,
         nudges = merge<Any?>(AppGraph.deliveryNudges, server.games.map { it.updatedAt }),
+        emulatorName = { emulatorNames[it] },
+        gameTitle = { emu, key -> server.games.value.value?.firstOrNull { it.emulatorId == emu && it.gameKey == key }?.displayName },
     )
 
     /** Notifications and the battery exemption, asked for in setup and Settings; the activity shows the prompts. */

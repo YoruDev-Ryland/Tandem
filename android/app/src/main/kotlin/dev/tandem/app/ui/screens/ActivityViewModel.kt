@@ -53,6 +53,22 @@ internal fun activityTime(iso: String, now: Instant, zone: ZoneId): String {
 }
 
 /**
+ * An activity line in the app's words: the game's display name for its raw key ("ULUS10400" -> "Crisis Core"), and
+ * the emulator's name for its lowercase id ("uploaded the eden config" -> "uploaded the Eden config"), where the app
+ * knows them. The id is replaced only as a whole word, never inside a game key such as "retroarch/Super Metroid".
+ */
+internal fun humanize(item: ActivityItem, emulatorName: (String) -> String?, gameTitle: (String, String) -> String?): String {
+    var m = item.message
+    val emu = item.emulatorId
+    val key = item.gameKey
+    if (emu != null && key != null) gameTitle(emu, key)?.takeIf { it.isNotBlank() && it != key }?.let { m = m.replace(key, it) }
+    if (emu != null) emulatorName(emu)?.takeIf { it != emu }?.let { name ->
+        m = m.replace(Regex("(?<![\\w/-])${Regex.escape(emu)}(?![\\w/-])"), Regex.escapeReplacement(name))
+    }
+    return m
+}
+
+/**
  * This device's server activity, newest first, paged by the server's `nextBefore` cursor. [nudges] (the delivery
  * signal and each server cache refresh) refresh it while [show]n; there is no activity topic for a device. A refresh
  * prepends what is newer than the top row and keeps the older pages. Every answer is checked against the state it
@@ -66,6 +82,10 @@ class ActivityViewModel(
     private val clock: () -> Instant = Instant::now,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
     private val limit: Int = 50,
+    /** An emulator id's display name ("eden" -> "Eden"), when the app has a module for it. */
+    private val emulatorName: (String) -> String? = { null },
+    /** A game's display name, from the server's games list or the last scan. */
+    private val gameTitle: (emulatorId: String, gameKey: String) -> String? = { _, _ -> null },
 ) {
     private var items = emptyList<ActivityItem>()
     private var nextBefore: Long? = null
@@ -166,7 +186,9 @@ class ActivityViewModel(
         val note = if (!offline) null else updatedAt?.let { "Offline · last updated ${HHMM.format(it.atZone(z))}" } ?: "Offline"
         state.value = ActivityUi(
             signedIn = api() != null,
-            entries = items.map { ActivityEntry(it.id, activityTime(it.utc, now, z), it.message, it.kind == "conflict_opened") },
+            entries = items.map {
+                ActivityEntry(it.id, activityTime(it.utc, now, z), humanize(it, emulatorName, gameTitle), it.kind == "conflict_opened")
+            },
             loaded = loaded, error = error, offline = offline, offlineNote = note,
             hasOlder = nextBefore != null, loadingOlder = loadingOlder, olderError = olderError,
         )

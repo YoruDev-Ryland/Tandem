@@ -43,6 +43,22 @@ class PpssppModuleTest {
         assertThrows(ModuleException::class.java) { m().targetDirFor(fs, d, ItemKind.Save, "bad", "", "") }
     }
 
+    @Test fun saves_states_and_installs_carry_the_param_sfo_title() {
+        put("${ms()}/PSP/SYSTEM/ppsspp.ini")
+        File("${ms()}/PSP/SAVEDATA/ULUS10400DATA00/PARAM.SFO").also { it.parentFile.mkdirs() }
+            .writeBytes(sfoBytes(linkedMapOf("CATEGORY" to "MS", "SAVEDATA_TITLE" to "Slot 1", "TITLE" to "Crisis Core: Final Fantasy VII")))
+        put("${ms()}/PSP/SAVEDATA/ULUS10400DATA00/DATA.BIN")
+        put("${ms()}/PSP/SAVEDATA/ULES00151/PARAM.SFO")   // not a real PARAM.SFO: no name, not an error
+        put("${ms()}/PSP/PPSSPP_STATE/ULUS10400_1.00_0.ppst")
+        val d = m().detect(fs, none)!!
+        val items = m().saveItems(fs, d).associate { (it.kind to it.gameKey) to it.displayName }
+        assertEquals("Crisis Core: Final Fantasy VII", items[ItemKind.Save to "ULUS10400"])
+        assertEquals("Crisis Core: Final Fantasy VII", items[ItemKind.State to "ULUS10400"])
+        assertNull(items[ItemKind.Save to "ULES00151"])
+        val games = m().installedGames(fs, d, none).associate { it.gameKey to it.displayName }
+        assertEquals("Crisis Core: Final Fantasy VII", games["ULUS10400"])
+    }
+
     @Test fun memstick_on_sd_fallback_and_override() {
         put("${storage()}/EFF6-FC92/PPSSPP/PSP/SYSTEM/ppsspp.ini")
         assertEquals("${storage()}/EFF6-FC92/PPSSPP", m().detect(fs, none)!!.dataRoot)
