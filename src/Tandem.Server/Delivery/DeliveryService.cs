@@ -187,6 +187,7 @@ public sealed class DeliveryService(TandemDbContext db, UserLocks locks, IDomain
                 // version), so record it; anything else changes nothing. Either way the device is told 204.
                 if (request.Result != DeliveryResult.Applied) return;
                 await MarkAppliedAsync(delivery, lateAck: true, ct);
+                delivery.Detail = detail;
                 await db.SaveChangesAsync(ct);
             }
             else
@@ -195,6 +196,7 @@ public sealed class DeliveryService(TandemDbContext db, UserLocks locks, IDomain
                     throw new ApiException(409, "already_acked", "This delivery was already acknowledged.");
                 delivery.AckedUtc = time.GetUtcNow();
                 delivery.Result = request.Result;
+                delivery.Detail = detail;
                 if (request.Result == DeliveryResult.Applied)
                     await MarkAppliedAsync(delivery, lateAck: false, ct);
                 await db.SaveChangesAsync(ct);

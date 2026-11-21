@@ -42,7 +42,7 @@ public sealed class GameStateQueries(TandemDbContext db, TimeProvider time)
     public sealed record DeviceInfo(Guid Id, string Name, DateTimeOffset CreatedUtc, bool Active, bool? ShizukuOk, string? RunningJson);
 }
 
-public sealed record HeadInfo(Guid Id, Guid? DeviceId, DateTimeOffset ReceivedUtc);
+public sealed record HeadInfo(Guid Id, Guid? DeviceId, DateTimeOffset ReceivedUtc, string Core);
 
 public sealed class GameStates(
     Dictionary<Guid, GameStateQueries.DeviceInfo> allDevices,

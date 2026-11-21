@@ -349,4 +349,44 @@ public class VaultTests
         Assert.Equal(HttpStatusCode.NoContent, (await Ack(s.Thor, Assert.Single(await VaultDeliveries(s.Thor)).Id)).StatusCode);
         Assert.All(Assert.Single(await List(s.Web)).Holders, h => Assert.True(h.Current));
     }
+
+    private static async Task<SetupStep> PlaceVaultStep(Setup s, Guid device)
+    {
+        var r = await s.Web.GetAsync($"/v1/web/devices/{device}/setup");
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        return (await r.ReadAsync<SetupChecklist>()).Steps.Single(x => x is { Kind: SetupStepKind.PlaceVault, EmulatorId: "eden" });
+    }
+
+    [Fact]
+    public async Task Setup_place_vault_is_done_only_when_every_item_was_placed()
+    {
+        using var f = NewFactory();
+        var s = await TwoDevices(f);
+        var status = await s.Thor.PutAsJsonAsync("/v1/devices/me/status", new DeviceStatusRequest("android", "1.0", true,
+            [new EmulatorStatus("eden", "dev.eden", "1", null)], new Dictionary<string, string> { ["{INTERNAL}"] = "/storage/emulated/0" }));
+        Assert.True(status.IsSuccessStatusCode);
+        var prod = await Upload(s.Odin, "keys", "eden", "prod.keys", await Files(s.Odin, ("prod.keys", "k1")));
+        var title = await Upload(s.Odin, "keys", "eden", "title.keys", await Files(s.Odin, ("title.keys", "t1")));
+
+        var before = await PlaceVaultStep(s, s.ThorId);
+        Assert.False(before.Done);
+        Assert.Equal("prod.keys, title.keys", before.Detail);
+
+        var dProd = (await (await Send(s.Web, prod.ItemId, s.ThorId)).ReadAsync<SendVaultResponse>()).DeliveryId;
+        var dTitle = (await (await Send(s.Web, title.ItemId, s.ThorId)).ReadAsync<SendVaultResponse>()).DeliveryId;
+        Assert.True((await s.Thor.PostJsonAsync($"/v1/deliveries/{dProd}/ack", new AckRequest(DeliveryResult.Applied, "staged in Tandem/vault"))).IsSuccessStatusCode);
+        Assert.True((await s.Thor.PostJsonAsync($"/v1/deliveries/{dTitle}/ack", new AckRequest(DeliveryResult.Applied, "placed in the emulator folder"))).IsSuccessStatusCode);
+
+        var staged = await PlaceVaultStep(s, s.ThorId);
+        Assert.False(staged.Done);
+        Assert.Equal("Copy prod.keys from Tandem/vault/eden/keys/ into Eden's keys folder", staged.Detail);
+
+        // Sent again and placed this time.
+        f.Time.Advance(TimeSpan.FromMinutes(1));
+        var again = (await (await Send(s.Web, prod.ItemId, s.ThorId)).ReadAsync<SendVaultResponse>()).DeliveryId;
+        Assert.True((await s.Thor.PostJsonAsync($"/v1/deliveries/{again}/ack", new AckRequest(DeliveryResult.Applied, "placed in the emulator folder"))).IsSuccessStatusCode);
+        var placed = await PlaceVaultStep(s, s.ThorId);
+        Assert.True(placed.Done);
+        Assert.Null(placed.Detail);
+    }
 }

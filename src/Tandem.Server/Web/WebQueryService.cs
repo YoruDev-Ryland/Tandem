@@ -82,7 +82,7 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
                 select r).ToListAsync(ct);
         var headIds = items.Where(i => i.HeadVersionId != null).Select(i => i.HeadVersionId!.Value).ToList();
         var heads = await db.SaveVersions.AsNoTracking().Where(v => headIds.Contains(v.Id))
-            .Select(v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc)).ToDictionaryAsync(v => v.Id, ct);
+            .Select(v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc, v.Core)).ToDictionaryAsync(v => v.Id, ct);
         var states = await gameStates.LoadAsync(userId, itemQuery, ct);
 
         var keys = items.Select(i => (i.EmulatorId, i.GameKey)).Concat(installs.Select(r => (r.EmulatorId, r.GameKey))).Distinct().ToList();
@@ -107,9 +107,11 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
             .FirstOrDefault(n => !string.IsNullOrEmpty(n));
         var reference = saveItem?.HeadVersionId is not null ? saveItem : newestItem;
         var devices = states.For(emulatorId, items, installs, heads, reference, newest?.DeviceId);
+        // A save item's core lives on its versions (only states key the item by core).
+        var saveCore = saveItem?.HeadVersionId is Guid sh && heads.TryGetValue(sh, out var saveHead) && saveHead.Core != "" ? saveHead.Core : null;
         return new GameRow(emulatorId, gameKey, display, installs.Select(r => r.DeviceId).Distinct().ToList(),
             saveItem?.Id, newest?.DeviceId, newest?.ReceivedUtc, items.Count(i => i.Kind == ItemKind.State), items.Any(i => i.OpenConflict),
-            devices, states.DeviceName(newest?.DeviceId));
+            devices, states.DeviceName(newest?.DeviceId), saveCore, saveItem?.HeadVersionId);
     }
 
     public async Task<GameDetail> GameAsync(Guid userId, string emulatorId, string gameKey, CancellationToken ct)
@@ -135,7 +137,7 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
             }).ToListAsync(ct);
         var states = await gameStates.LoadAsync(userId, itemQuery, ct);
         var headIds = items.Where(i => i.HeadVersionId != null).Select(i => i.HeadVersionId!.Value).ToHashSet();
-        var heads = versions.Where(v => headIds.Contains(v.Id)).ToDictionary(v => v.Id, v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc));
+        var heads = versions.Where(v => headIds.Contains(v.Id)).ToDictionary(v => v.Id, v => new HeadInfo(v.Id, v.DeviceId, v.ReceivedUtc, v.Core));
         var byItem = versions.ToLookup(v => v.ItemId);
 
         var details = items.Select(i => new SaveItemDetail(i.Id, i.Kind, i.Slot, i.Core, i.HeadVersionId, i.OpenConflict,
@@ -256,15 +258,27 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
 
         await AddGrantFoldersAsync(steps, deviceId, ct);
 
-        // Vault items for the device's emulators that it has not been given.
+        // Vault items for the device's emulators: done once every one was placed in the emulator's own folder. An item
+        // not yet given is listed by name; one the device only staged in Tandem/vault (its ack detail does not start
+        // with "placed", which includes apps that predate placement) says where to copy it from.
         var held = await db.DeviceVaultStates.Where(s => s.DeviceId == deviceId).Select(s => s.ItemId).ToListAsync(ct);
         var vault = await db.VaultItems.AsNoTracking().Where(v => v.UserId == userId && v.HeadVersionId != null && v.EmulatorId != null && v.EmulatorId != "")
             .ToListAsync(ct);
+        var lastAck = (await db.Deliveries.AsNoTracking()
+                .Where(d => d.DeviceId == deviceId && d.Kind == DeliveryKind.Vault && d.Result == DeliveryResult.Applied && d.AckedUtc != null)
+                .Select(d => new { d.TargetId, d.AckedUtc, d.CreatedUtc, d.Detail }).ToListAsync(ct))
+            .GroupBy(d => d.TargetId).ToDictionary(g => g.Key, g => g.OrderByDescending(d => d.AckedUtc).ThenByDescending(d => d.CreatedUtc).First().Detail);
+        bool Placed(Guid item) => lastAck.TryGetValue(item, out var d) && d is not null && d.StartsWith("placed", StringComparison.OrdinalIgnoreCase);
         foreach (var g in vault.Where(v => mine.ContainsKey(v.EmulatorId!)).GroupBy(v => v.EmulatorId!).OrderBy(g => g.Key, StringComparer.Ordinal))
         {
             var missing = g.Where(v => !held.Contains(v.Id)).Select(v => v.Name).Order(StringComparer.Ordinal).ToList();
-            steps.Add(new SetupStep(SetupStepKind.PlaceVault, g.Key, $"Place {g.Key} system files", missing.Count == 0,
-                missing.Count == 0 ? null : string.Join(", ", missing)));
+            var staged = g.Where(v => held.Contains(v.Id) && !Placed(v.Id)).ToList();
+            var detail = missing.Count > 0 ? string.Join(", ", missing)
+                : staged.Count > 0 ? string.Join("; ", staged.GroupBy(v => v.Category).OrderBy(c => c.Key, StringComparer.Ordinal).Select(c =>
+                    $"Copy {string.Join(", ", c.Select(v => v.Name).Order(StringComparer.Ordinal))} from Tandem/vault/{g.Key}/{c.Key}/ " +
+                    $"into {Games.EmulatorNames.Display(g.Key)}'s {c.Key} folder"))
+                : null;
+            steps.Add(new SetupStep(SetupStepKind.PlaceVault, g.Key, $"Place {g.Key} system files", detail is null, detail));
         }
 
         // Saves: Done once no un-acked Save delivery remains. Listed per emulator that has saves for the user.

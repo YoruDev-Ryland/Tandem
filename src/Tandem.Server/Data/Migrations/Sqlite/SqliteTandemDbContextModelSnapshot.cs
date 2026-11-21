@@ -195,6 +195,9 @@ namespace Tandem.Server.Data.Migrations.Sqlite
                     b.Property<long>("CreatedUtc")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("Detail")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid>("DeviceId")
                         .HasColumnType("TEXT");
 

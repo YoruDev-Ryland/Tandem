@@ -18,9 +18,11 @@ public sealed record HomeResponse(IReadOnlyList<ContinueItem> Continue, IReadOnl
 
 /// <param name="Devices">Every active device of the user, Newest first, then by name.</param>
 /// <param name="NewestOnDeviceName">Name of the device that uploaded the newest head (null for a web upload or no saves).</param>
+/// <param name="Core">The RetroArch core of the game's save item (null without one, or with no core).</param>
+/// <param name="HeadVersionId">The head version of the game's save item (null without one).</param>
 public sealed record GameRow(string EmulatorId, string GameKey, string? DisplayName, IReadOnlyList<Guid> InstalledOn, Guid? SaveItemId,
     Guid? NewestOnDeviceId, DateTimeOffset? NewestUtc, int StateCount, bool OpenConflict, GameDeviceState[] Devices,
-    string? NewestOnDeviceName);
+    string? NewestOnDeviceName, string? Core, Guid? HeadVersionId);
 
 /// <summary>
 /// How a device stands for a game, first match wins. Differs: it uploaded an open conflict version of one of the

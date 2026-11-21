@@ -469,6 +469,26 @@ public class WebApiTests
     }
 
     [Fact]
+    public async Task Game_rows_carry_the_save_core_and_head_version()
+    {
+        using var f = NewFactory();
+        var (odin, _) = await f.Register(Email, deviceName: "Odin");
+        var web = await f.WebLogin(Email);
+        var ra = await Save(odin, "a", null, "Pokemon Emerald", emulator: "retroarch", core: "mgba");
+        var eden = await Save(odin, "a", null, "0100F2C0115B6000");
+        await odin.PutAsJsonAsync("/v1/devices/me/installs/eden", new InstallsRequest([new InstalledGame("NOSAVE", "No Save", null)]));
+
+        var games = await Get<GameRow[]>(web, "/v1/web/games");
+
+        var r = games.Single(g => g.GameKey == "Pokemon Emerald");
+        Assert.Equal(("mgba", (Guid?)ra.VersionId), (r.Core, r.HeadVersionId));
+        var e = games.Single(g => g.GameKey == "0100F2C0115B6000");
+        Assert.Equal(((string?)null, (Guid?)eden.VersionId), (e.Core, e.HeadVersionId));
+        var none = games.Single(g => g.GameKey == "NOSAVE");
+        Assert.Equal(((string?)null, (Guid?)null), (none.Core, none.HeadVersionId));
+    }
+
+    [Fact]
     public async Task Setup_checklist_lists_missing_emulators_cores_and_folders()
     {
         using var f = NewFactory();

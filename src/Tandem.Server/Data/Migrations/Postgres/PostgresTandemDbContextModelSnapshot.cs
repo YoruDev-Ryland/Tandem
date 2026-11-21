@@ -204,6 +204,9 @@ namespace Tandem.Server.Data.Migrations.Postgres
                     b.Property<DateTimeOffset>("CreatedUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Detail")
+                        .HasColumnType("text");
+
                     b.Property<Guid>("DeviceId")
                         .HasColumnType("uuid");
 

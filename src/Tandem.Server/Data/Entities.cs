@@ -214,6 +214,9 @@ public class Delivery
     /// ack of it is still honoured.</summary>
     public bool Superseded { get; set; }
     public string? NotesJson { get; set; }
+    /// <summary>The device's ack detail (truncated to DeliveryService.MaxDetail). For a vault item: "placed …" (in the
+    /// emulator's own folder) or "staged …" (left in Tandem/vault for the user to move).</summary>
+    public string? Detail { get; set; }
 }
 
 public class UserBlob
