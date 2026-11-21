@@ -28,6 +28,11 @@ public sealed class ServerOptions
     /// <summary>Runs the 5-minute Shizuku-off check in the background (on in production; the test factory turns it off).</summary>
     public bool EnableNotifyChecks { get; set; } = true;
 
+    /// <summary>Downloads the public Switch title list so title-id saves get names (on in production; tests turn it off).</summary>
+    public bool EnableTitleNames { get; set; } = true;
+    public string? TitleNamesUrl { get; set; } = "https://raw.githubusercontent.com/blawar/titledb/master/US.en.json";
+    public int TitleNamesRefreshDays { get; set; } = 7;
+
     /// <summary>Capacity of the notification queue; when full, further notifications are dropped (and logged).</summary>
     public int NotifyQueueCapacity { get; set; } = 1000;
 

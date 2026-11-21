@@ -14,7 +14,7 @@ namespace EmuSync.Server.Saves;
 /// server decides head vs conflict from that alone. A conflict version is never head until resolved.
 /// </summary>
 public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLocks locks, IDomainEvents events, TimeProvider time,
-    IActivityLog activity)
+    IActivityLog activity, Games.GameNames names)
 {
     public const int MaxGameKey = 300;
     public const int MaxSlot = 100;
@@ -45,7 +45,8 @@ public sealed class SaveService(EmuSyncDbContext db, BlobService blobs, UserLock
             await using var tx = await BeginAsync(ct);
             var item = await LoadItemForUpdateAsync(userId, itemId, ct)
                 ?? throw new InvalidOperationException("Save item vanished while locked.");
-            if (request.DisplayName is not null) item.DisplayName = request.DisplayName;
+            if (names.Resolve(item.EmulatorId, item.GameKey, request.DisplayName ?? item.DisplayName) is { } name)
+                item.DisplayName = name;
             label = item.DisplayName ?? item.GameKey;
 
             var head = item.HeadVersionId is Guid headId

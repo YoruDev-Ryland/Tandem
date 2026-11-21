@@ -59,6 +59,11 @@ public static class ServerSetup
         builder.Services.AddHttpClient(Notifier.ClientName, c => c.Timeout = Notifier.RequestTimeout)
             .RemoveAllLoggers(); // the default handlers log every request URI, and a Discord webhook URL is a secret
         builder.Services.AddSingleton<INotifier, Notifier>();
+        builder.Services.AddSingleton<Games.TitleNamesHolder>();
+        builder.Services.AddSingleton<Games.GameNames>();
+        builder.Services.AddSingleton<Games.TitleNamesBackfill>();
+        builder.Services.AddHttpClient(Games.TitleNamesRefresher.ClientName, c => c.Timeout = TimeSpan.FromMinutes(10));
+        builder.Services.AddHostedService<Games.TitleNamesRefresher>();
         builder.Services.AddSingleton<NotifyTriggers>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<NotifyTriggers>());
     }

@@ -8,7 +8,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace EmuSync.Server.Devices;
 
-public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time, IDomainEvents events, IActivityLog activity)
+public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time, IDomainEvents events, IActivityLog activity,
+    Games.GameNames names)
 {
     public const int MaxGames = 20000;
     public const int MaxCores = 500;
@@ -170,7 +171,7 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
         foreach (var r in existing.Where(r => keys.Contains(r.GameKey)))
         {
             var g = byKey[r.GameKey];
-            r.DisplayName = g.DisplayName;
+            r.DisplayName = names.Resolve(emulatorId, g.GameKey, g.DisplayName);
             r.Crc32 = g.Crc32;
             r.SeenUtc = now;
         }
@@ -178,7 +179,7 @@ public sealed partial class DeviceService(EmuSyncDbContext db, TimeProvider time
             db.InstallRecords.Add(new InstallRecord
             {
                 DeviceId = deviceId, EmulatorId = emulatorId, GameKey = g.GameKey,
-                DisplayName = g.DisplayName, Crc32 = g.Crc32, SeenUtc = now,
+                DisplayName = names.Resolve(emulatorId, g.GameKey, g.DisplayName), Crc32 = g.Crc32, SeenUtc = now,
             });
         await db.SaveChangesAsync(ct);
 
