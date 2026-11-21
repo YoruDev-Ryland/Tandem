@@ -70,6 +70,24 @@ object AppGraph {
     /** Bumped on each SSE `deliveries` event of the live session, so the UI needs no second connection. */
     val deliveryNudges: StateFlow<Long> get() = sessionFlows.deliveryNudges
 
+    /**
+     * The server answered 401 device_revoked (any client of this process): remember it, say so once, and stop sync.
+     * Nothing restarts it (launch, boot, the watchdog check [StateStore.canSync]) until a sign-in or sign-out.
+     */
+    fun revoked(context: Context) {
+        val ctx = context.applicationContext
+        if (store(ctx).markRevoked()) {
+            LogBuffer.add("the server says this device was removed: sync stopped")
+            Notifier(ctx).also { it.ensureChannels() }.revoked()
+        }
+        runCatching { SyncService.stop(ctx) }
+    }
+
+    /** A sync reached the server with nothing left failing: what "Synced N ago" shows (written at most once a minute). */
+    fun synced(context: Context) {
+        runCatching { store(context).markSynced(System.currentTimeMillis()) }
+    }
+
     fun store(context: Context): StateStore = storeRef ?: synchronized(this) {
         storeRef ?: StateStore(File(context.applicationContext.filesDir, "state.json")).also { storeRef = it }
     }

@@ -104,12 +104,12 @@ class StatusReportTest {
         assertTrue(statusBodies().isEmpty())
     }
 
-    @Test fun resends_every_90_seconds_while_running_and_once_on_exit() = runBlocking {
+    @Test fun resends_every_60_seconds_while_running_and_once_on_exit() = runBlocking {
         val e = engine()
         e.fullScan(); statusBodies()
         e.reportRunning(setOf("eden"))
         assertEquals(1, statusBodies().size)
-        now += 89_000L
+        now += 59_000L
         e.reportRunning(setOf("eden"))
         assertTrue("not due yet", statusBodies().isEmpty())
         now += 1_000L
@@ -126,7 +126,7 @@ class StatusReportTest {
         assertTrue(statusBodies().isEmpty())
     }
 
-    @Test fun a_failed_report_is_retried_after_90_seconds_not_every_tick() = runBlocking {
+    @Test fun a_failed_report_is_retried_after_60_seconds_not_every_tick() = runBlocking {
         val e = engine()
         e.fullScan(); statusBodies()
         statusCode = 503
@@ -136,7 +136,7 @@ class StatusReportTest {
         now += 5_000L
         e.reportRunning(setOf("eden"))
         assertTrue(statusBodies().isEmpty())
-        now += 85_000L
+        now += 55_000L
         e.reportRunning(setOf("eden"))
         assertEquals(1, statusBodies().size)
     }

@@ -137,4 +137,25 @@ class WorkPlannerTest {
         flags.flag(setOf("eden"))
         assertEquals(setOf("eden"), WorkPlanner(autoApply = false, flags).awaitingExit())
     }
+
+    @Test fun the_poll_waits_for_the_fallback_while_the_stream_is_healthy() {
+        val p = WorkPlanner(autoApply = true)
+        assertEquals(listOf(SyncWork.ApplyAll), p.pollTick(streamHealthy = true, now = 0))      // the first tick polls
+        assertEquals(emptyList<SyncWork>(), p.pollTick(streamHealthy = true, now = 60_000))
+        assertEquals(emptyList<SyncWork>(), p.pollTick(streamHealthy = true, now = 240_000))
+        assertEquals(listOf(SyncWork.ApplyAll), p.pollTick(streamHealthy = true, now = 300_000))  // the 5 min fallback
+        // The stream down: every tick polls.
+        assertEquals(listOf(SyncWork.ApplyAll), p.pollTick(streamHealthy = false, now = 360_000))
+        assertEquals(listOf(SyncWork.ApplyAll), p.pollTick(streamHealthy = false, now = 420_000))
+        // Auto-apply off: the poll never applies, healthy or not.
+        val off = WorkPlanner(autoApply = false)
+        assertEquals(emptyList<SyncWork>(), off.pollTick(streamHealthy = false, now = 0))
+    }
+
+    @Test fun the_monitor_backs_off_only_with_the_screen_off_and_nothing_running() {
+        assertEquals(5_000L, monitorDelay(screenOn = true, anyRunning = false))
+        assertEquals(5_000L, monitorDelay(screenOn = false, anyRunning = true))
+        assertEquals(5_000L, monitorDelay(screenOn = true, anyRunning = true))
+        assertEquals(20_000L, monitorDelay(screenOn = false, anyRunning = false))
+    }
 }

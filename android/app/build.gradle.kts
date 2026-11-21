@@ -85,6 +85,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp-sse:5.5.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
 
     val composeBom = platform("androidx.compose:compose-bom:2026.11.01")
     implementation(composeBom)

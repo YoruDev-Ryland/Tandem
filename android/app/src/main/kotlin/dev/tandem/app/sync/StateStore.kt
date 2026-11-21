@@ -241,7 +241,12 @@ class StateStore(
 
     /** See StateData.revoked. */
     val revoked: Boolean get() = synchronized(lock) { data.revoked }
-    fun markRevoked() { if (!revoked) mutate { it.copy(revoked = true) } }
+    /** Marks this device removed on the server; returns true only the first time (one notification). */
+    fun markRevoked(): Boolean = synchronized(lock) {
+        if (data.revoked) return false
+        mutate { it.copy(revoked = true) }
+        true
+    }
 
     /** Whether sync should run: signed in, and not removed on the server. */
     val canSync: Boolean get() = synchronized(lock) { !data.deviceKey.isNullOrBlank() && !data.revoked }

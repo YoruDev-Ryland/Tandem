@@ -95,6 +95,55 @@ class ApiClientTest {
         } finally { stream.stop() }
     }
 
+    private val revokedBody = """{"code":"device_revoked","message":"This device has been revoked."}"""
+
+    @Test fun a_revoked_key_is_reported_before_the_call_throws() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(401).body(revokedBody).build())
+        server.enqueue(MockResponse.Builder().code(401).body("""{"code":"unauthorized"}""").build())
+        var revoked = 0
+        val c = ApiClient(base(), "k", onRevoked = { revoked++ })
+        try { c.deliveries(); fail("expected 401") } catch (e: ApiException) { assertTrue(e.isRevoked) }
+        assertEquals(1, revoked)
+        try { c.deliveries(); fail("expected 401") } catch (e: ApiException) { assertEquals(false, e.isRevoked) }
+        assertEquals("another 401 is not a revoke", 1, revoked)
+    }
+
+    @Test fun event_stream_stops_reconnecting_once_the_device_is_revoked() {
+        repeat(3) { server.enqueue(MockResponse.Builder().code(401).body(revokedBody).build()) }
+        val revoked = CountDownLatch(1)
+        val states = java.util.concurrent.CopyOnWriteArrayList<Boolean>()
+        val stream = EventStream(OkHttpClient(), base(), "k", {}, { states += it }, onRevoked = { revoked.countDown() },
+            backoff = longArrayOf(20))
+        stream.start()
+        try {
+            assertTrue(revoked.await(5, TimeUnit.SECONDS))
+            Thread.sleep(300)   // ample for several 20 ms reconnects, had it kept trying
+            assertEquals(1, server.requestCount)
+            assertEquals(listOf(false), states.toList())
+            assertEquals(false, stream.healthy)
+        } finally { stream.stop() }
+    }
+
+    @Test fun event_stream_reconnects_when_the_server_goes_silent() {
+        // The first stream opens and then says nothing; the read timeout ends it and the second one delivers.
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "text/event-stream")
+            .body("event: ping\ndata: {}\n\n").bodyDelay(3, TimeUnit.SECONDS).build())
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "text/event-stream")
+            .body("event: deliveries\ndata: {}\n\n").build())
+        val latch = CountDownLatch(1)
+        val stream = EventStream(OkHttpClient(), base(), "k", { latch.countDown() }, {}, readTimeoutMillis = 300,
+            backoff = longArrayOf(20))
+        stream.start()
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS))
+            assertTrue(server.requestCount >= 2)
+        } finally { stream.stop() }
+    }
+
+    @Test fun the_default_read_timeout_outlasts_two_missed_pings() {
+        assertTrue(SSE_READ_TIMEOUT_MS in 60_000L..90_000L)
+    }
+
     @Test fun timed_status_put_fails_instead_of_landing_late() = runBlocking {
         server.enqueue(MockResponse.Builder().code(204).headersDelay(3, TimeUnit.SECONDS).build())
         val req = dev.tandem.app.model.DeviceStatusRequest("android", "0", true, emptyList(), emptyMap(), listOf("eden"))

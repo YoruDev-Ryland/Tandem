@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.tandem.app.service.AppGraph
 import dev.tandem.app.service.LogBuffer
 import dev.tandem.app.service.SyncService
+import dev.tandem.app.service.Watchdog
 import dev.tandem.app.ui.AppViewModel
 import dev.tandem.app.ui.kit.TopBar
 import dev.tandem.app.ui.screens.ActivityActions
@@ -71,7 +72,11 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         // The only in-app start: sync runs whenever this device is signed in. Starting a running service is a no-op.
-        if (AppGraph.store(this).deviceKey != null) SyncService.tryStart(this)
+        // Removed on the server, it stays off until a sign-in. The watchdog restarts sync if something kills it later.
+        if (AppGraph.store(this).canSync) {
+            SyncService.tryStart(this)
+            Watchdog.schedule(this)
+        }
         vm.server.setVisible(true)
         vm.server.refresh()   // the key or server may have changed while we were away (setup, debug screen)
     }

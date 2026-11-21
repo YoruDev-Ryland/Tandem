@@ -65,7 +65,7 @@ class DeviceActions(
  * nothing (sync stays stopped until a sign-in), and a start Android refuses is logged, not thrown.
  */
 fun syncNow(context: Context, store: StateStore = AppGraph.store(context)) {
-    if (store.deviceKey.isNullOrBlank()) return
+    if (!store.canSync) return
     SyncService.tryStart(context, SyncService.ACTION_SCAN)
     SyncService.tryStart(context, SyncService.ACTION_APPLY)
 }
