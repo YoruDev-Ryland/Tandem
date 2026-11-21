@@ -61,6 +61,47 @@ public class MigrationSnapshotTests
     }
 
     [Fact]
+    public void A_failed_snapshot_is_logged_loudly_and_the_migration_still_runs()
+    {
+        var dir = Directory.CreateTempSubdirectory("tandem-snapshot-").FullName;
+        try
+        {
+            var path = Path.Combine(dir, "tandem.db");
+            string previous;
+            using (var db = Open(path))
+            {
+                previous = db.Database.GetMigrations().ToList()[^2];
+                db.GetService<IMigrator>().Migrate(previous);
+            }
+            var logger = new ListLogger();
+            using (var db = Open(path))
+            {
+                // A snapshot that cannot be written (a full disk, here a path that is a directory) is a warning, not a crash.
+                Directory.CreateDirectory($"{path}.pre-{previous}");
+                Assert.Null(DataSetup.TrySnapshotBeforeMigrations(db, logger));
+                db.Database.Migrate();
+                Assert.Empty(db.Database.GetPendingMigrations());
+            }
+            var warning = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Critical);
+            Assert.Contains("without a snapshot", warning.Message);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(dir, true);
+        }
+    }
+
+    private sealed class ListLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter) => Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    [Fact]
     public void A_new_database_gets_no_snapshot()
     {
         using var f = new ServerFactory();
