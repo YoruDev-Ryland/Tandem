@@ -211,6 +211,7 @@ public class HardeningTests
             var csp = string.Join("", r.Headers.GetValues("Content-Security-Policy"));
             Assert.Contains("default-src 'self'", csp);
             Assert.Contains("img-src 'self' data:", csp);
+            Assert.Contains("font-src 'self' data:", csp); // Vite inlines small font subsets as data: URLs
             Assert.Contains("frame-ancestors 'none'", csp);
             Assert.Equal("nosniff", r.Headers.GetValues("X-Content-Type-Options").Single());
             Assert.Equal("no-referrer", r.Headers.GetValues("Referrer-Policy").Single());

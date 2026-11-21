@@ -19,7 +19,7 @@ public static partial class SecurityHeaders
                $"script-src 'self'{scripts}; " +
                "style-src 'self' 'unsafe-inline'; " +
                "img-src 'self' data:; " +
-               "font-src 'self'; " +
+               "font-src 'self' data:; " +
                "connect-src 'self'; " +
                "object-src 'none'; " +
                "base-uri 'self'; " +
