@@ -16,7 +16,7 @@ namespace Tandem.Server.Notify;
 /// <para>De-duplication is in memory, per (user, event, target item), within <see cref="DedupeWindow"/>.</para>
 /// </summary>
 public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory scopes, INotifier notifier, TimeProvider time,
-    Microsoft.Extensions.Options.IOptions<ServerOptions> options, ILogger<NotifyTriggers> logger) : BackgroundService
+    Microsoft.Extensions.Options.IOptions<ServerOptions> options, Http.StorageMonitor storage, ILogger<NotifyTriggers> logger) : BackgroundService
 {
     public static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan ShizukuGrace = TimeSpan.FromMinutes(30);
@@ -25,6 +25,11 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
     private const int MaxDetail = 200;
 
     private sealed record ShizukuOff(Guid UserId, Guid DeviceId, string DeviceName);
+    private sealed record Silent(Guid UserId, Guid DeviceId, string DeviceName, int Hours);
+    private sealed record StorageLow(long FreeBytes, long MinFreeBytes);
+
+    /// <summary>The <see cref="ServerSetting"/> that marks the current low-storage episode as notified.</summary>
+    public const string StorageLowNotifiedKey = "notify.storageLowNotified";
 
     private readonly Channel<object> _queue = Channel.CreateBounded<object>(
         new BoundedChannelOptions(Math.Max(1, options.Value.NotifyQueueCapacity)) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
@@ -77,6 +82,12 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
             try { await RunOnceAsync(ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch (Exception ex) { logger.LogError(ex, "Shizuku check failed"); }
+            try { await CheckSilentDevicesAsync(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception ex) { logger.LogError(ex, "Silent device check failed"); }
+            try { await CheckStorageAsync(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception ex) { logger.LogError(ex, "Storage check failed"); }
 
             try { await Task.Delay(CheckInterval, time, ct); }
             catch (OperationCanceledException) { return; }
@@ -114,6 +125,69 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
         foreach (var d in due) await Enqueue(new ShizukuOff(d.UserId, d.Id, d.Name));
         return due.Count;
     }
+
+    /// <summary>The active devices (not revoked, not a legacy browser device) last seen (or, never seen, created) more
+    /// than <see cref="ServerOptions.SilentDeviceHours"/> ago.</summary>
+    public static async Task<List<Device>> SilentDevicesAsync(TandemDbContext db, Guid? userId, int hours, DateTimeOffset now,
+        CancellationToken ct, bool tracked = false)
+    {
+        var cutoff = now - TimeSpan.FromHours(Math.Max(1, hours));
+        var query = db.Devices.Where(d => d.RevokedUtc == null && d.Platform != Devices.DeviceService.LegacyWebPlatform);
+        if (userId is { } u) query = query.Where(d => d.UserId == u);
+        if (!tracked) query = query.AsNoTracking();
+        // Filtered in memory: DateTimeOffset comparisons do not translate on every provider.
+        return (await query.ToListAsync(ct)).Where(d => (d.LastSeenUtc ?? d.CreatedUtc) <= cutoff).ToList();
+    }
+
+    /// <summary>One silent-device check (the loop runs it every 5 minutes). Notifies once per silence: the time is kept in
+    /// <c>Device.SilentNotifiedUtc</c>, cleared once the device is seen again. Returns how many were queued.</summary>
+    public async Task<int> CheckSilentDevicesAsync(CancellationToken ct)
+    {
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+        var now = time.GetUtcNow();
+        var hours = Math.Max(1, options.Value.SilentDeviceHours);
+
+        // Seen since the notification: that silence is over, so a later one notifies again.
+        foreach (var d in (await db.Devices.Where(d => d.SilentNotifiedUtc != null).ToListAsync(ct))
+                 .Where(d => d.LastSeenUtc > d.SilentNotifiedUtc))
+            d.SilentNotifiedUtc = null;
+        await db.SaveChangesAsync(ct);
+
+        var due = (await SilentDevicesAsync(db, null, hours, now, ct, tracked: true)).Where(d => d.SilentNotifiedUtc == null).ToList();
+        if (due.Count == 0) return 0;
+        foreach (var d in due) d.SilentNotifiedUtc = now;
+        await db.SaveChangesAsync(ct);
+        foreach (var d in due) await Enqueue(new Silent(d.UserId, d.Id, d.Name, hours));
+        return due.Count;
+    }
+
+    /// <summary>One storage check: while the data directory is low on space, notifies the admins once per episode (kept
+    /// in a server setting, so a restart does not repeat it); once there is space again the episode ends. Returns
+    /// whether a notification was queued.</summary>
+    public async Task<bool> CheckStorageAsync(CancellationToken ct)
+    {
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+        var row = await db.ServerSettings.FirstOrDefaultAsync(s => s.Key == StorageLowNotifiedKey, ct);
+        if (!storage.IsLow)
+        {
+            if (row is not null)
+            {
+                db.ServerSettings.Remove(row);
+                await db.SaveChangesAsync(ct);
+            }
+            return false;
+        }
+        if (row is not null) return false;
+        db.ServerSettings.Add(new ServerSetting { Key = StorageLowNotifiedKey, Value = time.GetUtcNow().ToString("O") });
+        await db.SaveChangesAsync(ct);
+        await Enqueue(new StorageLow(storage.FreeBytes ?? 0, options.Value.MinFreeBytes));
+        return true;
+    }
+
+    private static string Megabytes(long bytes) =>
+        string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0} MB");
 
     private async Task HandleAsync(object work, CancellationToken ct)
     {
@@ -157,6 +231,20 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
                     $"Shizuku has been off on {e.DeviceName} for over {(int)ShizukuGrace.TotalMinutes} minutes. "
                     + "Syncing there is paused until Shizuku is running again.", NotifyEventNames.ShizukuOff), ct);
                 break;
+            case Silent e:
+                await SendAsync(e.UserId, NotifyEventNames.SilentDevice, e.DeviceId.ToString(), new NotifyMessage("Tandem: device silent",
+                    $"{e.DeviceName} has not been in touch for over {e.Hours} hours, so its saves are not syncing. "
+                    + "Check that it is on, online and that the Tandem app is running.", NotifyEventNames.SilentDevice), ct);
+                break;
+            case StorageLow e:
+            {
+                var admins = await db.Users.AsNoTracking().Where(u => u.IsAdmin).Select(u => u.Id).ToListAsync(ct);
+                var message = new NotifyMessage("Tandem: storage low",
+                    $"The server has {Megabytes(e.FreeBytes)} free in its data directory (the minimum is {Megabytes(e.MinFreeBytes)}). "
+                    + "Uploads are paused until space is freed.", NotifyEventNames.StorageLow);
+                foreach (var admin in admins) await SendAsync(admin, NotifyEventNames.StorageLow, "storage", message, ct);
+                break;
+            }
             case BackupFinished e:
             {
                 var admins = await db.Users.AsNoTracking().Where(u => u.IsAdmin).Select(u => u.Id).ToListAsync(ct);

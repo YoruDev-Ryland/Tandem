@@ -38,6 +38,23 @@ public sealed class ServerOptions
         "https://raw.githubusercontent.com/hax0kartik/3dsdb/master/jsons/list_JP.json";
     public int TitleNamesRefreshDays { get; set; } = 7;
 
+    /// <summary>Below this many free bytes in the data directory, uploads get 507 storage_full, /healthz reports degraded
+    /// and admins are notified once (default 1 GiB).</summary>
+    public long MinFreeBytes { get; set; } = 1L << 30;
+
+    /// <summary>An active device not seen for this many hours is "silent": listed on Home and notified once per silence.</summary>
+    public int SilentDeviceHours { get; set; } = 72;
+
+    /// <summary>Activity rows older than this many days are pruned (0 keeps them forever).</summary>
+    public int ActivityRetentionDays { get; set; } = 180;
+
+    /// <summary>Comma-separated proxy IPs and CIDR networks (KNOWN_PROXIES). When set together with
+    /// TrustForwardedHeaders, only these may send X-Forwarded-*; otherwise every proxy is trusted.</summary>
+    public string? KnownProxies { get; set; }
+
+    /// <summary>When set (ADMIN_EMAIL), the first account on the server must register with this email.</summary>
+    public string? AdminEmail { get; set; }
+
     /// <summary>Capacity of the notification queue; when full, further notifications are dropped (and logged).</summary>
     public int NotifyQueueCapacity { get; set; } = 1000;
 

@@ -88,6 +88,7 @@ public abstract class TandemDbContext(DbContextOptions options) : DbContext(opti
             e.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => new { x.ItemId, x.Seq }).IsUnique();
             e.HasOne<SaveItem>().WithMany().HasForeignKey(x => x.ItemId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.EmulatorVersion).HasMaxLength(40);
         });
 
         m.Entity<DeviceItemState>(e =>

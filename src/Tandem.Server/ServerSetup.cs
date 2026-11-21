@@ -28,6 +28,8 @@ public static class ServerSetup
         EnvironmentAliases.Add(builder.Configuration);
         builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection(ServerOptions.Section));
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<IFreeSpaceProbe, DriveFreeSpaceProbe>();
+        builder.Services.AddSingleton<StorageMonitor>();
         builder.Services.AddOpenApi();
         builder.Services.AddDatabase(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());
         builder.Services.AddTandemAuth(builder.Configuration.GetSection(ServerOptions.Section).Get<ServerOptions>() ?? new ServerOptions());

@@ -1,3 +1,4 @@
+using Tandem.Server.Http;
 using Tandem.Protocol;
 using Tandem.Server.Auth;
 
@@ -11,7 +12,7 @@ public static class VaultEndpoints
         var vault = app.MapGroup("/v1/vault").RequireAuthorization();
 
         vault.MapPost("/upload", (HttpContext http, VaultUploadRequest request, VaultService svc, CancellationToken ct) =>
-            svc.UploadAsync(http.User.UserId(), http.User.DeviceId(), request, ct));
+            svc.UploadAsync(http.User.UserId(), http.User.DeviceId(), request, ct)).RequireStorage();
 
         vault.MapGet("", (HttpContext http, VaultService svc, CancellationToken ct) => svc.ListAsync(http.User.UserId(), ct));
 

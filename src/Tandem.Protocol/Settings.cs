@@ -11,11 +11,16 @@ public sealed record StorageUsage(long TotalBytes, IReadOnlyList<StorageRow> ByE
 
 /// <summary>One notification destination. <see cref="Token"/> is write-only: it is accepted on PUT (an ntfy bearer
 /// token; omit it to keep the stored token of an existing target with the same <see cref="Url"/>, send "" to clear it)
-/// and is never returned. <see cref="TokenSet"/> is returned by GET instead (ignored on PUT).</summary>
+/// and is never returned. <see cref="TokenSet"/> is returned by GET instead (ignored on PUT). GET returns <see cref="Url"/>
+/// masked as <c>scheme://host/…</c> (a webhook URL is itself a secret); a PUT that sends a masked value back unchanged
+/// keeps the stored URL.</summary>
 public sealed record NotifyTarget(NotifyKind Kind, string Url, string? Token = null, bool TokenSet = false);
 
-/// <summary>Which events notify. All default to true.</summary>
-public sealed record NotifyEvents(bool Conflicts = true, bool FailedSyncs = true, bool ShizukuOff = true, bool BackupFailed = true);
+/// <summary>Which events notify. All default to true. BackupFailed and StorageLow only matter for admins.</summary>
+/// <param name="SilentDevices">A device has not been seen for the server's SilentDeviceHours.</param>
+/// <param name="StorageLow">The server's data directory is low on free space (uploads are refused).</param>
+public sealed record NotifyEvents(bool Conflicts = true, bool FailedSyncs = true, bool ShizukuOff = true, bool BackupFailed = true,
+    bool SilentDevices = true, bool StorageLow = true);
 
 /// <summary>Per-user notification settings (at most 10 targets; each Url must be http or https). BackupFailed only
 /// matters for admins.</summary>

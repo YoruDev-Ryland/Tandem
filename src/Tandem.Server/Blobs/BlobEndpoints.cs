@@ -43,7 +43,7 @@ public static class BlobEndpoints
             }
             await blobs.ConfirmAsync(http.User.UserId(), hash, size, ct);
             return Results.NoContent();
-        }).RequireAuthorization().DisableAntiforgery();
+        }).RequireAuthorization().DisableAntiforgery().RequireStorage();
 
         app.MapGet("/v1/blobs/{hash}", async (string hash, HttpContext http, IBlobStore store, BlobService blobs, CancellationToken ct) =>
         {

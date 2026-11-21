@@ -16,6 +16,10 @@ public static class EnvironmentAliases
         ("SERVER_NAME", "ServerName"),
         ("WEB_ROOT", "WebRoot"),
         ("TITLE_NAMES", "EnableTitleNames"),
+        ("MIN_FREE_BYTES", "MinFreeBytes"),
+        ("SILENT_DEVICE_HOURS", "SilentDeviceHours"),
+        ("KNOWN_PROXIES", "KnownProxies"),
+        ("ADMIN_EMAIL", "AdminEmail"),
     ];
 
     /// <summary>Adds the aliases as the LOWEST-priority source, so an explicit <c>Tandem__X</c> variable, a command-line

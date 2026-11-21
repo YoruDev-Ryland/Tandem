@@ -15,6 +15,8 @@ public static class NotifyEventNames
     public const string FailedSync = "failed_sync";
     public const string ShizukuOff = "shizuku_off";
     public const string BackupFailed = "backup_failed";
+    public const string SilentDevice = "silent_device";
+    public const string StorageLow = "storage_low";
     public const string Test = "test";
 
     public static bool Enabled(NotifyEvents e, string name) => name switch
@@ -23,6 +25,8 @@ public static class NotifyEventNames
         FailedSync => e.FailedSyncs,
         ShizukuOff => e.ShizukuOff,
         BackupFailed => e.BackupFailed,
+        SilentDevice => e.SilentDevices,
+        StorageLow => e.StorageLow,
         _ => true,
     };
 }

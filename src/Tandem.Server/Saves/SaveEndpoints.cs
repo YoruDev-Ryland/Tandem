@@ -11,7 +11,7 @@ public static class SaveEndpoints
         var saves = app.MapGroup("/v1/saves").RequireAuthorization();
 
         saves.MapPost("/upload", (HttpContext http, SaveUploadRequest request, SaveService svc, CancellationToken ct) =>
-            svc.UploadAsync(http.User.UserId(), RequireDevice(http), request, ct));
+            svc.UploadAsync(http.User.UserId(), RequireDevice(http), request, ct)).RequireStorage();
 
         saves.MapPost("/{itemId:guid}/pin/{versionId:guid}", async (HttpContext http, Guid itemId, Guid versionId, SaveService svc, CancellationToken ct) =>
         {

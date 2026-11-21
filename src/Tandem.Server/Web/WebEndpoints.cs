@@ -22,7 +22,7 @@ public static class WebEndpoints
         var web = app.MapGroup("/v1/web").RequireAuthorization();
 
         web.MapGet("/home", (HttpContext http, WebQueryService q, CancellationToken ct) =>
-            q.HomeAsync(http.User.UserId(), http.User.DeviceId(), ct));
+            q.HomeAsync(http.User.UserId(), http.User.DeviceId(), ct, http.User.IsAdmin()));
 
         web.MapGet("/games", (HttpContext http, WebQueryService svc, string? emulator, string? q, CancellationToken ct) =>
             svc.GamesAsync(http.User.UserId(), emulator, q, ct));
@@ -57,7 +57,7 @@ public static class WebEndpoints
         web.MapGet("/configs", (HttpContext http, WebQueryService q, CancellationToken ct) =>
             q.ConfigsAsync(http.User.UserId(), ct));
 
-        web.MapPost("/saves/upload", UploadAsync).DisableAntiforgery();
+        web.MapPost("/saves/upload", UploadAsync).DisableAntiforgery().RequireStorage();
 
         app.MapGet("/v1/saves/versions/{versionId:guid}/download", DownloadAsync).RequireAuthorization();
         app.MapGet("/v1/export.zip", ExportAsync).RequireAuthorization();

@@ -2,7 +2,8 @@ namespace Tandem.Protocol;
 
 public sealed record ErrorResponse(string Code, string Message);
 
-public sealed record ServerInfo(string Name, int Protocol, bool RegistrationOpen);
+/// <param name="Version">The server version: its InformationalVersion without the "+commit" suffix.</param>
+public sealed record ServerInfo(string Name, int Protocol, bool RegistrationOpen, string Version);
 
 public sealed record RegisterRequest(string Email, string Password, string DeviceName, string Platform);
 public sealed record LoginRequest(string Email, string Password, string DeviceName, string Platform);

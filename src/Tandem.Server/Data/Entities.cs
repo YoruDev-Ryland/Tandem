@@ -30,6 +30,8 @@ public class Device
     /// <summary>When the Shizuku-off notification for the current off period was sent; cleared with ShizukuOffSinceUtc.</summary>
     public DateTimeOffset? ShizukuOffNotifiedUtc { get; set; }
     public DateTimeOffset? RevokedUtc { get; set; }
+    /// <summary>When the "device silent" notification for the current silence was sent; cleared once it is seen again.</summary>
+    public DateTimeOffset? SilentNotifiedUtc { get; set; }
     /// <summary>Emulator ids running at the last status report plus that report's time, as JSON ({at, ids}); read
     /// through DeviceService.RunningEmulators.</summary>
     public string? RunningEmulatorsJson { get; set; }
@@ -94,6 +96,11 @@ public class SaveVersion
     public ConflictReason? ConflictReason { get; set; }
     /// <summary>Set once a conflict version has been settled. Open conflicts: ConflictReason != null and !Resolved.</summary>
     public bool Resolved { get; set; }
+    /// <summary>The uploading device's version of the emulator (from its last status report) when this was uploaded;
+    /// null for a web upload, a restore copy, or a device that never reported it.</summary>
+    public string? EmulatorVersion { get; set; }
+    /// <summary>Entries in <see cref="ManifestJson"/>; null on rows written before it was stored (read the manifest).</summary>
+    public int? FileCount { get; set; }
 }
 
 public class DeviceItemState
@@ -266,6 +273,8 @@ public class BackupRun
     public long Id { get; set; }
     public DateTimeOffset Utc { get; set; }
     public bool Ok { get; set; }
+    /// <summary>Written, but some recorded blob files were missing (listed in the backup's manifest); Error says how many.</summary>
+    public bool Partial { get; set; }
     public long Bytes { get; set; }
     public string? Name { get; set; }
     public string? Error { get; set; }

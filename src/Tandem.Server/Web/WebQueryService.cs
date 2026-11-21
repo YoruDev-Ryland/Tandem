@@ -10,7 +10,8 @@ using Microsoft.EntityFrameworkCore;
 namespace Tandem.Server.Web;
 
 /// <summary>Read models for the web app. Everything is scoped to the user and ignores revoked devices.</summary>
-public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameStateQueries gameStates)
+public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameStateQueries gameStates, Http.StorageMonitor storage,
+    Microsoft.Extensions.Options.IOptions<ServerOptions> options)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public const int ContinueCount = 10;
@@ -22,7 +23,7 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
 
     // ---- Home ----
 
-    public async Task<HomeResponse> HomeAsync(Guid userId, Guid? currentDevice, CancellationToken ct)
+    public async Task<HomeResponse> HomeAsync(Guid userId, Guid? currentDevice, CancellationToken ct, bool isAdmin = false)
     {
         var heads = await (
                 from i in db.SaveItems.AsNoTracking()
@@ -52,7 +53,11 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
             .Select(a => new ActivityItem(a.Id, a.Utc, a.Kind, a.Message, a.DeviceId,
                 db.Devices.Where(x => x.Id == a.DeviceId).Select(x => x.Name).FirstOrDefault(), a.EmulatorId, a.GameKey))
             .ToListAsync(ct);
-        return new HomeResponse(cont, devices, new Attention(concurrent, firstSync, shizuku, failed, configConflicts), recent);
+        var backupOff = isAdmin && !(await Backup.BackupSettings.LoadAsync(db, ct)).Enabled;
+        var silent = (await Notify.NotifyTriggers.SilentDevicesAsync(db, userId, options.Value.SilentDeviceHours, time.GetUtcNow(), ct))
+            .OrderBy(d => d.CreatedUtc).Select(d => d.Id).ToList();
+        return new HomeResponse(cont, devices, new Attention(concurrent, firstSync, shizuku, failed, configConflicts, storage.IsLow,
+            backupOff, silent), recent);
     }
 
     public async Task<List<DeviceSummary>> DevicesAsync(Guid userId, Guid? current, CancellationToken ct)

@@ -658,4 +658,85 @@ public class NotifyTests
         Assert.Equal(SaveUploadStatus.Superseded, again.Status);
         Assert.Single(handler.Requests);
     }
+
+    [Fact]
+    public async Task Target_urls_come_back_masked_and_a_masked_url_sent_back_keeps_the_stored_one()
+    {
+        var (f, handler) = NewFactory();
+        using var _ = f;
+        var (a, _) = await f.Register("a@example.com");
+        const string second = "https://discord.example.com/api/webhooks/2/other";
+        await Configure(a, null, new NotifyTarget(NotifyKind.Discord, DiscordUrl), new NotifyTarget(NotifyKind.Discord, second),
+            new NotifyTarget(NotifyKind.Ntfy, "http://ntfy.local:8080/topic", "tk"));
+
+        var raw = await a.GetStringAsync("/v1/settings/notifications");
+        Assert.DoesNotContain("secret", raw);
+        Assert.DoesNotContain("topic", raw);
+        var got = (await a.GetFromJsonAsync<NotifySettingsDto>("/v1/settings/notifications", TestApi.Json))!;
+        Assert.Equal(["https://discord.example.com/\u2026", "https://discord.example.com/\u2026", "http://ntfy.local:8080/\u2026"],
+            got.Targets.Select(t => t.Url));
+
+        // Sent back as is (and the second Discord target dropped): the first stored Discord URL and the ntfy token stay.
+        await Configure(a, null, got.Targets[0], got.Targets[2] with { TokenSet = false });
+        await a.PostAsync("/v1/settings/notifications/test", null);
+        Assert.Equal(["http://ntfy.local:8080/topic", DiscordUrl], handler.Requests.Select(r => r.Url).Order(StringComparer.Ordinal));
+        Assert.Contains(handler.Requests, r => r.Headers.GetValueOrDefault("Authorization") == "Bearer tk");
+
+        // A masked value that matches nothing stored is refused rather than stored literally.
+        var bad = await a.PutAsJsonAsync("/v1/settings/notifications",
+            new NotifySettingsDto([new NotifyTarget(NotifyKind.Webhook, "https://new.example.com/\u2026")], new NotifyEvents()), TestApi.Json);
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_device_silent_for_72_hours_notifies_once_per_silence()
+    {
+        var (f, handler) = NewFactory();
+        using var _ = f;
+        var (a, _) = await f.Register("a@example.com", deviceName: "Thor");
+        var (b, bKey) = await f.PairSecondDevice(a, "Odin");
+        await Configure(a, null, new NotifyTarget(NotifyKind.Ntfy, NtfyUrl));
+        var triggers = f.Services.GetRequiredService<NotifyTriggers>();
+
+        f.Time.Advance(TimeSpan.FromHours(71));
+        await SetStatus(a, true);
+        Assert.Equal(0, await triggers.CheckSilentDevicesAsync(default));
+        f.Time.Advance(TimeSpan.FromHours(2));
+        await SetStatus(a, true); // Thor keeps reporting; Odin has been silent for 73 h
+        Assert.Equal(1, await triggers.CheckSilentDevicesAsync(default));
+        Assert.Equal(0, await triggers.CheckSilentDevicesAsync(default));
+        await Flush(f);
+        var sent = Assert.Single(handler.Requests);
+        Assert.Contains("Odin", sent.Body);
+        Assert.Equal("Tandem: device silent", sent.Headers["Title"]);
+
+        var web = await f.WebLogin("a@example.com");
+        Assert.Equal([bKey.DeviceId], (await web.GetOk<HomeResponse>("/v1/web/home")).Attention.SilentDevices);
+
+        // Seen again: the silence is over and Home no longer lists it; a later silence notifies again.
+        f.Time.Advance(TimeSpan.FromMinutes(5));
+        await SetStatus(b, true);
+        Assert.Equal(0, await triggers.CheckSilentDevicesAsync(default));
+        Assert.Empty((await web.GetOk<HomeResponse>("/v1/web/home")).Attention.SilentDevices);
+        f.Time.Advance(TimeSpan.FromHours(73));
+        await SetStatus(a, true);
+        Assert.Equal(1, await triggers.CheckSilentDevicesAsync(default));
+        await Flush(f);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task The_silent_device_toggle_turns_it_off()
+    {
+        var (f, handler) = NewFactory();
+        using var _ = f;
+        var (a, _) = await f.Register("a@example.com");
+        await f.PairSecondDevice(a, "Odin");
+        await Configure(a, new NotifyEvents(SilentDevices: false), new NotifyTarget(NotifyKind.Ntfy, NtfyUrl));
+        f.Time.Advance(TimeSpan.FromHours(80));
+        await SetStatus(a, true);
+        Assert.Equal(1, await f.Services.GetRequiredService<NotifyTriggers>().CheckSilentDevicesAsync(default));
+        await Flush(f);
+        Assert.Empty(handler.Requests);
+    }
 }
