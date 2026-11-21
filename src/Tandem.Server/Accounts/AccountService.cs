@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace Tandem.Server.Accounts;
 
-public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> options, TimeProvider time)
+public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> options, TimeProvider time, LoginThrottle throttle)
 {
     public const string AllowRegistrationKey = "allowRegistration";
     public const int MinPasswordLength = 8;
@@ -67,6 +67,11 @@ public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> o
             var first = !await db.Users.AnyAsync(ct);
             if (!first && !await GetAllowRegistration(ct))
                 throw new ApiException(403, "registration_closed", "Registration is closed on this server.");
+            // ADMIN_EMAIL closes the first-run window: until the first account exists, only that email may register.
+            if (first && !string.IsNullOrWhiteSpace(options.Value.AdminEmail)
+                && !string.Equals(email, options.Value.AdminEmail.Trim(), StringComparison.OrdinalIgnoreCase))
+                throw new ApiException(403, "admin_email_required",
+                    "The first account on this server must use the admin email the server was set up with (ADMIN_EMAIL).");
             var user = await CreateUser(email, request.Password, isAdmin: first, ct);
             return await CreateDevice(user.Id, request.DeviceName, request.Platform, ct);
         }
@@ -105,14 +110,20 @@ public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> o
         return await CreateDevice(user.Id, request.DeviceName, request.Platform, ct);
     }
 
-    /// <summary>Verifies email and password; every failure is the same 401.</summary>
+    /// <summary>Verifies email and password; every failure is the same 401. After repeated failures for one email the
+    /// account must wait (429 too_many_attempts, see <see cref="LoginThrottle"/>).</summary>
     public async Task<User> Authenticate(string? email, string? password, CancellationToken ct)
     {
         var normalized = (email ?? "").Trim().ToLowerInvariant();
+        throttle.Check(normalized);
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == normalized, ct);
         var result = Hasher.VerifyHashedPassword(user ?? DummyUser, user?.PasswordHash ?? DummyHash, password ?? "");
         if (user is null || result == PasswordVerificationResult.Failed)
+        {
+            throttle.Failed(normalized);
             throw new ApiException(401, "invalid_credentials", "Wrong email or password.");
+        }
+        throttle.Succeeded(normalized);
         if (result == PasswordVerificationResult.SuccessRehashNeeded)
         {
             user.PasswordHash = Hasher.HashPassword(user, password!);

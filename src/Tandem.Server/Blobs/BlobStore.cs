@@ -63,7 +63,14 @@ public sealed class BlobStore(IOptions<ServerOptions> options) : IBlobStore
                 total += read;
             }
 
-            if (file is not null) { await file.FlushAsync(ct); await file.DisposeAsync(); file = null; }
+            if (file is not null)
+            {
+                // To the disk, not just the OS cache: after a power cut a blob must never be renamed into place half-written.
+                await file.FlushAsync(ct);
+                file.Flush(flushToDisk: true);
+                await file.DisposeAsync();
+                file = null;
+            }
             if (!string.Equals(Convert.ToHexStringLower(hasher.GetHashAndReset()), expectedHash, StringComparison.Ordinal))
                 throw new ApiException(400, "hash_mismatch", "Content does not match the hash.");
 
@@ -71,6 +78,7 @@ public sealed class BlobStore(IOptions<ServerOptions> options) : IBlobStore
             {
                 File.Move(tmp, path, overwrite: true); // same directory: atomic; same content if racing
                 moved = true;
+                Durability.SyncDirectory(Path.GetDirectoryName(path)!); // and the rename itself survives a power cut
             }
             return total;
         }

@@ -52,6 +52,9 @@ public sealed class ServerOptions
     /// TrustForwardedHeaders, only these may send X-Forwarded-*; otherwise every proxy is trusted.</summary>
     public string? KnownProxies { get; set; }
 
+    /// <summary>More CIDR networks, merged with <see cref="KnownProxies"/>.</summary>
+    public string? KnownNetworks { get; set; }
+
     /// <summary>When set (ADMIN_EMAIL), the first account on the server must register with this email.</summary>
     public string? AdminEmail { get; set; }
 
