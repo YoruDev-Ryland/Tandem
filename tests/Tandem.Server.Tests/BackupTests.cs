@@ -508,6 +508,21 @@ public sealed class BackupTests : IDisposable
         Assert.True(Directory.Exists(other));
     }
 
+    [Theory]
+    [InlineData(100, 0, false, true, false)]   // a clean run
+    [InlineData(100, 2, false, true, true)]    // partial: missing blob files, the backup restores
+    [InlineData(100, 0, true, false, false)]   // the old backups could not be removed
+    [InlineData(100, 2, true, false, true)]    // partial AND the prune failed: the target keeps filling, so it failed
+    [InlineData(0, 0, false, false, false)]    // nothing written
+    public void A_run_is_ok_only_when_written_and_old_backups_were_removed(long bytes, int missing, bool pruneFailed, bool ok, bool partial)
+    {
+        var (isOk, isPartial, error) = BackupService.Outcome(bytes, missing, pruneFailed ? "could not remove" : null, "b.tar.gz");
+        Assert.Equal(ok, isOk);
+        Assert.Equal(partial, isPartial);
+        if (pruneFailed) Assert.Contains("could not remove", error);
+        if (missing > 0) Assert.Contains("missing", error);
+    }
+
     [Fact]
     public async Task Missing_blob_file_makes_a_partial_backup_that_lists_it_and_still_restores()
     {

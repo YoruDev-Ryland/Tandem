@@ -122,6 +122,7 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
                 string? name = null;
                 long bytes = 0;
                 string? error = null;
+                string? pruneError = null;
                 var missing = 0;
                 try
                 {
@@ -132,14 +133,8 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
                     name = BackupFormat.NameFor(started, settings.Encrypt);
                     (bytes, missing) = await WriteAsync(target, name, settings, started, ct);
                     logger.LogInformation("Backup {Name} written ({Bytes} bytes)", name, bytes);
-                    error = await PruneTargetAsync(target, name, settings.Keep, ct);
-                    if (missing > 0)
-                    {
-                        var partial = $"{missing} blob file{(missing == 1 ? " was" : "s were")} missing from the data directory, so " +
-                                      $"{(missing == 1 ? "it is" : "they are")} not in {name} (listed in its manifest); everything else was backed up.";
-                        logger.LogWarning("Backup {Name} is partial: {Missing} blob files missing", name, missing);
-                        error = error is null ? partial : $"{partial} {error}";
-                    }
+                    pruneError = await PruneTargetAsync(target, name, settings.Keep, ct);
+                    if (missing > 0) logger.LogWarning("Backup {Name} is partial: {Missing} blob files missing", name, missing);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -151,14 +146,15 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
                     error = Describe(ex);
                     bytes = 0;
                     missing = 0;
+                    pruneError = null;
                     logger.LogError("Backup failed: {Error}", error);
                 }
 
-                // A partial run is Ok: the backup is there and restores; the missing files are listed in it.
+                var (ok, isPartial, detail) = error is null ? Outcome(bytes, missing, pruneError, name) : (false, false, error);
                 var run = new BackupRun
                 {
-                    Utc = started, Ok = bytes > 0 && (error is null || missing > 0), Partial = missing > 0, Bytes = bytes, Name = name,
-                    Error = Truncate(error),
+                    Utc = started, Ok = ok, Partial = isPartial, Bytes = bytes, Name = name,
+                    Error = Truncate(detail),
                 };
                 await RecordAsync(run);
                 await events.Raise(new BackupFinished(run.Ok, run.Error, run.Partial), CancellationToken.None);
@@ -169,6 +165,21 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
         {
             Interlocked.Decrement(ref _active);
         }
+    }
+
+    /// <summary>
+    /// How a run that wrote <paramref name="bytes"/> ends. A partial run (blob files <paramref name="missing"/>) is Ok:
+    /// the backup is there and restores, the missing files listed in it. A failed removal of old backups
+    /// (<paramref name="pruneError"/>) is not, partial or not: the target keeps filling, so it must show as failed.
+    /// </summary>
+    public static (bool Ok, bool Partial, string? Error) Outcome(long bytes, int missing, string? pruneError, string? name)
+    {
+        string? partial = missing > 0
+            ? $"{missing} blob file{(missing == 1 ? " was" : "s were")} missing from the data directory, so " +
+              $"{(missing == 1 ? "it is" : "they are")} not in {name} (listed in its manifest); everything else was backed up."
+            : null;
+        var error = partial is null ? pruneError : pruneError is null ? partial : $"{partial} {pruneError}";
+        return (bytes > 0 && pruneError is null, missing > 0, error);
     }
 
     private static string Describe(Exception ex) => ex switch
