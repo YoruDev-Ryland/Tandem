@@ -147,6 +147,13 @@ class AzaharModule(
         return "${existing?.path ?: "$tr/$appHigh/${low.lowercase()}"}/data"
     }
 
+    /**
+     * System data and keys (aes_keys.txt, seeddb.bin, shared fonts) go to `sysdata` in the Citra-layout user folder,
+     * next to `config` and `sdmc`, which detection found.
+     */
+    override fun vaultTarget(fs: Fs, d: Detected, category: String, name: String): String? =
+        if (category == "sysdata" || category == "keys") "${d.dataRoot}/sysdata" else null
+
     companion object {
         /**
          * Program ID (u64 LE at 0x118 of the NCCH header) of an NCCH (.cxi) or NCSD (.3ds/.cci) image, else null.

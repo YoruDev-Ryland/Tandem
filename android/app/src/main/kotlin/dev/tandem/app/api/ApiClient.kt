@@ -183,6 +183,8 @@ class ApiClient(
         get("/v1/devices", ListSerializer(DeviceSummary.serializer()))
 
     override suspend fun me(): DeviceSummary = get("/v1/devices/me", DeviceSummary.serializer())
+
+    override suspend fun vault(): List<VaultItemDto> = get("/v1/vault", ListSerializer(VaultItemDto.serializer()))
 }
 
 private fun query(vararg params: Pair<String, Any?>): String =

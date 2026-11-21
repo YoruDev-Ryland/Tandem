@@ -34,7 +34,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
     private val keyPrefix = "retroarch/"
     private val coreFolder = Regex("\\(([^()]+)\\)\\s*$")   // "Nintendo - Game Boy Advance (mGBA)" -> mGBA
 
-    private class Dirs(val saves: String, val states: String, val config: String, val playlists: String,
+    private class Dirs(val saves: String, val states: String, val config: String, val playlists: String, val system: String,
                        val sortSaves: Boolean, val sortStates: Boolean)
 
     private fun cfgPath(d: Detected) = "${d.dataRoot}/retroarch.cfg"
@@ -58,7 +58,18 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         fun dir(key: String, sub: String) = c.path(key, base)?.let { rooted(it).trimEnd('/') } ?: "$base/$sub"
         val config = dir("rgui_config_directory", "config")
         return Dirs(dir("savefile_directory", "saves"), dir("savestate_directory", "states"), config,
-            dir("playlist_directory", "playlists"), c.bool("sort_savefiles_enable"), c.bool("sort_savestates_enable"))
+            dir("playlist_directory", "playlists"), dir("system_directory", "system"), c.bool("sort_savefiles_enable"), c.bool("sort_savestates_enable"))
+    }
+
+    /**
+     * BIOS and system files go to RetroArch's system folder: retroarch.cfg's `system_directory` when it names one,
+     * else `system` under the RetroArch folder when that exists. Otherwise null: the core would look elsewhere.
+     */
+    override fun vaultTarget(fs: Fs, d: Detected, category: String, name: String): String? {
+        if (category != "bios" && category != "system") return null
+        val dirs = dirs(fs, d) ?: return null
+        val configured = readCfg(fs, d)?.get("system_directory") != null
+        return dirs.system.takeIf { configured || fs.exists(it) }
     }
 
     override fun detect(fs: Fs, settings: DeviceSettings): Detected? {

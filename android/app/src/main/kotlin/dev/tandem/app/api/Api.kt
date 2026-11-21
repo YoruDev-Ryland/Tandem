@@ -38,4 +38,6 @@ interface Api {
     suspend fun activity(device: String?, before: Long?, limit: Int = 50): ActivityPage
     suspend fun devices(): List<DeviceSummary>
     suspend fun me(): DeviceSummary
+    /** The vault's items, to learn a Vault delivery's category and name (a delivery carries only the item id). */
+    suspend fun vault(): List<VaultItemDto> = emptyList()
 }

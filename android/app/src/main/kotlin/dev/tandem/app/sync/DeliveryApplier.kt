@@ -165,6 +165,7 @@ class DeliveryApplier(
     /** One apply pass over every delivery, or only [emulatorId]'s. Then republishes the waiting deliveries. */
     private suspend fun pass(emulatorId: String?): ApplyReport {
         passWaiting.clear()
+        vaultItems = null; vaultFailed = null   // the vault list is read again by each pass that meets a vault delivery
         passReceived.clear()
         exitPass = emulatorId != null   // only onEmulatorExited scopes a pass: what it applies waited for the exit
         var fetchedAny = false
@@ -371,21 +372,90 @@ class DeliveryApplier(
         return done()
     }
 
+    /** The vault's items by id, fetched once per pass for the first Vault delivery (a delivery names only the id). */
+    private var vaultItems: Map<String, VaultItemDto>? = null
+
+    /** Why this pass couldn't read the vault list; its other vault deliveries wait too, without asking again. */
+    private var vaultFailed: String? = null
+
+    private suspend fun vaultItem(id: String): VaultItemDto? {
+        vaultFailed?.let { throw NoAck(it) }
+        val items = vaultItems ?: try {
+            api.vault().associateBy { it.id }
+        } catch (e: ApiException) {
+            vaultFailed = "vault list: server error ${e.status}"; throw NoAck(vaultFailed!!)
+        } catch (e: IOException) {
+            vaultFailed = "vault list: ${e.message}"; throw NoAck(vaultFailed!!)
+        } catch (e: kotlinx.serialization.SerializationException) {
+            vaultFailed = "vault list not understood"; throw NoAck(vaultFailed!!)
+        }
+        vaultItems = items
+        return items[id]
+    }
+
+    /**
+     * A vault item (keys, BIOS, firmware, system data). Where its emulator's module knows the folder for its category
+     * ([EmulatorModule.vaultTarget]) the files go there, under the save rules: never while the emulator runs (it waits
+     * for the exit like a save), the running check repeated right before writing, every differing file there backed up
+     * first. Otherwise they are staged in Tandem/vault/<emulator>/<category>/<name>, Tandem's own folder.
+     */
     private suspend fun applyVault(d: DeliveryDto): Outcome {
         validate(d.manifest)
         try { Paths.requireSafeSegment(d.targetId) } catch (e: ModuleException) { throw Reject("unsafe path") }
         val key = "vault|${d.targetId}"
         if (store.applyMarker(key) != null) throw NoAck("an earlier vault write awaits restore")
-        val dir = "$vaultRoot/${d.targetId}"
+        val item = vaultItem(d.targetId)
+        fun safe(s: String?) = s?.takeIf { runCatching { Paths.requireSafeSegment(it) }.isSuccess }
+        val name = safe(item?.name)
+        val category = safe(item?.category)
+        val label = name ?: "vault item ${d.targetId}"
+        val m = d.emulatorId.takeIf { it.isNotEmpty() }?.let { registry.byId(it) }
+        val det = m?.let { mod -> moduleCall { mod.detect(fs, settings) } }
+        val target = if (m != null && det != null && category != null && name != null) {
+            moduleCall { m.vaultTarget(fs, det, category, name) }
+        } else null
+
+        if (m != null && det != null && target != null) {
+            if (fs.isEmulatorRunning(m, det)) return waitingVault(d, m, label)
+            val planned = d.manifest.map { Planned(it, it.path, "$target/${it.path}", false) }
+            pendingWhileRunning.remove(d.id)
+            if (planned.all { fs.exists(it.abs) && fileMatches(it.abs, it.entry) }) {   // already there, identical
+                ack(d, DeliveryResult.Applied, PLACED)
+                return Outcome.Applied
+            }
+            try {
+                install(d, Target(
+                    name = "$label for ${m.displayName}", markerKey = key, backupId = m.emulatorId, safeKey = ItemKey.safe(key),
+                    procs = m.processPackages(det), targetDir = target, files = planned, local = emptyMap(),
+                    deletable = emptySet(), guardHash = null, untrackedOk = emptySet(), checkUntracked = false,
+                ))
+            } catch (e: StartedRunning) {
+                return waitingVault(d, m, label)
+            }
+            notifier("Placed $label in ${m.displayName}'s folder")
+            ack(d, DeliveryResult.Applied, PLACED)
+            return Outcome.Applied
+        }
+
+        val dir = if (name != null && category != null) "$vaultRoot/${m?.emulatorId ?: SHARED}/$category/$name" else "$vaultRoot/${d.targetId}"
         install(d, Target(
-            name = "vault ${d.targetId}", markerKey = key, backupId = "vault", safeKey = ItemKey.safe(key), procs = null,
+            name = label, markerKey = key, backupId = "vault", safeKey = ItemKey.safe(key), procs = null,
             targetDir = dir, files = d.manifest.map { Planned(it, it.path, "$dir/${it.path}", false) },
             local = emptyMap(), deletable = emptySet(), guardHash = null, untrackedOk = emptySet(),
             checkUntracked = false,
         ))
-        notifier("Vault files ready in Tandem/vault")
-        ack(d, DeliveryResult.Applied)
+        val shown = dir.removePrefix("/storage/emulated/0/")
+        notifier("$label is ready in $shown. Copy it to where ${m?.displayName ?: "the emulator"} expects it.")
+        ack(d, DeliveryResult.Applied, STAGED)
         return Outcome.Applied
+    }
+
+    /** A vault item held back because its emulator runs: like a save, it waits for the exit. */
+    private fun waitingVault(d: DeliveryDto, m: EmulatorModule, label: String): Outcome {
+        pendingWhileRunning[d.id] = m.emulatorId
+        passWaiting[d.id] = WaitingDelivery(d.id, m.emulatorId, m.displayName, null, null, fromDeviceName = null)
+        if (notifiedRunning.add(d.id)) notifier("Close ${m.displayName} to receive $label from the vault")
+        return Outcome.Waiting
     }
 
     /**
@@ -697,6 +767,11 @@ class DeliveryApplier(
 
     companion object {
         const val DEFAULT_VAULT_ROOT = "/storage/emulated/0/Tandem/vault"
+        /** The staging folder of a vault item with no emulator. */
+        private const val SHARED = "shared"
+        /** Ack details of an applied vault item: in the emulator's own folder, or only staged in Tandem/vault. */
+        const val PLACED = "placed in the emulator folder"
+        const val STAGED = "staged in Tandem/vault"
         const val MAX_PASSES = 5
         private val sha256 = Regex("[0-9a-f]{64}")
     }

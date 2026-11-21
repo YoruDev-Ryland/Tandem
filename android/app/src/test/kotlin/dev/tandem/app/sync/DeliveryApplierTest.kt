@@ -95,6 +95,10 @@ class DeliveryApplierTest {
             acks += id to req
             ackErrors[id]?.let { throw it }
         }
+        var vaultItems: List<VaultItemDto> = emptyList()
+        var vaultError: Exception? = null
+        var vaultCalls = 0
+        override suspend fun vault(): List<VaultItemDto> { vaultCalls++; vaultError?.let { throw it }; return vaultItems }
     }
 
     /** Each dir under <root>/saves is one Save item; files in <root>/config and <root>/cfg2 form the bundle. */
@@ -125,6 +129,9 @@ class DeliveryApplierTest {
             failTarget?.let { throw it }
             return "$root/saves/$gameKey"
         }
+        /** Keys go to <root>/data/keys, like Eden's; other categories have no known folder. */
+        override fun vaultTarget(fs: Fs, d: Detected, category: String, name: String) =
+            if (category == "keys") "$root/data/keys" else null
     }
 
     // ---- harness ----
@@ -656,9 +663,71 @@ class DeliveryApplierTest {
         assertEquals(1, r.applied)
         assertEquals("new", File(vaultRoot, "vault-1/bios/old.bin").readText())
         assertEquals("bb", File(vaultRoot, "vault-1/bios/b.bin").readText())
-        assertEquals(DeliveryResult.Applied, ackOf("v1").result)
-        assertTrue(notes.contains("Vault files ready in Tandem/vault"))
+        assertEquals(AckRequest(DeliveryResult.Applied, DeliveryApplier.STAGED), ackOf("v1"))
+        assertTrue(notes.any { it.contains("is ready in") })
         assertEquals("old", File(backupRoot, "vault/${ItemKey.safe("vault|vault-1")}/$now/bios/old.bin").readText())
+    }
+
+    private fun keysDelivery(id: String = "v1", item: String = "item-keys", vararg files: Pair<String, String>) =
+        DeliveryDto(id, DeliveryKind.Vault, item, "vv-$id", null, "fake", manifest = files.map { entry(it.first, it.second) }.sortedBy { it.path })
+
+    @Test fun keys_go_into_the_emulators_own_folder_with_a_backup_of_what_they_replace() = runBlocking {
+        api.vaultItems = listOf(VaultItemDto("item-keys", "keys", "fake", "keys"))
+        put("data/keys/prod.keys", "old keys")
+        api.standing = listOf(keysDelivery("v1", "item-keys", "prod.keys" to "new keys", "title.keys" to "titles"))
+        val r = applier().applyAll()
+        assertEquals(1, r.applied)
+        assertEquals("new keys", read("data/keys/prod.keys"))
+        assertEquals("titles", read("data/keys/title.keys"))
+        assertEquals(AckRequest(DeliveryResult.Applied, DeliveryApplier.PLACED), ackOf("v1"))
+        assertEquals("old keys", File(backupRoot, "fake/${ItemKey.safe("vault|item-keys")}/$now/prod.keys").readText())
+        assertFalse("nothing staged in Tandem/vault", File(vaultRoot).exists())
+        assertTrue(notes.contains("Placed keys in fake's folder"))
+        assertTrue(store.applyMarkers().isEmpty())
+    }
+
+    @Test fun keys_wait_while_the_emulator_runs_and_land_when_it_closes() = runBlocking {
+        api.vaultItems = listOf(VaultItemDto("item-keys", "keys", "fake", "keys"))
+        put("data/keys/prod.keys", "old keys")
+        api.standing = listOf(keysDelivery("v1", "item-keys", "prod.keys" to "new keys"))
+        val fs = fs().apply { alive.add("com.fake.emu") }
+        val a = applier(fs)
+        val r = a.applyAll()
+        assertEquals(1, r.waitingForEmulator)
+        assertEquals(setOf("fake"), r.waitingOn)
+        assertTrue(api.acks.isEmpty())
+        assertEquals("old keys", read("data/keys/prod.keys"))
+        assertEquals(listOf("Close fake to receive keys from the vault"), notes)
+        fs.alive.clear()
+        assertEquals(1, a.onEmulatorExited("fake").applied)
+        assertEquals("new keys", read("data/keys/prod.keys"))
+    }
+
+    @Test fun keys_already_in_place_are_not_rewritten() = runBlocking {
+        api.vaultItems = listOf(VaultItemDto("item-keys", "keys", "fake", "keys"))
+        put("data/keys/prod.keys", "same")
+        api.standing = listOf(keysDelivery("v1", "item-keys", "prod.keys" to "same"))
+        assertEquals(1, applier().applyAll().applied)
+        assertEquals(AckRequest(DeliveryResult.Applied, DeliveryApplier.PLACED), ackOf("v1"))
+        assertFalse("no backup taken: nothing was replaced", File(backupRoot, "fake").exists())
+    }
+
+    @Test fun an_unmapped_category_is_staged_by_emulator_category_and_name() = runBlocking {
+        api.vaultItems = listOf(VaultItemDto("item-fw", "firmware", "fake", "Firmware 19.0.1"))
+        api.standing = listOf(keysDelivery("v1", "item-fw", "a.nca" to "nca"))
+        assertEquals(1, applier().applyAll().applied)
+        assertEquals("nca", File(vaultRoot, "fake/firmware/Firmware 19.0.1/a.nca").readText())
+        assertEquals(AckRequest(DeliveryResult.Applied, DeliveryApplier.STAGED), ackOf("v1"))
+        assertFalse(File(root, "data/keys").exists())
+    }
+
+    @Test fun without_the_vault_list_the_delivery_waits_for_the_next_pass() = runBlocking {
+        api.vaultError = java.io.IOException("offline")
+        api.standing = listOf(keysDelivery("v1", "item-keys", "prod.keys" to "k"), keysDelivery("v2", "item-other", "x.bin" to "x"))
+        val r = applier().applyAll()
+        assertEquals(2, r.failed)
+        assertTrue("never acked, so the server offers it again", api.acks.isEmpty())
+        assertEquals("the list is fetched once per pass, not per delivery", 1, api.vaultCalls)
     }
 
     @Test fun vault_unsafe_target_rejected() = runBlocking {
@@ -669,6 +738,35 @@ class DeliveryApplierTest {
     }
 
     // ---- modules ----
+
+    @Test fun module_vault_targets_only_where_the_module_knows_the_folder() {
+        val fs = LocalFs()
+        val eden = Detected("eden", "dev.eden.eden_emulator", "", "/e/files")
+        assertEquals("/e/files/keys", EdenModule().vaultTarget(fs, eden, "keys", "prod.keys"))
+        assertNull("firmware is installed from inside Eden", EdenModule().vaultTarget(fs, eden, "firmware", "fw"))
+        val az = Detected("azahar", "org.azahar_emu.azahar", "", "/a/user")
+        assertEquals("/a/user/sysdata", AzaharModule().vaultTarget(fs, az, "sysdata", "aes_keys.txt"))
+        assertEquals("/a/user/sysdata", AzaharModule().vaultTarget(fs, az, "keys", "aes_keys.txt"))
+        assertNull(AzaharModule().vaultTarget(fs, az, "bios", "x"))
+        for (m in listOf(PpssppModule(), DolphinModule(), MelonDsModule(), Vita3kModule())) {
+            for (c in listOf("bios", "keys", "firmware", "sysdata", "system")) {
+                assertNull("${m.emulatorId} $c", m.vaultTarget(fs, Detected(m.emulatorId, "p", "", "/x"), c, "n"))
+            }
+        }
+        // RetroArch: the cfg's system_directory, else RetroArch/system when it exists, else nothing.
+        val internal = tmp.newFolder("ra-internal").path
+        val ra = RetroArchModule(internal)
+        val rfs = LocalFs().apply { packages.add("com.retroarch.aarch64") }
+        val cfg = File("$internal/Android/data/com.retroarch.aarch64/files/retroarch.cfg").apply { parentFile.mkdirs() }
+        File("$internal/RetroArch").mkdirs()
+        cfg.writeText("savefile_directory = \"default\"\n")
+        assertNull(ra.vaultTarget(rfs, ra.detect(rfs, none)!!, "bios", "scph5501.bin"))
+        File("$internal/RetroArch/system").mkdirs()
+        assertEquals("$internal/RetroArch/system", ra.vaultTarget(rfs, ra.detect(rfs, none)!!, "bios", "scph5501.bin"))
+        cfg.writeText("system_directory = \"/storage/emulated/0/BIOS\"\n")
+        assertEquals("$internal/BIOS", ra.vaultTarget(rfs, ra.detect(rfs, none)!!, "system", "x"))
+        assertNull(ra.vaultTarget(rfs, ra.detect(rfs, none)!!, "keys", "x"))
+    }
 
     @Test fun module_config_roots() {
         assertEquals(setOf("data", "config"), RetroArchModule().configRoots)
