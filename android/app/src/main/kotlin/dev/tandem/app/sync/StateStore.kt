@@ -249,9 +249,13 @@ class StateStore(
 
     /** See StateData.revoked. */
     val revoked: Boolean get() = synchronized(lock) { data.revoked }
-    /** Marks this device removed on the server; returns true only the first time (one notification). */
-    fun markRevoked(): Boolean = synchronized(lock) {
-        if (data.revoked) return false
+    /**
+     * Marks this device removed on the server; returns true only the first time (one notification). Only when [key],
+     * the key that got the 401, is still this device's key: a late answer for a key replaced by a new sign-in is
+     * ignored.
+     */
+    fun markRevoked(key: String): Boolean = synchronized(lock) {
+        if (data.revoked || key != data.deviceKey) return false
         mutate { it.copy(revoked = true) }
         true
     }

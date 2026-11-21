@@ -105,7 +105,7 @@ class AppStateTest {
         assertEquals(null, s.top.value.lastSyncedAt)
         st.markSynced(1_700_000_000_000)
         assertEquals(Instant.ofEpochMilli(1_700_000_000_000), s.top.value.lastSyncedAt)
-        st.markRevoked()
+        st.markRevoked("k")
         assertEquals(ServerConn.Revoked, s.top.value.server)
         assertEquals(true, s.top.value.signedIn)
     }

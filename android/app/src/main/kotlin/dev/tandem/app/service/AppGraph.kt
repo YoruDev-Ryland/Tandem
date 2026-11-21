@@ -73,10 +73,13 @@ object AppGraph {
     /**
      * The server answered 401 device_revoked (any client of this process): remember it, say so once, and stop sync.
      * Nothing restarts it (launch, boot, the watchdog check [StateStore.canSync]) until a sign-in or sign-out.
+     * [key] is the key that got the answer: one a new sign-in already replaced changes nothing.
      */
-    fun revoked(context: Context) {
+    fun revoked(context: Context, key: String) {
         val ctx = context.applicationContext
-        if (store(ctx).markRevoked()) {
+        val s = store(ctx)
+        if (key != s.deviceKey) return
+        if (s.markRevoked(key)) {
             LogBuffer.add("the server says this device was removed: sync stopped")
             Notifier(ctx).also { it.ensureChannels() }.revoked()
         }

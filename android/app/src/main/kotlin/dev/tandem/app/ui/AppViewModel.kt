@@ -41,7 +41,7 @@ class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewMode
         val key = store.deviceKey ?: return null
         client?.let { (u, k, c) -> if (u == url && k == key) return c }
         // A screen's read can be the first to hear the device was removed: it stops sync just as the service would.
-        return ApiClient(url, key, onRevoked = { AppGraph.revoked(getApplication()) }).also { client = Triple(url, key, it) }
+        return ApiClient(url, key, onRevoked = { AppGraph.revoked(getApplication(), key) }).also { client = Triple(url, key, it) }
     }
 
     val server = ServerRepo(

@@ -236,15 +236,26 @@ class StateStoreTest {
         val s = StateStore(File(tmp.root, "state.json"))
         s.signIn("http://x", "k", "d", emptyList())
         assertTrue(s.canSync)
-        s.markRevoked()
+        s.markRevoked("k")
         assertTrue(s.revoked)
         assertFalse(s.canSync)
         assertTrue(StateStore(File(tmp.root, "state.json")).revoked)
         s.signIn("http://x", "k2", "d2", emptyList())
         assertFalse(s.revoked)
-        s.markRevoked()
+        s.markRevoked("k2")
         s.signOut(emptyList())
         assertFalse(s.revoked)
+        assertFalse(s.canSync)
+    }
+
+    @Test fun a_late_revoke_answer_for_the_previous_key_leaves_the_new_sign_in_alone() {
+        val s = StateStore(File(tmp.root, "state.json"))
+        s.signIn("http://x", "old key", "d", emptyList())
+        s.signIn("http://x", "new key", "d2", emptyList())
+        assertFalse(s.markRevoked("old key"))
+        assertFalse(s.revoked)
+        assertTrue(s.canSync)
+        assertTrue(s.markRevoked("new key"))
         assertFalse(s.canSync)
     }
 

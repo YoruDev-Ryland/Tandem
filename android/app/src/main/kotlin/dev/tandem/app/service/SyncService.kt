@@ -224,7 +224,7 @@ class SyncService : Service() {
         val fs = RemoteFs(shell)
         val flows = AppGraph.sessionFlows.begin()
         try {
-            val api = StatusRecordingApi(ApiClient(url, key, onRevoked = ::onRevoked), AppGraph.sessionFlows, flows) {
+            val api = StatusRecordingApi(ApiClient(url, key, onRevoked = { onRevoked(key) }), AppGraph.sessionFlows, flows) {
                 lastStatus = SentStatus(url, key, it)
             }
             val stored = store.settings
@@ -266,7 +266,7 @@ class SyncService : Service() {
                     if (up) offer(planner.streamOpened(reconnect = opens.getAndIncrement() > 0))
                     publish()
                 },
-                onRevoked = ::onRevoked,
+                onRevoked = { onRevoked(key) },
             )
             // An emulator an asked-for apply waits on may have closed while the service was down: the first monitor
             // that finds it closed finishes the apply as an exit would.
@@ -395,7 +395,7 @@ class SyncService : Service() {
         if (sent.url != url || sent.key != key || !sent.req.shizukuOk) return   // only for the same server and device
         try {
             val off = sent.req.copy(shizukuOk = false)
-            withTimeoutOrNull(20_000) { ApiClient(url, key, onRevoked = ::onRevoked).putStatus(off) } ?: return
+            withTimeoutOrNull(20_000) { ApiClient(url, key, onRevoked = { onRevoked(key) }).putStatus(off) } ?: return
             lastStatus = SentStatus(url, key, off)
             log("reported Shizuku off to the server")
         } catch (e: CancellationException) {
@@ -406,7 +406,7 @@ class SyncService : Service() {
     }
 
     /** 401 device_revoked from any of the session's calls or its event stream: no retries, no reconnects. */
-    private fun onRevoked() = AppGraph.revoked(this)
+    private fun onRevoked(key: String) = AppGraph.revoked(this, key)
 
     private fun screenOn(): Boolean = runCatching { getSystemService(PowerManager::class.java).isInteractive }.getOrDefault(true)
 
