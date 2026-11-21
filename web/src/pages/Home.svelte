@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getConfigs, getGames, getGroups, getHome } from "../lib/api/endpoints";
-  import { gamePath } from "../lib/api/paths";
+  import { downloadUrl, gamePath } from "../lib/api/paths";
   import { resource } from "../lib/api/resource.svelte";
   import type { ConfigOverview, GameRow, SyncGroupList } from "../lib/api/types";
   import { attentionItems, configConflictRefs, heroLine } from "../lib/attention";
@@ -87,15 +87,31 @@
     router.go(href);
   }
 
+  // Y downloads the focused game's save head, as the Game page does.
+  function download(versionId: string) {
+    const a = document.createElement("a");
+    a.href = downloadUrl(versionId);
+    a.download = "";
+    a.click();
+  }
+
   // X on the focused game goes to its page, where Restore lives.
   $effect(() =>
     onAction((a) => {
       const g = rows[index];
-      if (a !== "x" || !g) return false;
-      open(g);
-      return true;
+      if (!g) return false;
+      if (a === "x") {
+        open(g);
+        return true;
+      }
+      if (a === "y" && g.headVersionId) {
+        download(g.headVersionId);
+        return true;
+      }
+      return false;
     }),
   );
+  const focusedHead = $derived(rows[index]?.headVersionId ?? null);
 
   const loaded = $derived(!!games.data && !!home.data);
 </script>
@@ -143,7 +159,7 @@
       <List {rows} columns={COLUMNS} {header} headerEnd={[4]} phoneColumns={`minmax(0,1fr) ${presenceWidth(columns.length)} 80px`} phoneHide={[0, 2]} minWidth="0px" bind:index onOpen={open} key={(g) => g.emulatorId + "/" + g.gameKey}>
         {#snippet row(g: GameRow)}
           {@const bad = g.openConflict}
-          <span class="sm-hide"><SystemTag emulatorId={g.emulatorId} gameKey={g.gameKey} /></span>
+          <span class="sm-hide"><SystemTag emulatorId={g.emulatorId} gameKey={g.gameKey} core={g.core} /></span>
           <GameTitle name={g.displayName} emulatorId={g.emulatorId} gameKey={g.gameKey} fault={bad} />
           {#if bad}
             <span class="newest fault sm-hide" title={differing(g)}>Two saves</span>
@@ -168,7 +184,15 @@
   {/if}
 </section>
 
-<HintBar status={synced} hints={[{ glyph: "a", label: "Open" }, { glyph: "x", label: "Restore" }, { glyph: "b", label: "Back" }]} />
+<HintBar
+  status={synced}
+  hints={[
+    { glyph: "a", label: "Open" },
+    ...(focusedHead ? [{ glyph: "y" as const, label: "Download" }] : []),
+    { glyph: "x", label: "Restore" },
+    { glyph: "b", label: "Back" },
+  ]}
+/>
 </div>
 
 <style>

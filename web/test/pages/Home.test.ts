@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/svelte";
+import { tick } from "svelte";
 import Home from "../../src/pages/Home.svelte";
 import { router } from "../../src/lib/router.svelte";
 import { dispatch } from "../../src/lib/input/actions";
-import { gamePath } from "../../src/lib/api/paths";
+import { downloadUrl, gamePath } from "../../src/lib/api/paths";
 import { conflict, fourDevices, game, games, home, longName, noHead, notInstalled, ODIN, THOR, waiting, dev } from "../fixtures/home";
 import type { Attention, ConfigOverview, GameRow, SyncGroupList } from "../../src/lib/api/types";
 
@@ -156,6 +157,34 @@ describe("Home", () => {
     expect(within(rowOf("Pokémon Emerald")).getByText("GBA").classList.contains("tag")).toBe(true);
     expect(within(rowOf("Mystery")).getByLabelText("System not known")).toBeTruthy();
     expect(within(rowOf("Mystery")).queryByText("RetroArch")).toBeNull();
+  });
+
+  it("tells a RetroArch game's system from its save's core", async () => {
+    serve([game({ emulatorId: "retroarch", gameKey: "retroarch/Mystery", displayName: "Mystery", core: "mgba_libretro" })]);
+    render(Home);
+    await screen.findByText("Mystery");
+    expect(within(rowOf("Mystery")).getByText("GBA").classList.contains("tag")).toBe(true);
+  });
+
+  it("downloads the focused game's newest save on y, and hints Y only when there is one", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const saved = game({ emulatorId: "eden", gameKey: "k1", displayName: "Has Save", headVersionId: "v-head", newestUtc: "2026-11-20T12:00:00Z" });
+    const none = game({ emulatorId: "eden", gameKey: "k2", displayName: "Only States", newestUtc: "2026-11-20T11:00:00Z" });
+    serve([saved, none]);
+    render(Home);
+    await screen.findByText("Has Save");
+    expect(screen.getByRole("button", { name: /Download/ })).toBeTruthy();
+    expect(dispatch("y")).toBe(true);
+    expect(click).toHaveBeenCalledTimes(1);
+    const a = click.mock.contexts[0] as HTMLAnchorElement;
+    expect(a.getAttribute("href")).toBe(downloadUrl("v-head"));
+    expect(a.hasAttribute("download")).toBe(true);
+
+    dispatch("down");
+    await tick();
+    expect(dispatch("y")).toBe(false);
+    expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
+    click.mockRestore();
   });
 
   it("shows the empty library sentence", async () => {

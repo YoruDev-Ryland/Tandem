@@ -83,7 +83,7 @@
       <List {rows} columns={COLUMNS} header={HEADER} headerEnd={[5]} phoneColumns={`minmax(0,1fr) ${presenceWidth(columns.length)} 80px`} phoneHide={[0, 2, 3]} minWidth="0px" bind:index onOpen={open} key={(g) => g.emulatorId + "/" + g.gameKey}>
         {#snippet row(g: GameRow)}
           {@const bad = g.openConflict}
-          <span class="sm-hide"><SystemTag emulatorId={g.emulatorId} gameKey={g.gameKey} /></span>
+          <span class="sm-hide"><SystemTag emulatorId={g.emulatorId} gameKey={g.gameKey} core={g.core} /></span>
           <GameTitle name={g.displayName} emulatorId={g.emulatorId} gameKey={g.gameKey} fault={bad} />
           <span class="ink2 sm-hide">{emulatorName(g.emulatorId)}</span>
           {#if bad}

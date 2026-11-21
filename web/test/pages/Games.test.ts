@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import Games from "../../src/pages/Games.svelte";
 import { router } from "../../src/lib/router.svelte";
 import { dispatch } from "../../src/lib/input/actions";
 import { gamePath } from "../../src/lib/api/paths";
-import { games, noHead, waiting } from "../fixtures/home";
+import { game, games, noHead, waiting } from "../fixtures/home";
 
 class FakeEventSource { readyState = 0; addEventListener() {} close() {} }
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -21,6 +21,13 @@ describe("Games", () => {
     render(Games);
     await screen.findByText("No Head Yet");
     expect(screen.getByRole("heading", { name: /Games/ }).textContent).toContain("6 games");
+  });
+
+  it("tells a RetroArch game's system from its save's core", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json([game({ emulatorId: "retroarch", gameKey: "retroarch/Mystery", displayName: "Mystery", core: "snes9x" })])));
+    render(Games);
+    const name = await screen.findByText("Mystery");
+    expect(within(name.closest("button") as HTMLElement).getByText("SNES").classList.contains("tag")).toBe(true);
   });
 
   it("search filters by name", async () => {

@@ -197,6 +197,10 @@ export interface GameRow {
   openConflict: boolean;
   devices: GameDeviceState[];
   newestOnDeviceName: string | null;
+  /** The RetroArch core of the game's save item, or null. */
+  core: string | null;
+  /** The head version of the game's save item (what Y downloads), or null. */
+  headVersionId: Guid | null;
 }
 export interface VersionSummary {
   id: Guid;

@@ -22,6 +22,8 @@ export function game(over: Partial<GameRow> & Pick<GameRow, "gameKey" | "emulato
     stateCount: 0,
     openConflict: false,
     devices: [dev(ODIN, "Newest"), dev(THOR, "HasIt")],
+    core: null,
+    headVersionId: null,
     ...over,
   };
 }
