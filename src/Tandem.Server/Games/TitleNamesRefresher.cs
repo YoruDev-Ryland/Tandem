@@ -50,7 +50,7 @@ public sealed class TitleNamesRefresher(IOptions<ServerOptions> options, TitleNa
             await backfill.RunAsync(stop);   // still cleans tags from stored names
             return;
         }
-        var cache = Path.Combine(o.DataDirectory, "titles.json");
+        var cache = Path.Combine(o.DataDirectory, "titles-v2.json");   // v2: Switch and 3DS
         var maxAge = TimeSpan.FromDays(Math.Max(1, o.TitleNamesRefreshDays));
 
         if (File.Exists(cache))
@@ -76,18 +76,31 @@ public sealed class TitleNamesRefresher(IOptions<ServerOptions> options, TitleNa
 
             try
             {
-                await DownloadAsync(o.TitleNamesUrl!, cache, stop);
+                await DownloadAsync(o, cache, stop);
                 await backfill.RunAsync(stop);
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
-                log.LogWarning("Couldn't download the Switch title list from {Url}: {Error}", o.TitleNamesUrl, e.Message);
+                log.LogWarning("Couldn't download the title lists: {Error}", e.Message);
                 await Task.Delay(RetryAfterFailure, time, stop);
             }
         }
     }
 
-    private async Task DownloadAsync(string url, string cache, CancellationToken ct)
+    private async Task DownloadAsync(ServerOptions o, string cache, CancellationToken ct)
+    {
+        var lists = new List<TitleNames> { await FetchAsync(o.TitleNamesUrl!, TitleNames.Parse, cache, ct) };
+        foreach (var url in (o.ThreeDsTitleNamesUrls ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            lists.Add(await FetchAsync(url, TitleNames.ParseThreeDs, cache, ct));
+        var merged = TitleNames.Merge([.. lists]);
+        if (merged.Count == 0) throw new InvalidDataException("the lists had no titles");
+        merged.Save(cache);
+        holder.Current = merged;
+        log.LogInformation("Loaded {Count} titles", merged.Count);
+    }
+
+    /// <summary>Downloads [url] to a temporary file beside [cache] and parses it there, so memory holds only the result.</summary>
+    private async Task<TitleNames> FetchAsync(string url, Func<Stream, TitleNames> parse, string cache, CancellationToken ct)
     {
         var tmp = cache + ".download";
         try
@@ -99,12 +112,8 @@ public sealed class TitleNamesRefresher(IOptions<ServerOptions> options, TitleNa
                 await using var file = File.Create(tmp);
                 await response.Content.CopyToAsync(file, ct);
             }
-            TitleNames list;
-            await using (var f = File.OpenRead(tmp)) list = TitleNames.Parse(f);
-            if (list.Count == 0) throw new InvalidDataException("the list had no titles");
-            list.Save(cache);
-            holder.Current = list;
-            log.LogInformation("Loaded {Count} Switch titles", list.Count);
+            await using var f = File.OpenRead(tmp);
+            return parse(f);
         }
         finally
         {

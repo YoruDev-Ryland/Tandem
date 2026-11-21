@@ -15,6 +15,7 @@ public static class EnvironmentAliases
         ("TRUST_FORWARDED_HEADERS", "TrustForwardedHeaders"),
         ("SERVER_NAME", "ServerName"),
         ("WEB_ROOT", "WebRoot"),
+        ("TITLE_NAMES", "EnableTitleNames"),
     ];
 
     /// <summary>Adds the aliases as the LOWEST-priority source, so an explicit <c>Tandem__X</c> variable, a command-line

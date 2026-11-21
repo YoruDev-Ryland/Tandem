@@ -45,6 +45,7 @@ precedence over the plain names.
 | `DATABASE_CONNECTION` | none | Npgsql connection string for `postgres`; for `sqlite` an optional database file path. |
 | `TRUST_FORWARDED_HEADERS` | `false` | Trust `X-Forwarded-For`/`-Proto`/`-Host` from a reverse proxy (set it when behind one): rate limits are per client, the session cookie is `Secure` over https, and pairing QR codes use the public host. Every proxy address is trusted, so only turn it on when the server is reachable through the proxy alone. |
 | `SERVER_NAME` | `Tandem` | Shown to clients (max 60 characters). |
+| `TITLE_NAMES` | `true` | Downloads the public Switch (titledb) and 3DS (3dsdb) title lists weekly so saves keyed by title id show game names. `false` keeps the server offline; those games then show their ids. |
 | `WEB_ROOT` | `wwwroot` beside the app | The built web UI. |
 
 SQLite runs in WAL mode, so a running backup does not block uploads.

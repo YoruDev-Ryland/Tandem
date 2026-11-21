@@ -2,7 +2,11 @@ using System.Text.Json;
 
 namespace Tandem.Server.Games;
 
-/// <summary>Switch title id → name, from the public titledb list (MIT, github.com/blawar/titledb).</summary>
+/// <summary>
+/// Title id → name for the consoles whose saves are keyed by title id: Switch from titledb (MIT,
+/// github.com/blawar/titledb) and 3DS from 3dsdb (github.com/hax0kartik/3dsdb). The ids don't overlap (Switch
+/// ids start 01, 3DS ids 0004). Names are stored as published; <see cref="GameNames"/> cleans them.
+/// </summary>
 public sealed class TitleNames
 {
     private readonly Dictionary<string, string> _names;
@@ -18,7 +22,9 @@ public sealed class TitleNames
     {
         if (!IsTitleId(titleId)) return null;
         var id = titleId.ToUpperInvariant();
-        return _names.GetValueOrDefault(id) ?? _names.GetValueOrDefault(id[..13] + "000");
+        if (_names.GetValueOrDefault(id) is { } name) return name;
+        // A Switch title's other programs, update (…800) and add-ons share its upper 52 bits.
+        return id.StartsWith("01", StringComparison.Ordinal) ? _names.GetValueOrDefault(id[..13] + "000") : null;
     }
 
     private sealed record Entry(string? Id, string? Name);
@@ -35,6 +41,30 @@ public sealed class TitleNames
             if (e?.Id is not { } id || !IsTitleId(id) || string.IsNullOrWhiteSpace(e.Name)) continue;
             names.TryAdd(id.ToUpperInvariant(), e.Name.Trim());
         }
+        return new TitleNames(names);
+    }
+
+    private sealed record ThreeDsEntry(string? Name, string? TitleID);
+
+    /// <summary>Reads a 3dsdb region file ([{ Name, TitleID, … }]).</summary>
+    public static TitleNames ParseThreeDs(Stream list)
+    {
+        var raw = JsonSerializer.Deserialize<List<ThreeDsEntry?>>(list, Read) ?? [];
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var e in raw)
+        {
+            if (e?.TitleID is not { } id || !IsTitleId(id) || string.IsNullOrWhiteSpace(e.Name)) continue;
+            names.TryAdd(id.ToUpperInvariant(), e.Name.Trim());
+        }
+        return new TitleNames(names);
+    }
+
+    /// <summary>One list from several; for an id in more than one, the earliest list's name wins.</summary>
+    public static TitleNames Merge(params TitleNames[] lists)
+    {
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var list in lists)
+            foreach (var (id, name) in list._names) names.TryAdd(id, name);
         return new TitleNames(names);
     }
 

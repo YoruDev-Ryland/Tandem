@@ -4,13 +4,13 @@ namespace Tandem.Server.Games;
 
 /// <summary>
 /// The name a game is shown under. A real name from the device wins, cleaned of ROM-site tags ("[v0]", "(USA)").
-/// Switch saves are keyed by a 16-hex title id with no name on disk, so those fall back to the public title list.
+/// Switch and 3DS saves are keyed by a 16-hex title id with no name on disk, so those fall back to the public title lists.
 /// </summary>
 public sealed partial class GameNames(TitleNamesHolder titles)
 {
-    /// <summary>Emulators whose game keys are Switch title ids.</summary>
-    public static readonly IReadOnlySet<string> SwitchEmulators =
-        new HashSet<string>(["eden", "yuzu", "suyu", "sudachi", "citron", "torzu", "ryujinx"], StringComparer.Ordinal);
+    /// <summary>Emulators whose game keys are console title ids (Switch, 3DS).</summary>
+    public static readonly IReadOnlySet<string> TitleIdEmulators = new HashSet<string>(
+        ["eden", "yuzu", "suyu", "sudachi", "citron", "torzu", "ryujinx", "azahar", "citra", "lime3ds"], StringComparer.Ordinal);
 
     public string? Resolve(string emulatorId, string gameKey, string? clientName)
     {
@@ -18,8 +18,8 @@ public sealed partial class GameNames(TitleNamesHolder titles)
         var isId = TitleNames.IsTitleId(gameKey);
         if (cleaned is not null && !(isId && cleaned.Equals(gameKey, StringComparison.OrdinalIgnoreCase)))
             return cleaned;
-        if (isId && SwitchEmulators.Contains(emulatorId))
-            return titles.Current?.Lookup(gameKey);
+        if (isId && TitleIdEmulators.Contains(emulatorId))
+            return Clean(titles.Current?.Lookup(gameKey));
         return cleaned;
     }
 
@@ -28,13 +28,14 @@ public sealed partial class GameNames(TitleNamesHolder titles)
         string.IsNullOrWhiteSpace(displayName) || displayName.Equals(gameKey, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Drops every [bracket] tag and the (paren) tags ROM sets add for region, language, revision or version.
+    /// Drops ™ ® ©, every [bracket] tag and the (paren) tags ROM sets add for region, language, revision or version.
     /// Parentheses that are part of a title ("(Red)") stay. Null when nothing is left.
     /// </summary>
     public static string? Clean(string? name)
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
         var s = Brackets().Replace(name, " ");
+        s = s.Replace("™", "").Replace("®", "").Replace("©", "");
         s = RomParens().Replace(s, " ");
         s = Spaces().Replace(s, " ").Trim();
         return s.Length == 0 ? null : s;

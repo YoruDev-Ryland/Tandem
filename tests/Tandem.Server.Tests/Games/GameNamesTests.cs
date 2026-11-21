@@ -21,6 +21,8 @@ public class GameNamesTests
     [InlineData("Atelier Lulua ~The Scion of Arland~", "Atelier Lulua ~The Scion of Arland~")]
     [InlineData("  Zelda  [!] ", "Zelda")]
     [InlineData("(English) Pokémon FireRed Version", "Pokémon FireRed Version")]
+    [InlineData("BRAVELY DEFAULT™ II", "BRAVELY DEFAULT II")]
+    [InlineData("Pokémon™ X®", "Pokémon X")]
     public void Clean_strips_rom_site_tags_but_keeps_real_parts_of_names(string raw, string expected)
         => Assert.Equal(expected, GameNames.Clean(raw));
 
@@ -36,11 +38,30 @@ public class GameNamesTests
         }
         """)));
 
+    private static TitleNames ThreeDs() => TitleNames.ParseThreeDs(new MemoryStream(Encoding.UTF8.GetBytes("""
+        [
+          { "Name": "Pokémon™ X", "TitleID": "0004000000055D00", "UID": "1" },
+          { "Name": "Pokémon X (GB)", "TitleID": "0004000000055D00" },
+          { "Name": "", "TitleID": "0004000000011100" },
+          { "Name": "No id" }
+        ]
+        """)));
+
+    [Fact]
+    public void The_3ds_list_maps_ids_and_merging_keeps_the_first_list_s_name()
+    {
+        var merged = TitleNames.Merge(ThreeDs(), Db());
+        Assert.Equal("Pokémon™ X", merged.Lookup("0004000000055D00"));
+        Assert.Null(merged.Lookup("0004000000055D01"));   // no base-title fallback outside Switch ids
+        Assert.Equal("Some Game", merged.Lookup("0100AC20128AC001"));
+        Assert.Equal(3, merged.Count);
+    }
+
     [Fact]
     public void Title_list_maps_ids_to_names_and_falls_back_to_the_base_title()
     {
         var db = Db();
-        Assert.Equal("Pokémon™ Sword", db.Lookup("0100abf008968000"));
+        Assert.Equal("Pokémon™ Sword", db.Lookup("0100abf008968000"));   // raw; Resolve cleans it
         Assert.Equal("Some Game", db.Lookup("0100AC20128AC001"));   // another program of the same title
         Assert.Null(db.Lookup("0100000011D90000"));
         Assert.Null(db.Lookup("not-an-id"));
@@ -60,15 +81,17 @@ public class GameNamesTests
     }
 
     [Theory]
-    [InlineData("eden", "0100ABF008968000", null, "Pokémon™ Sword")]
-    [InlineData("eden", "0100ABF008968000", "0100ABF008968000", "Pokémon™ Sword")]
+    [InlineData("eden", "0100ABF008968000", null, "Pokémon Sword")]
+    [InlineData("eden", "0100ABF008968000", "0100ABF008968000", "Pokémon Sword")]
+    [InlineData("azahar", "0004000000055D00", null, "Pokémon X")]
+    [InlineData("azahar", "0004000000055D01", null, null)]
     [InlineData("eden", "0100ABF008968000", "My Sword [v0]", "My Sword")]
     [InlineData("eden", "0100FFFFFFFFF000", null, null)]
     [InlineData("retroarch", "Super Mario World (USA)", "Super Mario World (USA)", "Super Mario World")]
     [InlineData("retroarch", "0100ABF008968000", null, null)]
     public void Resolve_prefers_a_real_client_name_then_the_switch_title_list(string emulator, string key, string? client, string? expected)
     {
-        var names = new GameNames(new TitleNamesHolder { Current = Db() });
+        var names = new GameNames(new TitleNamesHolder { Current = TitleNames.Merge(Db(), ThreeDs()) });
         Assert.Equal(expected, names.Resolve(emulator, key, client));
     }
 
@@ -100,7 +123,7 @@ public class GameNamesTests
 
         holder.Current = Db();
         await f.Services.GetRequiredService<TitleNamesBackfill>().RunAsync(CancellationToken.None);
-        Assert.Equal("Pokémon™ Sword", await Name());
+        Assert.Equal("Pokémon Sword", await Name());
 
         var r2 = await a.PostJsonAsync("/v1/saves/upload",
             new SaveUploadRequest("eden", ItemKind.Save, "0100AC20128AC000", "", "", null, manifest, "0100AC20128AC000"));

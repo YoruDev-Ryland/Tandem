@@ -140,7 +140,7 @@ public class AdminCliTests
     [Fact]
     public void Plain_env_aliases_never_override_explicit_settings()
     {
-        var env = new Dictionary<string, string?> { ["DATA_DIR"] = "/from-alias", ["SERVER_NAME"] = "Alias", ["PUBLIC_URL"] = "https://alias" };
+        var env = new Dictionary<string, string?> { ["DATA_DIR"] = "/from-alias", ["SERVER_NAME"] = "Alias", ["PUBLIC_URL"] = "https://alias", ["TITLE_NAMES"] = "false" };
         var config = new ConfigurationManager();
         config.AddInMemoryCollection(new Dictionary<string, string?> { ["Tandem:DataDirectory"] = "/explicit" }); // stands in for Tandem__DataDir, UseSetting
         config.AddCommandLine(["--Tandem:ServerName=FromCommandLine"]);
@@ -148,6 +148,7 @@ public class AdminCliTests
         Assert.Equal("/explicit", config["Tandem:DataDirectory"]);
         Assert.Equal("FromCommandLine", config["Tandem:ServerName"]);
         Assert.Equal("https://alias", config["Tandem:PublicUrl"]); // unset elsewhere: the alias applies
+        Assert.Equal("false", config["Tandem:EnableTitleNames"]);
     }
 
     [Fact]

@@ -28,9 +28,14 @@ public sealed class ServerOptions
     /// <summary>Runs the 5-minute Shizuku-off check in the background (on in production; the test factory turns it off).</summary>
     public bool EnableNotifyChecks { get; set; } = true;
 
-    /// <summary>Downloads the public Switch title list so title-id saves get names (on in production; tests turn it off).</summary>
+    /// <summary>Downloads the public Switch and 3DS title lists so title-id saves get names (on in production; tests turn it off).</summary>
     public bool EnableTitleNames { get; set; } = true;
     public string? TitleNamesUrl { get; set; } = "https://raw.githubusercontent.com/blawar/titledb/master/US.en.json";
+    /// <summary>Comma-separated 3dsdb region lists; for an id in several, the first list's name wins.</summary>
+    public string? ThreeDsTitleNamesUrls { get; set; } =
+        "https://raw.githubusercontent.com/hax0kartik/3dsdb/master/jsons/list_US.json," +
+        "https://raw.githubusercontent.com/hax0kartik/3dsdb/master/jsons/list_GB.json," +
+        "https://raw.githubusercontent.com/hax0kartik/3dsdb/master/jsons/list_JP.json";
     public int TitleNamesRefreshDays { get; set; } = 7;
 
     /// <summary>Capacity of the notification queue; when full, further notifications are dropped (and logged).</summary>
