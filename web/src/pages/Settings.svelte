@@ -1,5 +1,9 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { getServerInfo } from "../lib/api/endpoints";
+  import { PRODUCT_NAME } from "../lib/brand";
   import { onAction } from "../lib/input/actions";
+  import { LICENSES } from "../lib/licenses";
   import { router } from "../lib/router.svelte";
   import { session } from "../lib/session.svelte";
   import HintBar from "../lib/ui/HintBar.svelte";
@@ -22,6 +26,14 @@
     { id: "users", label: "Users", admin: true },
     { id: "backup", label: "Backup", admin: true },
   ];
+
+  let version = $state<string | null>(null);
+  onMount(() => {
+    getServerInfo().then(
+      (i) => (version = i.version || null),
+      () => {},
+    );
+  });
 
   const isAdmin = $derived(session.account?.isAdmin === true);
   const visible = $derived(SECTIONS.filter((s) => !s.admin || isAdmin));
@@ -62,6 +74,14 @@
       {:else if current === "backup"}<Backup />
       {/if}
     {/key}
+
+    <footer class="about">
+      <span>{PRODUCT_NAME}{#if version}<span class="mono">{version}</span>{/if}</span>
+      <span class="lic">
+        Open-source licences:
+        {#each LICENSES as l, i (l.file)}{#if i > 0}{", "}{/if}<a href={l.file} title={l.licence}>{l.name}</a>{/each}
+      </span>
+    </footer>
   </section>
 
   <HintBar hints={[{ glyph: "b", label: "Back" }]} />
@@ -79,11 +99,33 @@
   }
   h1 {
     margin: 0 0 18px;
-    font: 600 40px/1 "Barlow Semi Condensed", sans-serif;
-    letter-spacing: -0.01em;
+    font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
+    letter-spacing: -0.02em;
     color: var(--ink);
   }
   .tabs {
     margin-bottom: 28px;
+  }
+  .about {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 28px;
+    max-width: 880px;
+    margin-top: 56px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+    color: var(--ink3);
+    font-size: 14px;
+  }
+  .about .mono {
+    margin-left: 8px;
+    font: 400 13px "JetBrains Mono", ui-monospace, monospace;
+  }
+  .about a {
+    color: var(--ink2);
+    text-underline-offset: 3px;
+  }
+  .about a:hover {
+    color: var(--ink);
   }
 </style>

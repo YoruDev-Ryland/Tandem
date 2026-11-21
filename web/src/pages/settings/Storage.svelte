@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getStorage } from "../../lib/api/endpoints";
+  import { exportZipUrl } from "../../lib/api/paths";
   import { resource } from "../../lib/api/resource.svelte";
   import type { StorageRow } from "../../lib/api/types";
   import { emulatorName } from "../../lib/emulators";
@@ -20,13 +21,21 @@
   {:else}
     {@const u = usage.data}
     <p class="note">Used in total <span class="mono">{formatSize(u.totalBytes)}</span></p>
+    <div class="export">
+      <a class="btn" href={exportZipUrl()} download>Export everything</a>
+      <span class="note">A zip of every current save, state and config, in each emulator's own folders.</span>
+    </div>
     {#if u.byEmulator.length === 0}
       <Empty text="Nothing is stored yet." />
     {:else}
       <h3>By emulator</h3>
       <ul class="rows">
         {#each u.byEmulator as r (r.emulatorId)}
-          <li><span class="grow">{label(r)}</span><span class="mono">{formatSize(r.bytes)}</span></li>
+          <li>
+            <span class="grow">{label(r)}</span>
+            <span class="mono">{formatSize(r.bytes)}</span>
+            {#if r.emulatorId}<a class="link" href={exportZipUrl(r.emulatorId)} download aria-label="Export {label(r)}">Export</a>{/if}
+          </li>
         {/each}
       </ul>
       <h3>Largest games</h3>
@@ -44,6 +53,37 @@
 </div>
 
 <style>
+  .export {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    height: 40px;
+    padding: 0 16px;
+    border-radius: 3px;
+    border: 1.5px solid var(--rule2);
+    color: var(--ink);
+    font: 600 14px "Barlow", system-ui, sans-serif;
+    text-decoration: none;
+    transition: border-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  .btn:hover {
+    border-color: var(--ink3);
+  }
+  .link {
+    width: 56px;
+    text-align: right;
+    color: var(--ink2);
+    font-size: 14px;
+    text-underline-offset: 3px;
+  }
+  .link:hover {
+    color: var(--ink);
+  }
   .grow {
     flex: 1;
     min-width: 0;

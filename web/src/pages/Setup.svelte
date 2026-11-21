@@ -258,8 +258,8 @@
   }
   h1 {
     margin: 0;
-    font: 600 40px/1 "Barlow Semi Condensed", sans-serif;
-    letter-spacing: -0.01em;
+    font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
+    letter-spacing: -0.02em;
     color: var(--ink);
   }
   .split {

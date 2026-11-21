@@ -13,6 +13,7 @@ describe("keyToAction", () => {
     const pairs: [string, Action][] = [
       ["ArrowUp", "up"], ["ArrowDown", "down"], ["ArrowLeft", "left"], ["ArrowRight", "right"],
       ["Enter", "a"], ["Escape", "b"], ["[", "l1"], ["]", "r1"], ["{", "l2"], ["}", "r2"],
+      ["x", "x"], ["X", "x"], ["y", "y"], ["Y", "y"],
     ];
     for (const [k, a] of pairs) expect(keyToAction(new KeyboardEvent("keydown", { key: k }))).toBe(a);
     expect(keyToAction(new KeyboardEvent("keydown", { key: "q" }))).toBeNull();
@@ -21,7 +22,7 @@ describe("keyToAction", () => {
   it("ignores everything but Escape while typing in an input, textarea or select", () => {
     for (const tag of ["input", "textarea", "select"]) {
       const el = document.body.appendChild(document.createElement(tag));
-      for (const k of ["[", "ArrowDown", "Enter"]) {
+      for (const k of ["[", "ArrowDown", "Enter", "x", "y"]) {
         const e = new KeyboardEvent("keydown", { key: k });
         Object.defineProperty(e, "target", { value: el });
         expect(keyToAction(e)).toBeNull();

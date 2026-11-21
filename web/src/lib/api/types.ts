@@ -30,7 +30,8 @@ export const EMULATOR_IDS: readonly EmulatorId[] = ["eden", "retroarch", "azahar
 
 // ---- Errors, server, accounts ----
 export interface ErrorResponse { code: string; message: string }
-export interface ServerInfo { name: string; protocol: number; registrationOpen: boolean }
+/** version: the server build (InformationalVersion without the +hash). */
+export interface ServerInfo { name: string; protocol: number; registrationOpen: boolean; version: string }
 export interface WebSessionRequest { email?: string | null; password?: string | null; pairingCode?: string | null; deviceName?: string | null }
 export interface PairingCodeResponse { code: string; qrPayload: string; expiresUtc: IsoDate }
 export interface AccountInfo { id: Guid; email: string; isAdmin: boolean }
@@ -38,6 +39,8 @@ export interface ChangePasswordRequest { current: string; new: string }
 export interface UserInfo { id: Guid; email: string; isAdmin: boolean; createdUtc: IsoDate; deviceCount: number }
 export interface CreateUserRequest { email: string; isAdmin: boolean }
 export interface CreatedUserResponse { email: string; password: string }
+export interface ResetPasswordResponse { password: string }
+export interface DeleteAccountRequest { password: string }
 export interface AdminSettings { allowRegistration: boolean }
 export interface DeviceSummary {
   id: Guid;
@@ -115,9 +118,12 @@ export interface SendVaultResponse { deliveryId: Guid; versionId: Guid }
 export interface RetentionSettingsDto { saveVersions: number; configVersions: number; vaultVersions: number }
 export interface StorageRow { emulatorId: string; gameKey: string | null; displayName: string | null; bytes: number }
 export interface StorageUsage { totalBytes: number; byEmulator: StorageRow[]; topGames: StorageRow[] }
-/** token is write-only (PUT); tokenSet is returned by GET. */
+/**
+ * token is write-only (PUT); tokenSet is returned by GET. GET returns `url` masked as "scheme://host/…"; a PUT that sends
+ * the masked value back unchanged keeps the stored address.
+ */
 export interface NotifyTarget { kind: NotifyKind; url: string; token?: string | null; tokenSet?: boolean }
-export interface NotifyEvents { conflicts: boolean; failedSyncs: boolean; shizukuOff: boolean; backupFailed: boolean }
+export interface NotifyEvents { conflicts: boolean; failedSyncs: boolean; shizukuOff: boolean; backupFailed: boolean; silentDevices: boolean }
 export interface NotifySettingsDto { targets: NotifyTarget[]; events: NotifyEvents }
 export interface NotifyTestResult { kind: NotifyKind; ok: boolean; status?: number | null; error?: string | null }
 
@@ -170,6 +176,12 @@ export interface Attention {
   shizukuOffDevices: Guid[];
   failedDeliveries24h: number;
   configConflicts: number;
+  /** Free space in the server's data folder is low; uploads are refused with 507 storage_full. */
+  diskLow: boolean;
+  /** Admins only: no backup target is set. */
+  backupNotConfigured: boolean;
+  /** Active devices not seen for the server's SilentDeviceHours (default 72). */
+  silentDevices: Guid[];
 }
 export interface HomeResponse { continue: ContinueItem[]; devices: DeviceSummary[]; attention: Attention; recent: ActivityItem[] }
 export interface GameDeviceState { deviceId: Guid; deviceName: string; state: DeviceGameState }
@@ -200,6 +212,8 @@ export interface VersionSummary {
   resolved: boolean;
   manifestHash: string;
   fileCount: number;
+  /** The uploading device's version of the emulator at upload time, when it reported one. */
+  emulatorVersion: string | null;
 }
 export interface ConflictSide {
   versionId: Guid;

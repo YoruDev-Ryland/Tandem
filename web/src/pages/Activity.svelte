@@ -194,7 +194,7 @@
       {#snippet row(r: Row)}
         {#if r.kind === "item"}
           {@const bad = r.item.kind === "conflict_opened"}
-          <span class="mono ink3">{time(r.item.utc)}</span>
+          <span class="ink3 when">{time(r.item.utc)}</span>
           <span class="ink2 ellipsis sm-hide">{r.item.deviceName ?? "Server"}</span>
           <span class="ellipsis" class:fault={bad} title={r.item.message}>{r.item.message}</span>
         {:else}
@@ -226,8 +226,8 @@
   }
   h1 {
     margin: 0 0 18px;
-    font: 600 40px/1 "Barlow Semi Condensed", sans-serif;
-    letter-spacing: -0.01em;
+    font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
+    letter-spacing: -0.02em;
     color: var(--ink);
   }
   .filters {
@@ -242,10 +242,6 @@
     align-items: center;
     gap: 12px;
     color: var(--ink2);
-  }
-  .mono {
-    font: 400 13px "JetBrains Mono", ui-monospace, monospace;
-    font-variant-numeric: tabular-nums;
   }
   .older-error,
   .end-note {

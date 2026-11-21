@@ -5,9 +5,22 @@ export interface EditableText {
   crlf: boolean;
 }
 
-/** Decodes UTF-8 without dropping a BOM; the textarea gets LF line endings. */
+/** The file is not valid UTF-8: editing it as text would replace bytes with U+FFFD and corrupt it on save. */
+export class NotText extends Error {
+  constructor() {
+    super("This file isn't plain UTF-8 text, so it can't be edited in the browser. Download it to change it.");
+    this.name = "NotText";
+  }
+}
+
+/** Decodes strict UTF-8 without dropping a BOM; the textarea gets LF line endings. Throws NotText on invalid bytes. */
 export function decodeConfig(bytes: ArrayBuffer): EditableText {
-  let raw = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
+  let raw: string;
+  try {
+    raw = new TextDecoder("utf-8", { ignoreBOM: true, fatal: true }).decode(bytes);
+  } catch {
+    throw new NotText();
+  }
   const bom = raw.startsWith("\uFEFF");
   if (bom) raw = raw.slice(1);
   const crlf = raw.includes("\r\n");

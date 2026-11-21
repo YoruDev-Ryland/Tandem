@@ -18,6 +18,7 @@ describe("router", () => {
     expect(matchRoute("/devices/d1/setup")).toEqual({ name: "device-setup", params: { id: "d1" } });
     expect(matchRoute("/devices/d1")).toEqual({ name: "device", params: { id: "d1" } });
     expect(matchRoute("/configs/retroarch")).toEqual({ name: "config-emulator", params: { emu: "retroarch" } });
+    expect(matchRoute("/configs/eden/conflict/b%201")).toEqual({ name: "config-conflict", params: { emu: "eden", bundle: "b 1" } });
     for (const p of ["/", "/games", "/conflicts", "/devices", "/configs", "/vault", "/activity", "/settings", "/sign-in"]) {
       expect(matchRoute(p).name).not.toBe("not-found");
     }

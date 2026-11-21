@@ -11,6 +11,7 @@
   import Conflict from "./pages/Conflict.svelte";
   import Conflicts from "./pages/Conflicts.svelte";
   import Configs from "./pages/Configs.svelte";
+  import ConfigConflict from "./pages/ConfigConflict.svelte";
   import Devices from "./pages/Devices.svelte";
   import Device from "./pages/Device.svelte";
   import Pair from "./pages/Pair.svelte";
@@ -32,6 +33,7 @@
     "device-pair": "Pair a device",
     configs: "Configs",
     "config-emulator": "Configs",
+    "config-conflict": "Config conflict",
     vault: "Vault",
     activity: "Activity",
     settings: "Settings",
@@ -72,6 +74,8 @@
       <Conflicts />
     {:else if route.name === "configs" || route.name === "config-emulator"}
       <Configs />
+    {:else if route.name === "config-conflict"}
+      <ConfigConflict />
     {:else if route.name === "devices"}
       <Devices />
     {:else if route.name === "device"}

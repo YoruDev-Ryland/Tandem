@@ -15,14 +15,15 @@ const reply = (status: number, body?: unknown) =>
   new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 const SECRET_TOKEN = "tk_super_secret_value";
-const DISCORD_URL = "https://discord.com/api/webhooks/123/SECRETPART";
+/** C7: the server sends each stored address masked to its scheme and host. */
+const DISCORD_MASKED = "https://discord.com/…";
 
 const notify: NotifySettingsDto = {
   targets: [
-    { kind: "Ntfy", url: "https://ntfy.sh/mytopic", tokenSet: true },
-    { kind: "Discord", url: DISCORD_URL, tokenSet: false },
+    { kind: "Ntfy", url: "https://ntfy.sh/…", tokenSet: true },
+    { kind: "Discord", url: DISCORD_MASKED, tokenSet: false },
   ],
-  events: { conflicts: true, failedSyncs: true, shizukuOff: false, backupFailed: true },
+  events: { conflicts: true, failedSyncs: true, shizukuOff: false, backupFailed: true, silentDevices: true },
 };
 const backup: BackupSettingsResponse = {
   enabled: true, kind: "Folder", folderPath: "/mnt/nas/tandem", s3: null, hourUtc: 3, keep: 7,
@@ -72,6 +73,9 @@ function serve(world: Partial<World> = {}) {
         ]);
       case "POST /v1/account/password": return reply(204);
       case "DELETE /v1/web/session": return reply(204);
+      case "DELETE /v1/account": return reply(204);
+      case "POST /v1/admin/users/u2/reset-password": return reply(200, { password: "New-Pass-5678" });
+      case "GET /v1/server-info": return reply(200, { name: "Tandem", protocol: 1, registrationOpen: false, version: "1.2.3" });
     }
     if (method === "DELETE" && url.startsWith("/v1/admin/users/")) return reply(204);
     return reply(404, { code: "not_found", message: "no" });
@@ -179,7 +183,7 @@ describe("Settings", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText("Saved.");
     const put = calls.find((c) => c.method === "PUT")!.body as NotifySettingsDto;
-    expect(put.targets[0]).toEqual({ kind: "Ntfy", url: "https://ntfy.sh/mytopic", token: null });
+    expect(put.targets[0]).toEqual({ kind: "Ntfy", url: "https://ntfy.sh/…", token: null });
     expect(put.events.shizukuOff).toBe(true);
   });
 
@@ -192,18 +196,85 @@ describe("Settings", () => {
     expect((calls.find((c) => c.method === "PUT")!.body as NotifySettingsDto).targets[0]!.token).toBe("");
   });
 
-  it("masks Discord URLs, keeps the real one when saved unchanged, and clears it on Edit", async () => {
+  it("shows the masked address, sends it back unchanged to keep it, and replaces it whole on edit", async () => {
     const calls = await open("Notifications");
-    await screen.findByText("discord.com/…");
-    expect(document.body.innerHTML).not.toContain("SECRETPART");
+    await screen.findByText(DISCORD_MASKED);
+    expect(screen.getByText("https://ntfy.sh/…")).toBeTruthy();
     await fireEvent.click(screen.getByRole("checkbox", { name: "Conflicts" }));
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText("Saved.");
-    expect((calls.find((c) => c.method === "PUT")!.body as NotifySettingsDto).targets[1]!.url).toBe(DISCORD_URL);
+    const put = calls.find((c) => c.method === "PUT")!.body as NotifySettingsDto;
+    expect(put.targets.map((t) => t.url)).toEqual(["https://ntfy.sh/…", DISCORD_MASKED]);
 
-    await fireEvent.click(screen.getByRole("button", { name: "Edit URL" }));
-    const url = screen.getAllByLabelText("URL")[1] as HTMLInputElement;
+    await fireEvent.click(screen.getAllByRole("button", { name: "Replace URL" })[1]!);
+    const url = screen.getByLabelText("URL") as HTMLInputElement;
     expect(url.value).toBe("");
+    await fireEvent.click(screen.getByRole("button", { name: "Keep current URL" }));
+    expect(screen.getByText(DISCORD_MASKED)).toBeTruthy();
+  });
+
+  it("offers the silent-devices notification and sends it", async () => {
+    const calls = await open("Notifications");
+    const box = (await screen.findByRole("checkbox", { name: "A device stops checking in" })) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    await fireEvent.click(box);
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved.");
+    expect((calls.find((c) => c.method === "PUT")!.body as NotifySettingsDto).events.silentDevices).toBe(false);
+  });
+
+  it("deletes the account after the password confirms it, then goes to sign-in", async () => {
+    const calls = await open();
+    await fireEvent.click(await screen.findByRole("button", { name: "Delete my account…" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    const go = dialog.getByRole("button", { name: "Delete my account" }) as HTMLButtonElement;
+    expect(go.disabled).toBe(true);
+    await fireEvent.input(dialog.getByLabelText("Password"), { target: { value: "hunter22" } });
+    await fireEvent.click(go);
+    await waitFor(() => expect(router.path).toBe("/sign-in"));
+    expect(calls).toContainEqual({ method: "DELETE", url: "/v1/account", body: { password: "hunter22" } });
+    expect(session.account).toBeNull();
+  });
+
+  it("explains a wrong password and the last-admin refusal when deleting the account", async () => {
+    let code = "bad_password";
+    await openWith("Account", { "DELETE /v1/account": () => reply(code === "bad_password" ? 403 : 409, { code, message: "x" }) });
+    await fireEvent.click(await screen.findByRole("button", { name: "Delete my account…" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await fireEvent.input(dialog.getByLabelText("Password"), { target: { value: "nope" } });
+    await fireEvent.click(dialog.getByRole("button", { name: "Delete my account" }));
+    expect((await dialog.findByRole("alert")).textContent).toBe("That password is not right.");
+    code = "last_admin";
+    await fireEvent.click(dialog.getByRole("button", { name: "Delete my account" }));
+    await waitFor(() => expect(dialog.getByRole("alert").textContent).toMatch(/only admin/));
+  });
+
+  it("resets another user's password and shows the new one once", async () => {
+    const calls = await open("Users");
+    const row = (await screen.findByText("kid@x.test")).closest("li") as HTMLElement;
+    await fireEvent.click(within(row).getByRole("button", { name: "Reset the password for kid@x.test" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await fireEvent.click(dialog.getByRole("button", { name: "Reset password" }));
+    expect(await dialog.findByText("New-Pass-5678")).toBeTruthy();
+    expect(calls).toContainEqual({ method: "POST", url: "/v1/admin/users/u2/reset-password", body: undefined });
+    await fireEvent.click(dialog.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByText("New-Pass-5678")).toBeNull());
+    const own = screen.getByText("me@x.test").closest("li") as HTMLElement;
+    expect(within(own).queryByRole("button", { name: /Reset/ })).toBeNull();
+  });
+
+  it("offers an export of everything and per emulator", async () => {
+    await open("Storage");
+    const all = await screen.findByRole("link", { name: "Export everything" });
+    expect(all.getAttribute("href")).toBe("/v1/export.zip");
+    expect(screen.getByRole("link", { name: "Export Eden" }).getAttribute("href")).toBe("/v1/export.zip?emulator=eden");
+  });
+
+  it("shows the server version and the open-source licences in the footer", async () => {
+    await open();
+    expect(await screen.findByText("1.2.3")).toBeTruthy();
+    for (const [name, file] of [["Barlow", "/licenses/Barlow-OFL.txt"], ["Barlow Semi Condensed", "/licenses/BarlowSemiCondensed-OFL.txt"], ["JetBrains Mono", "/licenses/JetBrainsMono-OFL.txt"]])
+      expect(screen.getByRole("link", { name }).getAttribute("href")).toBe(file);
   });
 
   it("sends a test and shows a result per target", async () => {
@@ -282,7 +353,7 @@ describe("Settings", () => {
 
   it("keeps a stored Discord URL masked when its Kind is changed", async () => {
     await open("Notifications");
-    await screen.findByText("discord.com/…");
+    await screen.findByText(DISCORD_MASKED);
     const kinds = screen.getAllByLabelText("Kind");
     await fireEvent.change(kinds[1]!, { target: { value: "Webhook" } });
     expect(document.body.innerHTML).not.toContain("SECRETPART");
@@ -295,7 +366,8 @@ describe("Settings", () => {
   it("warns that changing an ntfy address removes the saved token", async () => {
     await open("Notifications");
     await screen.findByText("Token set");
-    await fireEvent.input(screen.getAllByLabelText("URL")[0]!, { target: { value: "https://ntfy.sh/other" } });
+    await fireEvent.click(screen.getAllByRole("button", { name: "Replace URL" })[0]!);
+    await fireEvent.input(screen.getByLabelText("URL"), { target: { value: "https://ntfy.sh/other" } });
     expect(screen.getByText("No token")).toBeTruthy();
     expect(screen.getByText("Changing the address removes the saved token. Enter it again.")).toBeTruthy();
   });

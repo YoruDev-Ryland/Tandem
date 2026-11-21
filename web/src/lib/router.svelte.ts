@@ -3,7 +3,7 @@ import { parseGamePath } from "./api/paths";
 export type RouteName =
   | "home" | "games" | "game" | "game-conflict" | "conflicts"
   | "devices" | "device" | "device-setup" | "device-pair"
-  | "configs" | "config-emulator" | "vault" | "activity" | "settings" | "sign-in" | "kit" | "not-found";
+  | "configs" | "config-emulator" | "config-conflict" | "vault" | "activity" | "settings" | "sign-in" | "kit" | "not-found";
 
 export interface Route { name: RouteName; params: Record<string, string> }
 
@@ -42,6 +42,12 @@ export function matchRoute(rawPath: string): Route {
   if (m) {
     const id = decode(m[1]);
     return id === null ? notFound : { name: m[2] ? "device-setup" : "device", params: { id } };
+  }
+  m = /^\/configs\/([^/]+)\/conflict\/([^/]+)$/.exec(path);
+  if (m) {
+    const emu = decode(m[1]);
+    const bundle = decode(m[2]);
+    return emu === null || bundle === null ? notFound : { name: "config-conflict", params: { emu, bundle } };
   }
   m = /^\/configs\/([^/]+)$/.exec(path);
   if (m) {

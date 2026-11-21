@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { createUser, deleteUser, getAdminSettings, getUsers, putAdminSettings } from "../../lib/api/endpoints";
+  import { createUser, deleteUser, getAdminSettings, getUsers, putAdminSettings, resetUserPassword } from "../../lib/api/endpoints";
   import type { CreatedUserResponse, UserInfo } from "../../lib/api/types";
   import { formatWhen } from "../../lib/format";
   import Button from "../../lib/ui/Button.svelte";
@@ -82,6 +82,41 @@
     }
   }
 
+  // Reset a password. The new one lives only in `reset`, which closing the dialog clears.
+  let resetOpen = $state(false);
+  let resetTarget = $state<UserInfo | null>(null);
+  let reset = $state<string | null>(null);
+  let resetError = $state<string | null>(null);
+  let resetting = $state(false);
+  let resetCopied = $state(false);
+  function askReset(u: UserInfo) {
+    resetTarget = u;
+    reset = null;
+    resetError = null;
+    resetCopied = false;
+    resetOpen = true;
+  }
+  async function confirmReset() {
+    if (!resetTarget || resetting) return;
+    resetting = true;
+    resetError = null;
+    try {
+      reset = (await resetUserPassword(resetTarget.id)).password;
+    } catch (err) {
+      resetError = settingsError(err);
+    } finally {
+      resetting = false;
+    }
+  }
+  async function copyReset() {
+    try {
+      await navigator.clipboard.writeText(reset!);
+      resetCopied = true;
+    } catch {
+      resetCopied = false;
+    }
+  }
+
   // Delete. The target is frozen when the dialog opens.
   let deleteOpen = $state(false);
   let target = $state<UserInfo | null>(null);
@@ -129,6 +164,7 @@
           <span class="ink3 when">Since {formatWhen(u.createdUtc)}</span>
           <!-- The server refuses to delete the signed-in account, so it isn't offered. -->
           {#if u.id !== session.account?.id}
+            <Button onclick={() => askReset(u)} aria-label="Reset the password for {u.email}">Reset password</Button>
             <Button onclick={() => askDelete(u)} aria-label="Delete {u.email}">Delete</Button>
           {:else}
             <span class="ink3 self">You</span>
@@ -164,6 +200,27 @@
   {/if}
 </Dialog>
 
+<Dialog bind:open={resetOpen} locked={resetting} title={reset ? "Password reset" : "Reset password"} onclose={() => (reset = null)}>
+  <div class="sec">
+    {#if reset}
+      <p class="note">New password for <span class="mono">{resetTarget?.email}</span></p>
+      <p class="mono secret">{reset}</p>
+      <p class="note">Copy it now. It won't be shown again. Their browsers were signed out; their devices keep syncing.</p>
+      <div class="actions">
+        <Button onclick={copyReset}>{resetCopied ? "Copied" : "Copy"}</Button>
+        <Button variant="primary" onclick={() => (resetOpen = false)}>Done</Button>
+      </div>
+    {:else}
+      <p class="note">Give <span class="mono">{resetTarget?.email}</span> a new generated password? Their current password stops working and their browsers are signed out.</p>
+      {#if resetError}<p class="fault" role="alert">{resetError}</p>{/if}
+      <div class="actions">
+        <Button variant="primary" onclick={confirmReset} disabled={resetting}>Reset password</Button>
+        <Button onclick={() => (resetOpen = false)} autofocus disabled={resetting}>Cancel</Button>
+      </div>
+    {/if}
+  </div>
+</Dialog>
+
 <Dialog bind:open={deleteOpen} title="Delete user">
   <div class="sec">
     <p class="note">Delete <span class="mono">{target?.email}</span>? Their saves, configs and devices are removed from this server.</p>
@@ -188,7 +245,7 @@
   }
   /* As wide as the Delete button on the other rows, so the columns line up. */
   .self {
-    width: 76px;
+    width: 228px;
     text-align: center;
   }
   .secret {

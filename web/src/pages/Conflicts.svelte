@@ -164,13 +164,14 @@
   }
   h1 {
     margin: 0 0 18px;
-    font: 600 40px/1 "Barlow Semi Condensed", sans-serif;
-    letter-spacing: -0.01em;
+    font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
+    letter-spacing: -0.02em;
     color: var(--ink);
   }
   h1 small {
-    margin-left: 10px;
-    font: 500 20px "Barlow", system-ui, sans-serif;
+    margin-left: 14px;
+    font: 400 13px "JetBrains Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
     letter-spacing: 0;
     color: var(--ink3);
   }

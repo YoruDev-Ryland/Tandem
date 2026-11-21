@@ -16,6 +16,7 @@ export function version(seq: number, over: Partial<VersionSummary> = {}): Versio
     resolved: false,
     manifestHash: `c4e477bc${seq}0000000000000000`,
     fileCount: 1,
+    emulatorVersion: null,
     ...over,
   };
 }

@@ -1,16 +1,16 @@
 <script lang="ts">
-  import { getDevices, getGame, pin, unpin } from "../lib/api/endpoints";
+  import { deleteGame, getDevices, getGame, pin, unpin } from "../lib/api/endpoints";
   import { downloadUrl, gamePath } from "../lib/api/paths";
   import { resource } from "../lib/api/resource.svelte";
   import { ApiError } from "../lib/api/http";
   import type { ItemKind, SaveItemDetail, VersionSummary } from "../lib/api/types";
-  import { deviceLine } from "../lib/deviceStates";
+  import { deviceLine, matrixColumns } from "../lib/deviceStates";
   import { emulatorName } from "../lib/emulators";
   import { formatSize, formatWhen } from "../lib/format";
   import { onAction } from "../lib/input/actions";
   import { gamepad } from "../lib/input/gamepad.svelte";
   import { router } from "../lib/router.svelte";
-  import { systemLabel } from "../lib/systems";
+  import { bareKey } from "../lib/systems";
   import { captureDrop, collectDrop, fromPicker, UnreadableUpload, uploadFiles, type Dropped, type UploadFile } from "../lib/upload";
   import Button from "../lib/ui/Button.svelte";
   import Dialog from "../lib/ui/Dialog.svelte";
@@ -21,6 +21,9 @@
   import HintBar from "../lib/ui/HintBar.svelte";
   import List from "../lib/ui/List.svelte";
   import RestoreDialog from "../lib/ui/RestoreDialog.svelte";
+  import Presence, { presenceWidth } from "../lib/ui/Presence.svelte";
+  import SystemTag from "../lib/ui/SystemTag.svelte";
+  import { flash } from "../lib/ui/flash.svelte";
 
   const { emu, key } = router.params as { emu: string; key: string };
 
@@ -58,18 +61,40 @@
   });
 
   const row = $derived(game.data?.row);
-  const title = $derived(row?.displayName ?? key);
+  const title = $derived(row?.displayName ?? bareKey(emu, key));
+  const named = $derived(!!row?.displayName);
+  /** The device lane: one mark column per device, filled in on the current save's row. */
+  const lane = $derived(row ? matrixColumns([row]) : []);
+  const saveCore = $derived(game.data?.items.find((i) => i.kind === "Save")?.core ?? game.data?.items[0]?.core ?? null);
   const label = (v: VersionSummary) => `v${v.seq}`;
   const versionTitle = (f: { item: SaveItemDetail; v: VersionSummary }) =>
     `${f.item.kind === "State" ? `Slot ${f.item.slot} ` : ""}${label(f.v)} from ${f.v.deviceName ?? "an unknown device"}`;
 
-  const installed = $derived.by(() => {
+  /** The device a restore is recorded against: one the game is installed on, else any of the account's. */
+  const restoreDevice = $derived.by(() => {
     const ids = new Set(row?.installedOn ?? []);
-    return (devices.data ?? []).filter((d) => ids.has(d.id)).map((d) => ({ id: d.id, name: d.name }));
+    const list = devices.data ?? [];
+    return (list.find((d) => ids.has(d.id)) ?? list[0])?.id;
   });
 
-  const COLUMNS = "72px minmax(0,1fr) 160px 90px 130px";
-  const HEADER = ["Version", "From", "Saved", "Size", ""];
+  const COLUMNS = $derived(`64px minmax(0,1fr) 150px 84px ${presenceWidth(lane.length)} 120px`);
+  const HEADER = $derived(["Version", "From", "Saved", "Size", laneHead, ""]);
+
+  /** "512 KB, unchanged since v2" or "516 KB, 4 KB more than v2": the size against the versions before it. */
+  function sizeTrend(item: SaveItemDetail, v: VersionSummary): string {
+    const older = item.versions.filter((x) => x.seq < v.seq).sort((a, b) => b.seq - a.seq);
+    const size = formatSize(v.totalSize);
+    if (older.length === 0) return size;
+    let since = v;
+    for (const o of older) {
+      if (o.totalSize !== v.totalSize) break;
+      since = o;
+    }
+    if (since !== v) return `${size}, unchanged since ${label(since)}`;
+    const prev = older[0]!;
+    const d = v.totalSize - prev.totalSize;
+    return `${size}, ${formatSize(Math.abs(d))} ${d > 0 ? "more" : "less"} than ${label(prev)}`;
+  }
 
   function notes(v: VersionSummary): string {
     return [v.pinned && "pinned", v.isHead && "current", v.variant].filter(Boolean).join(", ");
@@ -111,6 +136,38 @@
       failure = e;
     } finally {
       busy = false;
+    }
+  }
+
+  // Delete the game's saves from the server.
+  let deleting = $state(false);
+  let deleteBusy = $state(false);
+  let deleteError = $state<unknown>(undefined);
+  /** Frozen when the dialog opens. */
+  let deleteTarget = $state<{ title: string; versions: number; states: number } | undefined>();
+  function openDelete() {
+    const items = game.data?.items ?? [];
+    deleteTarget = {
+      title,
+      versions: items.filter((i) => i.kind === "Save").reduce((n, i) => n + i.versions.length, 0),
+      states: items.filter((i) => i.kind === "State").length,
+    };
+    deleteError = undefined;
+    deleting = true;
+  }
+  async function confirmDelete() {
+    if (deleteBusy || !deleteTarget) return;
+    deleteBusy = true;
+    deleteError = undefined;
+    try {
+      await deleteGame(emu, key);
+      deleting = false;
+      flash.say(`Deleted ${deleteTarget.title} from the server.`);
+      router.go("/games");
+    } catch (e) {
+      deleteError = e;
+    } finally {
+      deleteBusy = false;
     }
   }
 
@@ -193,17 +250,24 @@
 
 <svelte:window ondragover={over} ondrop={drop} />
 
+{#snippet laneHead()}<Presence columns={lane} head />{/snippet}
+
 <div class="page">
   <section>
     {#if game.error && !game.data}
       <ErrorLine error={game.error} />
     {:else if !row}
-      <h1>{key}</h1>
+      <h1 class="mono-title">{bareKey(emu, key)}</h1>
       <p class="loading" aria-busy="true">— — —</p>
     {:else}
-      <h1>{title}</h1>
+      {#if named}
+        <h1>{title}</h1>
+      {:else}
+        <h1 class="mono-title">{title}<small>unknown title</small></h1>
+      {/if}
       <p class="sub">
-        <span>{systemLabel(emu, key)} · {emulatorName(emu)}</span>
+        <span class="tag"><SystemTag emulatorId={emu} gameKey={key} core={saveCore} /></span>
+        <span class="emu">{emulatorName(emu)}</span>
         <span class="devices">
           {#each deviceLine(row) as c, i (i)}
             {#if i > 0}<span class="ink2">{" · "}</span>{/if}<span class={c.tone || "ink2"}>{c.text}</span>
@@ -223,8 +287,8 @@
               header={HEADER}
               size="detail"
               minWidth="0px"
-              phoneColumns="64px minmax(0,1fr) 84px"
-              phoneHide={[1, 3]}
+              phoneColumns={`56px minmax(0,1fr) ${presenceWidth(lane.length)}`}
+              phoneHide={[1, 3, 5]}
               bind:index
               onOpen={activate}
               key={(l) => (l.kind === "slot" ? "slot/" + l.item.itemId : l.item.itemId + "/" + l.v.id)}
@@ -236,13 +300,15 @@
                   <span class="sm-hide">{h?.deviceName ?? ""}</span>
                   <span class="ink2">{h ? formatWhen(h.receivedUtc) : ""}</span>
                   <span class="mono ink2 sm-hide">{l.item.versions.length} {l.item.versions.length === 1 ? "version" : "versions"}</span>
-                  <span class="end ink3">{open[l.item.itemId] ? "hide" : "show"}</span>
+                  <span></span>
+                  <span class="end ink3 sm-hide">{open[l.item.itemId] ? "hide" : "show"}</span>
                 {:else}
                   <span class="name" class:nested={l.item.kind === "State"}>{label(l.v)}</span>
-                  <span class="sm-hide">{l.v.deviceName ?? ""}</span>
+                  <span class="sm-hide">{l.v.deviceName ?? ""}{#if l.v.emulatorVersion}<span class="mono ink3 ver">{l.v.emulatorVersion}</span>{/if}</span>
                   <span class="ink2">{formatWhen(l.v.receivedUtc)}</span>
                   <span class="mono ink2 sm-hide">{formatSize(l.v.totalSize)}</span>
-                  <span class="end ink2">{notes(l.v)}{#if l.v.conflictReason === "FirstSync"}<span class="ink3">{notes(l.v) ? ", " : ""}first sync</span>{/if}</span>
+                  {#if l.item.kind === "Save" && l.v.isHead && game.data}<Presence columns={lane} row={game.data.row} />{:else}<span></span>{/if}
+                  <span class="end ink2 sm-hide">{notes(l.v)}{#if l.v.conflictReason === "FirstSync"}<span class="ink3">{notes(l.v) ? ", " : ""}first sync</span>{/if}</span>
                 {/if}
               {/snippet}
             </List>
@@ -255,18 +321,19 @@
             <Facts
               items={[
                 ["Saved", formatWhen(focused.v.receivedUtc)],
-                ["Size", `${formatSize(focused.v.totalSize)} · ${focused.v.fileCount} ${focused.v.fileCount === 1 ? "file" : "files"}`, true],
+                ["Size", `${sizeTrend(focused.item, focused.v)} · ${focused.v.fileCount} ${focused.v.fileCount === 1 ? "file" : "files"}`, true],
+                ...(focused.v.emulatorVersion ? [[emulatorName(emu), focused.v.emulatorVersion, true] as [string, string, boolean]] : []),
                 ["Fingerprint", focused.v.manifestHash.slice(0, 8), true],
               ]}
             />
             <div class="buttons">
-              <Button variant="primary" glyph="a" onclick={openRestore}>Restore to…</Button>
+              <Button variant="primary" glyph="a" onclick={openRestore}>Restore this version</Button>
               <a class="btn" href={downloadUrl(focused.v.id)} download bind:this={download}>
-                {#if gamepad.connected}<Glyph action="y" />{/if}Download
+                {#if gamepad.connected}<Glyph action="y" />{:else}<kbd aria-hidden="true">Y</kbd>{/if}Download
               </a>
               <Button glyph="x" onclick={togglePin} disabled={busy}>{focused.v.pinned ? "Unpin" : "Pin"}</Button>
             </div>
-            <p class="note">Restoring keeps the device's current save as a new version first. If {emulatorName(emu)} is open there, it waits until it closes.</p>
+            <p class="note">Restoring makes {label(focused.v)} the current save again: every device with the game gets it. The save that is current now stays in history. Where {emulatorName(emu)} is open, it waits until it closes.</p>
           {/if}
           {#if sent}<p class="ink2 line">{sent}</p>{/if}
           {#if uploaded}<p class="ink2 line">{uploaded}</p>{/if}
@@ -288,6 +355,11 @@
             <input bind:this={picker} type="file" multiple hidden aria-label="Save file" onchange={() => picked(picker)} />
             <input bind:this={folderPicker} type="file" hidden aria-label="Save folder" onchange={() => picked(folderPicker)} {...{ webkitdirectory: true }} />
           </div>
+          {#if lines.length > 0}
+            <div class="danger">
+              <Button onclick={openDelete}>Delete from server…</Button>
+            </div>
+          {/if}
         </aside>
       </div>
     {/if}
@@ -310,15 +382,31 @@
       versionId={target.versionId}
       label={target.label}
       emulatorName={emulatorName(emu)}
-      devices={installed}
-      onrestored={(name) => {
+      deviceId={restoreDevice}
+      onrestored={() => {
         failure = undefined;
         uploaded = "";
-        sent = `Sent to ${name}. It goes in when ${emulatorName(emu)} is closed there.`;
+        const l = target?.label ?? "It";
+        sent = `${l} is the current save again. Every device with the game gets it; where ${emulatorName(emu)} is open, it waits until it closes.`;
+        flash.say(`Restored ${l} · every device gets it`);
         game.reload();
       }}
     />
   {/if}
+
+  <Dialog bind:open={deleting} locked={deleteBusy} title="Delete these saves from the server?">
+    {#if deleteTarget}
+      <p class="note first">
+        This removes {deleteTarget.title}'s {deleteTarget.versions} save {deleteTarget.versions === 1 ? "version" : "versions"}{#if deleteTarget.states > 0}{" "}and {deleteTarget.states} save {deleteTarget.states === 1 ? "state" : "states"}{/if} from the server, with their history. It can't be undone.
+      </p>
+      <p class="note">Files on the devices are not touched. A device that still has them uploads them again as a new save.</p>
+      {#if deleteError}<div class="line"><ErrorLine error={deleteError} /></div>{/if}
+      <div class="buttons row dialog">
+        <Button variant="primary" onclick={confirmDelete} disabled={deleteBusy}>Delete from server</Button>
+        <Button onclick={() => (deleting = false)} autofocus>Cancel</Button>
+      </div>
+    {/if}
+  </Dialog>
 
   <HintBar
     status="Upload a save from this PC: drop a file anywhere"
@@ -343,8 +431,8 @@
   }
   h1 {
     margin: 0 0 8px;
-    font: 600 40px/1 "Barlow Semi Condensed", sans-serif;
-    letter-spacing: -0.01em;
+    font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
+    letter-spacing: -0.02em;
     color: var(--ink);
   }
   h2 {
@@ -353,13 +441,57 @@
     letter-spacing: -0.01em;
     color: var(--ink);
   }
+  h1.mono-title {
+    font: 400 30px/1.1 "JetBrains Mono", ui-monospace, monospace;
+    letter-spacing: 0;
+    color: var(--ink2);
+    overflow-wrap: anywhere;
+  }
+  h1 small {
+    margin-left: 14px;
+    font: 500 15px "Barlow", system-ui, sans-serif;
+    color: var(--ink3);
+  }
   .sub {
-    margin: 0 0 24px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    margin: 4px 0 28px;
     color: var(--ink2);
     font-size: 15px;
   }
-  .sub > span + span::before {
-    content: " · ";
+  .tag {
+    display: inline-flex;
+  }
+  .emu {
+    color: var(--ink);
+    font-weight: 500;
+  }
+  .ver {
+    margin-left: 10px;
+  }
+  kbd {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 5px;
+    border: 1.5px solid var(--rule2);
+    border-radius: 3px;
+    color: var(--ink2);
+    font: 600 11px/1 "Barlow", system-ui, sans-serif;
+  }
+  .danger {
+    margin-top: 28px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+  }
+  .note.first {
+    margin-top: 0;
+    color: var(--ink);
+  }
+  .buttons.dialog {
+    margin-top: 22px;
   }
   .devices .ink2 {
     color: var(--ink2);
@@ -375,17 +507,18 @@
   }
   .split {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 380px;
+    grid-template-columns: minmax(0, 1fr) 460px;
     gap: 40px;
   }
   aside {
     padding-left: 40px;
     border-left: 1px solid var(--rule);
   }
+  /* One horizontal action row: A Restore, Y Download, X Pin. */
   .buttons {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 10px;
     margin-top: 22px;
   }

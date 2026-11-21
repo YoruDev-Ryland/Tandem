@@ -39,14 +39,27 @@ class GamepadState {
 }
 export const gamepad = new GamepadState();
 
-/** Listens for connect/disconnect and runs the poll loop while connected. Returns cleanup. */
+/**
+ * The pad to read: the first connected one with the standard mapping. Button indices only mean A/B/X/Y and the D-pad
+ * under that mapping; other pads (and some motion devices that report as gamepads) are ignored.
+ */
+export function standardPad(pads: readonly (Gamepad | null)[]): Gamepad | undefined {
+  return pads.find((p): p is Gamepad => !!p && p.connected && p.mapping === "standard");
+}
+
+const pads = () => Array.from(navigator.getGamepads?.() ?? []);
+
+/**
+ * Listens for connect/disconnect and runs the poll loop while a standard pad is connected. A pad already connected
+ * when this runs (the page was reloaded with it plugged in) is picked up straight away. Returns cleanup.
+ */
 export function installGamepad(): () => void {
   let frame = 0;
   let prev: boolean[] = [];
   const repeat: RepeatState = new Map();
 
   const poll = () => {
-    const pad = Array.from(navigator.getGamepads?.() ?? []).find((p) => p?.connected);
+    const pad = standardPad(pads());
     if (pad) {
       const now = pad.buttons.map((b) => b.pressed);
       for (const a of gamepadToActions(prev, now, repeat, performance.now())) dispatch(a);
@@ -59,17 +72,19 @@ export function installGamepad(): () => void {
     frame = 0;
   };
   const connect = () => {
+    const pad = standardPad(pads());
+    if (!pad) return;
     gamepad.connected = true;
     if (!frame) {
       // Buttons already held at connect time must not count as presses.
-      prev = Array.from(navigator.getGamepads?.() ?? []).find((p) => p?.connected)?.buttons.map((b) => b.pressed) ?? [];
+      prev = pad.buttons.map((b) => b.pressed);
       repeat.clear();
       frame = requestAnimationFrame(poll);
     }
   };
   const disconnect = (e: Event) => {
     const gone = (e as GamepadEvent).gamepad?.index;
-    const remaining = Array.from(navigator.getGamepads?.() ?? []).some((p) => p?.connected && p.index !== gone);
+    const remaining = pads().some((p) => p?.connected && p.mapping === "standard" && p.index !== gone);
     if (remaining) return;
     gamepad.connected = false;
     stopLoop();
@@ -77,6 +92,7 @@ export function installGamepad(): () => void {
 
   window.addEventListener("gamepadconnected", connect);
   window.addEventListener("gamepaddisconnected", disconnect);
+  connect();
   return () => {
     window.removeEventListener("gamepadconnected", connect);
     window.removeEventListener("gamepaddisconnected", disconnect);

@@ -18,28 +18,28 @@
     ["failedSyncs", "Failed syncs"],
     ["shizukuOff", "Shizuku turned off"],
     ["backupFailed", "Backup failed"],
+    ["silentDevices", "A device stops checking in"],
   ];
 
   interface Target {
     id: number;
     kind: NotifyKind;
-    /** The real URL. For Discord and Webhook targets it is never shown, only its host. */
+    /** As typed; for a stored destination, the server's masked "scheme://host/…" until it is edited. */
     url: string;
     /** Write-only: starts empty and is sent only when typed. */
     token: string;
     tokenSet: boolean;
     removeToken: boolean;
     editingUrl: boolean;
+    /** The masked address the server sent. Sending it back unchanged keeps the stored address. */
     original: string;
-    /** The stored kind keeps its address secret. Decided on load so changing Kind cannot reveal it. */
-    secret: boolean;
   }
 
   let nextId = 0;
   let loaded = $state(false);
   let loadError = $state<unknown>(undefined);
   let targets = $state<Target[]>([]);
-  let events = $state<NotifyEvents>({ conflicts: true, failedSyncs: true, shizukuOff: true, backupFailed: true });
+  let events = $state<NotifyEvents>({ conflicts: true, failedSyncs: true, shizukuOff: true, backupFailed: true, silentDevices: true });
   let baseline = $state("");
   let busy = $state(false);
   let error = $state<string | null>(null);
@@ -48,21 +48,12 @@
   let results = $state<NotifyTestResult[] | null>(null);
   let testError = $state<string | null>(null);
 
-  const secretUrl = (k: NotifyKind) => k !== "Ntfy";
-  /** "discord.com/…": the host only, since the rest of a webhook address is a credential. */
-  function maskUrl(url: string): string {
-    try {
-      return `${new URL(url).host}/…`;
-    } catch {
-      return "Saved address";
-    }
-  }
-
   function apply(s: NotifySettingsDto) {
     targets = s.targets.map((t) => ({
-      id: nextId++, kind: t.kind, url: t.url, token: "", tokenSet: !!t.tokenSet, removeToken: false, editingUrl: false, original: t.url, secret: secretUrl(t.kind),
+      id: nextId++, kind: t.kind, url: t.url, token: "", tokenSet: !!t.tokenSet, removeToken: false, editingUrl: false, original: t.url,
     }));
-    events = { ...s.events };
+    // An older server has no silentDevices: it is on by default.
+    events = { ...s.events, silentDevices: s.events.silentDevices ?? true };
     baseline = snapshot();
   }
 
@@ -94,7 +85,7 @@
   const valid = $derived(targets.every((t) => urlProblem(t) === null));
 
   function add() {
-    targets.push({ id: nextId++, kind: "Ntfy", url: "", token: "", tokenSet: false, removeToken: false, editingUrl: true, original: "", secret: false });
+    targets.push({ id: nextId++, kind: "Ntfy", url: "", token: "", tokenSet: false, removeToken: false, editingUrl: true, original: "" });
     done = false;
   }
   function edit(t: Target) {
@@ -154,15 +145,16 @@
           <legend>Destination {i + 1}</legend>
           <div class="grid">
             <Field label="Kind" options={KINDS} bind:value={t.kind} />
-            {#if t.original && t.secret && !t.editingUrl}
+            {#if t.original && !t.editingUrl}
+              <!-- The server only sends the address's host: the rest can be a credential. Editing replaces it whole. -->
               <div class="masked">
                 <span class="lbl">URL</span>
-                <span class="mono">{maskUrl(t.url)}</span>
+                <span class="mono">{t.original}</span>
               </div>
-              <Button onclick={() => edit(t)}>Edit URL</Button>
+              <Button onclick={() => edit(t)}>Replace URL</Button>
             {:else}
               <Field label="URL" type="url" mono bind:value={t.url} placeholder="https://" oninput={() => (done = false)} />
-              {#if t.original && t.secret}<Button onclick={() => keepUrl(t)}>Keep current URL</Button>{/if}
+              {#if t.original}<Button onclick={() => keepUrl(t)}>Keep current URL</Button>{/if}
             {/if}
           </div>
           {#if t.kind === "Ntfy"}

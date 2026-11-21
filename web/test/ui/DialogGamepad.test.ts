@@ -43,22 +43,17 @@ describe("Dialog with a gamepad", () => {
     const onrestored = vi.fn();
     render(RestoreDialog, {
       open: true, itemId: "i1", versionId: "v1", label: "v3", emulatorName: "melonDS",
-      devices: [{ id: "d1", name: "Odin 3" }, { id: "d2", name: "Thor" }], onrestored,
+      deviceId: "d2", onrestored,
     });
     await tick();
-    const select = screen.getByLabelText("Restore to") as HTMLSelectElement;
-    expect(document.activeElement).toBe(select);
-    press("right");
-    expect(select.value).toBe("d2");
-    expect(screen.getByText(/Thor's current save is kept/)).toBeTruthy();
-    press("left", "right", "right");
-    expect(select.value).toBe("d2");
+    const restore = screen.getByRole("button", { name: "Restore v3" });
+    expect(document.activeElement).toBe(restore);
     press("down");
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Restore" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
     press("up");
-    expect(document.activeElement).toBe(select);
+    expect(document.activeElement).toBe(restore);
     press("a");
-    await waitFor(() => expect(onrestored).toHaveBeenCalledWith("Thor"));
+    await waitFor(() => expect(onrestored).toHaveBeenCalled());
     expect(calls).toEqual([{ method: "POST", url: "/v1/saves/i1/versions/v1/restore", body: { deviceId: "d2" } }]);
   });
 
