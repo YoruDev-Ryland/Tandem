@@ -10,6 +10,7 @@ import dev.tandem.app.ui.state.AppState
 import dev.tandem.app.ui.state.EmuRowState
 import dev.tandem.app.ui.state.EmulatorRowUi
 import dev.tandem.app.ui.state.Loaded
+import dev.tandem.app.ui.state.ServerConn
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -46,8 +47,27 @@ data class EmuPane(
     val received: List<ReceivedLine> = emptyList(),
 )
 
-/** Everything the "This device" tab shows. [loaded] is false until the first games list arrives. */
-data class DeviceUi(val signedIn: Boolean, val panes: List<EmuPane>, val loaded: Boolean, val error: ApiException?)
+/**
+ * Everything the "This device" tab shows. [loaded] is false until the first games list arrives. [revoked]: the server
+ * removed this device. [synced] is the "Synced 5 min ago" line for the status area, or null when it never synced.
+ */
+data class DeviceUi(
+    val signedIn: Boolean,
+    val panes: List<EmuPane>,
+    val loaded: Boolean,
+    val error: ApiException?,
+    val revoked: Boolean = false,
+    val synced: String? = null,
+)
+
+const val REVOKED_LINE = "This device was removed from the server."
+const val REVOKED_REST = "Sync is off here. Sign in again or pair this device to use it with Tandem."
+
+/** "Synced just now", "Synced 5 min ago", "Synced 3 h ago", else "Synced Nov 19, 22:14"; null when never. */
+fun syncedAgo(at: java.time.Instant?, now: java.time.Instant = java.time.Instant.now(), zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String? {
+    at ?: return null
+    return "Synced " + activityTime(at.toString(), now, zone)
+}
 
 private fun plural(n: Int, one: String) = if (n == 1) "1 $one" else "$n ${one}s"
 
@@ -99,6 +119,8 @@ fun deviceUi(
                 is EmuRowState.ConfigGroup -> "config group" to Tone.Ink2
                 EmuRowState.NotSetUp -> "not set up" to Tone.Ink3
                 EmuRowState.Looking -> "looking…" to Tone.Ink3
+                EmuRowState.NoShizuku -> "Shizuku off" to Tone.Ink3
+                EmuRowState.Idle -> "—" to Tone.Ink3
                 EmuRowState.Ok -> "no saves yet" to Tone.Ink2
             }
         }
@@ -131,6 +153,9 @@ fun deviceUi(
  */
 class DeviceViewModel(app: AppState, games: StateFlow<Loaded<List<GameRow>>>, deviceId: () -> String?, scope: CoroutineScope) {
     val ui: StateFlow<DeviceUi> = combine(app.emulators, games, app.waiting, app.top, app.received) { emus, g, w, top, got ->
-        deviceUi(emus, g, w, deviceId(), top.signedIn, got)
+        deviceUi(emus, g, w, deviceId(), top.signedIn, got).copy(
+            revoked = top.server == ServerConn.Revoked,
+            synced = if (top.signedIn) syncedAgo(top.lastSyncedAt) else null,
+        )
     }.stateIn(scope, SharingStarted.Eagerly, DeviceUi(false, emptyList(), false, null))
 }

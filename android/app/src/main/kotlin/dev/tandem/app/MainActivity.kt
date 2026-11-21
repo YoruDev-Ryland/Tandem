@@ -149,6 +149,8 @@ private fun TandemRoot(vm: AppViewModel, activity: MainActivity) {
                 // Y: Settings › Emulators with the cursor on this emulator.
                 settings = { id -> vm.settings.focusEmulator(id); tab = TAB_SETTINGS },
                 setup = { vm.setup.start(exitable = true) },
+                // Removed on the server: the old key works nowhere, so sign out (no file is touched) and sign in again.
+                pairAgain = { vm.settings.signOut(); vm.setup.start(exitable = true) },
                 back = { activity.onBackPressedDispatcher.onBackPressed() },
             ),
         )

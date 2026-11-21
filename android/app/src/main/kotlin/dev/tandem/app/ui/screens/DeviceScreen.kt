@@ -45,6 +45,7 @@ import dev.tandem.app.ui.kit.Cell
 import dev.tandem.app.ui.kit.ConsoleScaffold
 import dev.tandem.app.ui.kit.CursorList
 import dev.tandem.app.ui.kit.EmptyLine
+import dev.tandem.app.ui.kit.EmuButton
 import dev.tandem.app.ui.kit.ErrorLine
 import dev.tandem.app.ui.kit.Hint
 import dev.tandem.app.ui.kit.Tone
@@ -57,6 +58,8 @@ class DeviceActions(
     val syncNow: () -> Unit = {},
     val settings: (emulatorId: String) -> Unit = {},
     val setup: () -> Unit = {},
+    /** Removed on the server: sign out (nothing on the device is deleted) and open sign-in. */
+    val pairAgain: () -> Unit = {},
     val back: () -> Unit = {},
 )
 
@@ -112,7 +115,7 @@ fun DeviceScreen(ui: DeviceUi, top: @Composable RowScope.() -> Unit, actions: De
     fun openEmulator() = if (ui.signedIn) enterGames() else actions.setup()
     fun openGame(g: GameLine) { focused?.let { actions.openGame(it.id, g.key) } }
 
-    val hints = listOf(
+    val hints = if (ui.revoked) listOf(Hint(Action.A, "Sign in again", actions.pairAgain), Hint(Action.B, "Back", actions.back)) else listOf(
         Hint(Action.A, if (ui.signedIn) "Open" else "Sign in") {
             when {
                 !ui.signedIn -> actions.setup()
@@ -128,6 +131,7 @@ fun DeviceScreen(ui: DeviceUi, top: @Composable RowScope.() -> Unit, actions: De
     ConsoleScaffold(
         top = top,
         hints = hints,
+        status = if (ui.revoked) null else ui.synced,
         onAction = { a ->
             when (a) {
                 Action.Right -> { if (!inGames && ui.signedIn) enterGames(); true }
@@ -136,6 +140,15 @@ fun DeviceScreen(ui: DeviceUi, top: @Composable RowScope.() -> Unit, actions: De
             }
         },
     ) {
+        // Removed on the server: nothing here syncs any more, so the only thing to show is that, and the way back.
+        if (ui.revoked) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                BasicText(REVOKED_LINE, Modifier.padding(top = 4.dp, bottom = 8.dp), style = EmuType.title.copy(color = LocalEmu.current.fault))
+                BasicText(REVOKED_REST, Modifier.widthIn(max = 560.dp).padding(bottom = 16.dp), style = EmuType.body.copy(color = LocalEmu.current.ink2))
+                EmuButton("Sign in again", primary = true, glyph = Action.A, onClick = actions.pairAgain)
+            }
+            return@ConsoleScaffold
+        }
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val portrait = maxWidth < 600.dp
             val emuWidth = emulatorsWidth(maxWidth)

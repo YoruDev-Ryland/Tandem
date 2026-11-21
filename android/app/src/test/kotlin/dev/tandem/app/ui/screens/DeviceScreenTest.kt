@@ -84,6 +84,24 @@ class DeviceScreenTest {
         ).assertExists()
     }
 
+    @Test fun aRevokedDeviceSaysSoAndASignsInAgain() {
+        var again = 0
+        show(ui(emptyList()).copy(revoked = true), status(ServerConn.Revoked), DeviceActions(pairAgain = { again++ }))
+        compose.onNodeWithText(REVOKED_LINE).assertExists()
+        compose.onNodeWithText("Removed from the server").assertExists()   // the top bar
+        compose.onNodeWithText("Emulators").assertDoesNotExist()
+        compose.key(android.view.KeyEvent.KEYCODE_BUTTON_A)
+        assertEquals(1, again)
+    }
+
+    @Test fun theStatusAreaSaysWhenThisDeviceLastSynced() {
+        show(ui(emptyList()).copy(synced = "Synced 5 min ago"))
+        compose.onNodeWithText("Synced 5 min ago").assertExists()
+        val now = Instant.parse("2026-11-21T12:00:00Z")
+        assertEquals("Synced 5 min ago", syncedAgo(Instant.parse("2026-11-21T11:55:00Z"), now, ZoneOffset.UTC))
+        assertEquals(null, syncedAgo(null, now, ZoneOffset.UTC))
+    }
+
     @Test fun theCloseLineShowsWhenOnlyTheServerSaysWaiting() {
         show(ui(listOf(game("k1", "Xenoblade", DeviceGameState.Waiting, newestOn = "Odin 3"))))
         compose.onNodeWithText("Close Eden to get the newer Xenoblade save from Odin 3. Nothing is written while Eden is open.").assertExists()

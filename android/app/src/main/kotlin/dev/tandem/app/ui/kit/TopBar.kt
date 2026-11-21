@@ -30,6 +30,7 @@ fun serverCopy(status: TopStatus, zone: ZoneId = ZoneId.systemDefault()): Pair<S
     ServerConn.Connected -> "Server connected" to Tone.Ink2
     ServerConn.Offline -> (status.lastSync?.let { "Offline · last updated ${HHMM.format(it.atZone(zone))}" } ?: "Offline") to Tone.Wait
     ServerConn.SignedOut -> "Signed out" to Tone.Fault
+    ServerConn.Revoked -> "Removed from the server" to Tone.Fault
 }
 
 /**
