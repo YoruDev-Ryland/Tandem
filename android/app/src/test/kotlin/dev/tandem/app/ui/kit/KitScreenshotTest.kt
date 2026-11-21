@@ -84,8 +84,7 @@ private fun Sample() {
             Spacer(Modifier.weight(1f))
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 BasicText("Thor", style = EmuType.meta.copy(fontWeight = FontWeight.SemiBold, color = c.ink))
-                BasicText("Server connected", style = EmuType.meta.copy(fontWeight = FontWeight.Medium, color = c.ink2))
-                BasicText("Shizuku on", style = EmuType.meta.copy(fontWeight = FontWeight.Medium, color = c.ink2))
+                SystemReadout(Readout("14:05", 82))
             }
         },
         hints = listOf(

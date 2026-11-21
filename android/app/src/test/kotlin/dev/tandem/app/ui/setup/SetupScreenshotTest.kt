@@ -27,6 +27,7 @@ import dev.tandem.app.ui.screens.SettingsViewModel
 import dev.tandem.app.ui.state.ServerConn
 import dev.tandem.app.ui.state.TopStatus
 import dev.tandem.app.ui.theme.EmuTheme
+import dev.tandem.app.ui.kit.Chrome
 import dev.tandem.app.ui.theme.ThemeMode
 import java.io.File
 import java.lang.reflect.Proxy
@@ -88,7 +89,11 @@ class SetupScreenshotTest {
         )
     }
 
-    private fun vm(handle: SavedStateHandle, signedIn: Boolean): SetupViewModel {
+    private val calm = object : Api by server {
+        override suspend fun conflicts() = emptyList<ConflictRow>()
+    }
+
+    private fun vm(handle: SavedStateHandle, signedIn: Boolean, api: Api = server): SetupViewModel {
         val store = StateStore(File(tmp.root, "state.json"))
         if (signedIn) { store.serverUrl = "http://nas.local:5100"; store.deviceKey = "key"; store.deviceId = "dev-me" }
         val settings = SettingsViewModel(store, modules, { emptySet() }, { null }, MutableStateFlow("Odin 3"), {}, {}, {}, scope)
@@ -98,7 +103,7 @@ class SetupScreenshotTest {
             EmulatorInfo(Detected("ppsspp", "org.ppsspp.ppsspp", "", "/d"), 2),
         )))
         return SetupViewModel(
-            handle, store, modules, { server }, { server }, MutableStateFlow(ShizukuState.Ready), {}, snapshot, settings,
+            handle, store, modules, { api }, { api }, MutableStateFlow(ShizukuState.Ready), {}, snapshot, settings,
             { if (it != null && it.endsWith("SCAN")) snapshot.value = snapshot.value.copy(scans = snapshot.value.scans + 1) },
             {}, scope, MutableStateFlow(emptySet()), { id -> modules.first { it.emulatorId == id }.displayName }, "Odin 3",
         )
@@ -126,12 +131,15 @@ class SetupScreenshotTest {
     @Config(qualifiers = DEVICE_SIZE) @Test fun deviceSignInDark() = shoot(ThemeMode.Dark, vm(signIn(), false), "robo-setup-signin-dark.png", "Sign in to Home server", signedIn = false)
     @Config(qualifiers = DEVICE_SIZE) @Test fun deviceSignInLight() = shoot(ThemeMode.Light, vm(signIn(), false), "robo-setup-signin-light.png", "Sign in to Home server", signedIn = false)
     @Config(qualifiers = DEVICE_SIZE) @Test fun deviceSyncChoiceDark() = shoot(ThemeMode.Dark, sync(), "robo-setup-sync-dark.png", "RetroArch settings")
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceSyncChoiceLight() = shoot(ThemeMode.Light, sync(), "robo-setup-sync-light.png", "RetroArch settings")
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceAllSetDark() = shoot(ThemeMode.Dark, vm(at(SetupStep.FirstSync), true, calm), "robo-setup-allset-dark.png", "18")
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceAllSetLight() = shoot(ThemeMode.Light, vm(at(SetupStep.FirstSync), true, calm), "robo-setup-allset-light.png", "18")
     @Config(qualifiers = DEVICE_SIZE) @Test fun deviceFirstSyncDark() = shoot(ThemeMode.Dark, vm(at(SetupStep.FirstSync), true), "robo-setup-first-dark.png", "Super Metroid")
     @Config(qualifiers = DEVICE_SIZE) @Test fun deviceFirstSyncLight() = shoot(ThemeMode.Light, vm(at(SetupStep.FirstSync), true), "robo-setup-first-light.png", "Super Metroid")
 
     private fun shoot(mode: ThemeMode, vm: SetupViewModel, name: String, expect: String, signedIn: Boolean = true) {
         val status = TopStatus(if (signedIn) "Odin 3" else null, if (signedIn) ServerConn.Connected else ServerConn.SignedOut, ShizukuState.Ready, signedIn)
-        compose.setContent { EmuTheme(mode) { SetupFlow(vm, status, openShizuku = null, onDone = {}, diagnostics = {}) } }
+        compose.setContent { EmuTheme(mode) { Chrome { SetupFlow(vm, status, openShizuku = null, onDone = {}, diagnostics = {}) } } }
         compose.onNodeWithText(expect).assertExists()
         val dir = System.getenv("TANDEM_SHOT_DIR") ?: return
         val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()

@@ -30,3 +30,11 @@ fun ComposeContentTestRule.host(hints: List<Hint> = emptyList(), onAction: (dev.
         }
     }
 }
+
+/** The live parts the activity provides, fixed for screenshots: the clock and battery, and the synced line. */
+@Composable
+fun Chrome(content: @Composable () -> Unit) = androidx.compose.runtime.CompositionLocalProvider(
+    LocalReadout provides Readout("14:05", 82),
+    LocalStatusLine provides "Synced 2 min ago",
+    content = content,
+)
