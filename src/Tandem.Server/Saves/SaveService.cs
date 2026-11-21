@@ -47,7 +47,7 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
                 ?? throw new InvalidOperationException("Save item vanished while locked.");
             if (names.Resolve(item.EmulatorId, item.GameKey, request.DisplayName ?? item.DisplayName) is { } name)
                 item.DisplayName = name;
-            label = item.DisplayName ?? item.GameKey;
+            label = Games.GameNames.Label(item.GameKey, item.DisplayName);
 
             var head = item.HeadVersionId is Guid headId
                 ? await db.SaveVersions.SingleAsync(v => v.Id == headId, ct)
@@ -213,7 +213,7 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
             await db.SaveChangesAsync(ct);
             if (tx is not null) await tx.CommitAsync(ct);
             evt = new SaveHeadChanged(userId, item.Id, keep.Id);
-            (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey);
+            (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, Games.GameNames.Label(item.GameKey, item.DisplayName));
         }
 
         await events.Raise(evt, ct);
@@ -326,7 +326,7 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
                 response = new RestoreResponse(item.Id, copy.Id);
                 evt = new SaveHeadChanged(userId, item.Id, copy.Id);
             }
-            (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, item.DisplayName ?? item.GameKey);
+            (emulatorId, gameKey, label) = (item.EmulatorId, item.GameKey, Games.GameNames.Label(item.GameKey, item.DisplayName));
 
             await db.SaveChangesAsync(ct);
             if (tx is not null) await tx.CommitAsync(ct);
@@ -355,7 +355,7 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
             var items = await db.SaveItems.Where(i => i.UserId == userId && i.EmulatorId == emulatorId && i.GameKey == gameKey)
                 .ToListAsync(ct);
             if (items.Count == 0) throw new ApiException(404, "not_found", "This game has no saves.");
-            label = items.Select(i => i.DisplayName).FirstOrDefault(n => !string.IsNullOrEmpty(n)) ?? gameKey;
+            label = Games.GameNames.Label(gameKey, items.Select(i => i.DisplayName).FirstOrDefault(n => !string.IsNullOrEmpty(n)));
             var ids = items.Select(i => i.Id).ToList();
             var pending = db.Deliveries.Where(d => d.Kind == DeliveryKind.Save && d.AckedUtc == null && ids.Contains(d.TargetId));
             devices = await pending.Select(d => d.DeviceId).Distinct().ToListAsync(ct);

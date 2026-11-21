@@ -66,7 +66,8 @@ public static class ServerSetup
         builder.Services.AddSingleton<Games.TitleNamesHolder>();
         builder.Services.AddSingleton<Games.GameNames>();
         builder.Services.AddSingleton<Games.TitleNamesBackfill>();
-        builder.Services.AddHttpClient(Games.TitleNamesRefresher.ClientName, c => c.Timeout = TimeSpan.FromMinutes(10));
+        builder.Services.AddHttpClient(Games.TitleNamesRefresher.ClientName, c => c.Timeout = TimeSpan.FromMinutes(10))
+            .RemoveAllLoggers(); // one Information line per list download is noise (F-28)
         builder.Services.AddHostedService<Games.TitleNamesRefresher>();
         builder.Services.AddSingleton<NotifyTriggers>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<NotifyTriggers>());

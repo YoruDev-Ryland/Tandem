@@ -285,7 +285,7 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
         deviceId is null ? "A device"
             : await db.Devices.AsNoTracking().Where(d => d.Id == deviceId).Select(d => d.Name).FirstOrDefaultAsync(ct) ?? "A device";
 
-    private static string Game(SaveItem item) => string.IsNullOrWhiteSpace(item.DisplayName) ? item.GameKey : item.DisplayName;
+    private static string Game(SaveItem item) => Games.GameNames.Label(item.GameKey, item.DisplayName);
 
     private static async Task<string> Subject(TandemDbContext db, Delivery delivery, CancellationToken ct)
     {
@@ -306,15 +306,5 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
     private static string Truncate(string s) => s.Length <= MaxDetail ? s : s[..MaxDetail] + "...";
 
     /// <summary>The emulator's display name (the id for an unknown one).</summary>
-    public static string Emulator(string id) => id switch
-    {
-        "eden" => "Eden",
-        "retroarch" => "RetroArch",
-        "azahar" => "Azahar",
-        "ppsspp" => "PPSSPP",
-        "vita3k" => "Vita3K",
-        "dolphin" => "Dolphin",
-        "melonds" => "melonDS",
-        _ => id,
-    };
+    public static string Emulator(string id) => Games.EmulatorNames.Display(id);
 }

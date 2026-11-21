@@ -117,10 +117,10 @@ public sealed class ConfigService(TandemDbContext db, BlobService blobs, ConfigT
         {
             var device = await DeviceNameAsync(deviceId, ct);
             if (response.Status == SaveUploadStatus.Accepted)
-                await activity.WriteAsync(userId, "config_uploaded", $"{device} uploaded the {emulatorId} config", deviceId, emulatorId,
+                await activity.WriteAsync(userId, "config_uploaded", $"{device} uploaded the {Games.EmulatorNames.Display(emulatorId)} config", deviceId, emulatorId,
                     data: new { bundleId = response.BundleId, versionId = response.VersionId });
             else
-                await activity.WriteAsync(userId, "conflict_opened", $"{device} uploaded the {emulatorId} config, which conflicts",
+                await activity.WriteAsync(userId, "conflict_opened", $"{device} uploaded the {Games.EmulatorNames.Display(emulatorId)} config, which conflicts",
                     deviceId, emulatorId, data: new { bundleId = response.BundleId, versionId = response.VersionId });
         }
         return response;
@@ -204,7 +204,7 @@ public sealed class ConfigService(TandemDbContext db, BlobService blobs, ConfigT
         if (response.Status == SaveUploadStatus.Accepted)
         {
             await events.Raise(new ConfigsChanged(userId), ct);
-            await activity.WriteAsync(userId, "config_uploaded", $"The {emulatorId} config file {path} was edited in the browser",
+            await activity.WriteAsync(userId, "config_uploaded", $"The {Games.EmulatorNames.Display(emulatorId)} config file {path} was edited in the browser",
                 null, emulatorId, data: new { bundleId, versionId = response.VersionId, path });
         }
         return response;
@@ -250,7 +250,7 @@ public sealed class ConfigService(TandemDbContext db, BlobService blobs, ConfigT
         }
 
         await events.Raise(new ConfigsChanged(userId), ct);
-        await activity.WriteAsync(userId, "conflict_resolved", $"Config conflict resolved for {emulatorId}", null, emulatorId,
+        await activity.WriteAsync(userId, "conflict_resolved", $"{Games.EmulatorNames.Display(emulatorId)} config conflict resolved", null, emulatorId,
             data: new { bundleId });
     }
 
@@ -282,7 +282,7 @@ public sealed class ConfigService(TandemDbContext db, BlobService blobs, ConfigT
 
         await events.Raise(new ConfigsChanged(userId), ct);
         var device = await DeviceNameAsync(request.SeedDeviceId, ct);
-        await activity.WriteAsync(userId, "group_changed", $"Created {request.EmulatorId} group {name} from {device}",
+        await activity.WriteAsync(userId, "group_changed", $"Created {Games.EmulatorNames.Display(request.EmulatorId)} group {name} from {device}",
             request.SeedDeviceId, request.EmulatorId, data: new { groupId = group.Id });
         return await GroupDtoAsync(group, ct);
     }
@@ -309,7 +309,7 @@ public sealed class ConfigService(TandemDbContext db, BlobService blobs, ConfigT
         {
             await events.Raise(new ConfigsChanged(userId), ct);
             var device = await DeviceNameAsync(request.DeviceId, ct);
-            await activity.WriteAsync(userId, "group_changed", $"{device} joined {group.EmulatorId} group {group.Name}",
+            await activity.WriteAsync(userId, "group_changed", $"{device} joined {Games.EmulatorNames.Display(group.EmulatorId)} group {group.Name}",
                 request.DeviceId, group.EmulatorId, data: new { groupId = group.Id });
         }
         return await GroupDtoAsync(group, ct);
@@ -348,7 +348,7 @@ public sealed class ConfigService(TandemDbContext db, BlobService blobs, ConfigT
 
         await events.Raise(new ConfigsChanged(userId), ct);
         var device = await DeviceNameAsync(deviceId, ct);
-        await activity.WriteAsync(userId, "group_changed", $"{device} left {group.EmulatorId} group {group.Name}", deviceId,
+        await activity.WriteAsync(userId, "group_changed", $"{device} left {Games.EmulatorNames.Display(group.EmulatorId)} group {group.Name}", deviceId,
             group.EmulatorId, data: new { groupId = group.Id });
     }
 
@@ -377,7 +377,7 @@ public sealed class ConfigService(TandemDbContext db, BlobService blobs, ConfigT
         }
 
         await events.Raise(new ConfigsChanged(userId), ct);
-        await activity.WriteAsync(userId, "group_changed", $"Deleted {group.EmulatorId} group {group.Name}", null, group.EmulatorId,
+        await activity.WriteAsync(userId, "group_changed", $"Deleted {Games.EmulatorNames.Display(group.EmulatorId)} group {group.Name}", null, group.EmulatorId,
             data: new { groupId = group.Id });
     }
 
@@ -473,7 +473,7 @@ public sealed class ConfigService(TandemDbContext db, BlobService blobs, ConfigT
             await events.Raise(new ConfigsChanged(userId), ct);
             var device = await DeviceNameAsync(targetId, ct);
             var how = request.Mode == ApplyMode.Linked ? "linked to" : "copied from";
-            await activity.WriteAsync(userId, "config_applied", $"{device}'s {emulatorId} config was {how} another config", targetId,
+            await activity.WriteAsync(userId, "config_applied", $"{device}'s {Games.EmulatorNames.Display(emulatorId)} config was {how} another config", targetId,
                 emulatorId, data: new { sourceVersionId = request.SourceVersionId, mode = request.Mode.ToString(), response.BundleId });
         }
         return response;
