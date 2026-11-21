@@ -37,6 +37,9 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
 {
     public static readonly TimeSpan BlobGrace = TimeSpan.FromHours(1);
     public static readonly TimeSpan ExpandedConfigKeep = TimeSpan.FromDays(7);
+    /// <summary>Acknowledged deliveries older than this go (the newest one per device and target always stays: the
+    /// setup checklist reads it).</summary>
+    public static readonly TimeSpan AckedDeliveryKeep = TimeSpan.FromDays(30);
     private const int Chunk = 500;
     private static readonly JsonSerializerOptions NotesJson = new(JsonSerializerDefaults.Web);
 
@@ -71,7 +74,44 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { logger.LogError(ex, "Pruning failed for user {UserId}", userId); }
         }
+        try { await PruneTablesAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { logger.LogError(ex, "Pruning old rows failed"); }
         return total;
+    }
+
+    public sealed record TablePruneResult(int Activity, int Deliveries, int Sessions);
+
+    /// <summary>Rows that only grow: activity older than <see cref="ServerOptions.ActivityRetentionDays"/> (0 keeps it),
+    /// acknowledged deliveries older than <see cref="AckedDeliveryKeep"/> that a newer delivery to the same device and
+    /// target has replaced, and expired web sessions.</summary>
+    public async Task<TablePruneResult> PruneTablesAsync(CancellationToken ct)
+    {
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+        var now = time.GetUtcNow();
+
+        var activity = 0;
+        if (options.Value.ActivityRetentionDays > 0)
+        {
+            var before = now - TimeSpan.FromDays(options.Value.ActivityRetentionDays);
+            activity = await db.ActivityEvents.Where(a => a.Utc < before).ExecuteDeleteAsync(ct);
+        }
+
+        var ackedBefore = now - AckedDeliveryKeep;
+        var deliveries = await db.Deliveries
+            .Where(d => d.AckedUtc != null && d.AckedUtc < ackedBefore
+                        && db.Deliveries.Any(n => n.DeviceId == d.DeviceId && n.TargetId == d.TargetId && n.Kind == d.Kind
+                                                  && n.CreatedUtc > d.CreatedUtc))
+            .ExecuteDeleteAsync(ct);
+
+        var lastUsedBefore = now - Auth.WebSessionCookie.Lifetime;
+        var sessions = await db.WebSessions.Where(s => s.LastUsedUtc < lastUsedBefore).ExecuteDeleteAsync(ct);
+
+        if (activity + deliveries + sessions > 0)
+            logger.LogInformation("Pruned {Activity} activity rows, {Deliveries} old deliveries and {Sessions} expired sessions",
+                activity, deliveries, sessions);
+        return new TablePruneResult(activity, deliveries, sessions);
     }
 
     public async Task<PruneResult> PruneUserAsync(Guid userId, CancellationToken ct)
@@ -105,11 +145,15 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
         string.Create(CultureInfo.InvariantCulture,
             $"Pruned {r.Versions} old version{(r.Versions == 1 ? "" : "s")}, freed {r.Bytes / (1024.0 * 1024.0):0.0} MB");
 
-    private sealed record Candidate(Guid Id, Guid OwnerId, int Seq, bool Flagged);
+    /// <param name="Aged">A save state older than the user's StateMaxAgeDays: doomed even within the newest N.</param>
+    private sealed record Candidate(Guid Id, Guid OwnerId, int Seq, bool Flagged, bool Aged = false);
 
     /// <summary>Deletes the versions no keep rule covers. Caller holds the user's lock.</summary>
-    private static async Task<int> PruneVersionsAsync(TandemDbContext db, Guid userId, RetentionSettingsDto settings, CancellationToken ct)
+    private async Task<int> PruneVersionsAsync(TandemDbContext db, Guid userId, RetentionSettingsDto settings, CancellationToken ct)
     {
+        var stateCutoff = settings.StateMaxAgeDays > 0 ? time.GetUtcNow() - TimeSpan.FromDays(settings.StateMaxAgeDays) : (DateTimeOffset?)null;
+        var stateItems = (await db.SaveItems.AsNoTracking().Where(i => i.UserId == userId && i.Kind == ItemKind.State).Select(i => i.Id)
+            .ToListAsync(ct)).ToHashSet();
         var saveItems = db.SaveItems.Where(i => i.UserId == userId);
         var bundles = db.ConfigBundles.Where(b => b.UserId == userId);
         var vaultItems = db.VaultItems.Where(i => i.UserId == userId);
@@ -127,9 +171,12 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
         protectedIds.UnionWith(await db.Deliveries.Where(d => devices.Contains(d.DeviceId) && d.AckedUtc == null && !d.Superseded)
             .Select(d => d.VersionId).ToListAsync(ct));
 
-        var saveDoomed = Doomed(await db.SaveVersions.AsNoTracking().Where(v => saveItems.Any(i => i.Id == v.ItemId))
-            .Select(v => new Candidate(v.Id, v.ItemId, v.Seq, v.Pinned || v.Variant != null || v.ConflictReason != null))
-            .ToListAsync(ct), settings.SaveVersions, protectedIds);
+        var saveDoomed = Doomed((await db.SaveVersions.AsNoTracking().Where(v => saveItems.Any(i => i.Id == v.ItemId))
+            .Select(v => new { v.Id, v.ItemId, v.Seq, Flagged = v.Pinned || v.Variant != null || v.ConflictReason != null, v.ReceivedUtc })
+            .ToListAsync(ct))
+            .Select(v => new Candidate(v.Id, v.ItemId, v.Seq, v.Flagged,
+                stateCutoff is { } cutoff && stateItems.Contains(v.ItemId) && v.ReceivedUtc < cutoff)).ToList(),
+            settings.SaveVersions, protectedIds);
         var configDoomed = Doomed(await db.ConfigVersions.AsNoTracking().Where(v => bundles.Any(b => b.Id == v.BundleId))
             .Select(v => new Candidate(v.Id, v.BundleId, v.Seq, v.Pinned || v.ConflictReason != null))
             .ToListAsync(ct), settings.ConfigVersions, protectedIds);
@@ -169,7 +216,7 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
     /// <summary>Per owner: everything past the newest <paramref name="keep"/> by Seq that is neither flagged nor protected.</summary>
     private static List<Guid> Doomed(List<Candidate> rows, int keep, HashSet<Guid> protectedIds) =>
         rows.GroupBy(r => r.OwnerId)
-            .SelectMany(g => g.OrderByDescending(r => r.Seq).Skip(Math.Max(1, keep)))
+            .SelectMany(g => g.OrderByDescending(r => r.Seq).Select((r, i) => (r, i)).Where(x => x.i >= Math.Max(1, keep) || x.r.Aged).Select(x => x.r))
             .Where(r => !r.Flagged && !protectedIds.Contains(r.Id))
             .Select(r => r.Id).ToList();
 
