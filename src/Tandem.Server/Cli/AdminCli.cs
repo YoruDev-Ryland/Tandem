@@ -29,7 +29,8 @@ public static class AdminCli
         new("list-users", "list-users", "List the accounts (email, role, active devices).", ListUsersAsync),
         new("create-user", "create-user <email> [--admin]", "Create an account with a generated password, which is printed.",
             CreateUserAsync),
-        new("reset-password", "reset-password <email>", "Set a new generated password for an account and print it.",
+        new("reset-password", "reset-password <email>", "Set a new generated password for an account, print it, and sign out its web sessions (devices stay paired; " +
+            "use revoke-device for those).",
             ResetPasswordAsync),
         new("revoke-device", "revoke-device <deviceId>", "Revoke a device: its key stops working.", RevokeDeviceAsync),
         new("restore-backup", "restore-backup <file> [--passphrase X]",
