@@ -37,8 +37,9 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
 {
     public static readonly TimeSpan BlobGrace = TimeSpan.FromHours(1);
     public static readonly TimeSpan ExpandedConfigKeep = TimeSpan.FromDays(7);
-    /// <summary>Acknowledged deliveries older than this go (the newest one per device and target always stays: the
-    /// setup checklist reads it).</summary>
+    /// <summary>Acknowledged deliveries older than this go once a newer delivery for the same device and target was
+    /// acknowledged with the same result (the newest one per device, target and result always stays: the setup
+    /// checklist reads it).</summary>
     public static readonly TimeSpan AckedDeliveryKeep = TimeSpan.FromDays(30);
     private const int Chunk = 500;
     private static readonly JsonSerializerOptions NotesJson = new(JsonSerializerDefaults.Web);
@@ -101,7 +102,10 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
         var ackedBefore = now - AckedDeliveryKeep;
         var deliveries = await db.Deliveries
             .Where(d => d.AckedUtc != null && d.AckedUtc < ackedBefore
+                        // Only once a newer delivery was acked the same way: a pending, failed or superseded one never
+                        // replaces the last success the setup checklist reads (PlaceVault, GrantFolders).
                         && db.Deliveries.Any(n => n.DeviceId == d.DeviceId && n.TargetId == d.TargetId && n.Kind == d.Kind
+                                                  && n.AckedUtc != null && n.Result == d.Result && n.Superseded == d.Superseded
                                                   && n.CreatedUtc > d.CreatedUtc))
             .ExecuteDeleteAsync(ct);
 

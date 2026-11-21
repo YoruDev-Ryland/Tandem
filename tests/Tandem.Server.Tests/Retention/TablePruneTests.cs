@@ -55,6 +55,34 @@ public class TablePruneTests
     }
 
     [Fact]
+    public async Task The_newest_applied_ack_stays_while_a_newer_delivery_is_pending_or_failed()
+    {
+        using var f = new ServerFactory();
+        var (a, _) = await f.Register("a@example.com", deviceName: "Thor");
+        var (b, _) = await f.PairSecondDevice(a, "Odin");
+        await b.Install("g");
+        var v1 = await a.UploadSave("g", "one", null);
+        var first = Assert.Single(await b.PendingDeliveries());
+        await b.AckApplied(first.Id);
+
+        f.Time.Advance(TimeSpan.FromDays(40));
+        var v2 = await a.UploadSave("g", "two", v1.VersionId);
+        var pending = Assert.Single(await b.PendingDeliveries());
+        Assert.Equal(0, (await PruneTables(f)).Deliveries); // the newer one is still pending: the applied ack stays
+
+        (await b.PostJsonAsync($"/v1/deliveries/{pending.Id}/ack", new AckRequest(DeliveryResult.Failed, "untracked file")))
+            .EnsureSuccessStatusCode();
+        Assert.Equal(0, (await PruneTables(f)).Deliveries); // a failure does not replace the last success either
+        Assert.Contains(first.Id, await InDb(f, db => db.Deliveries.Select(d => d.Id).ToListAsync()));
+
+        f.Time.Advance(Tandem.Server.Deliveries.DeliveryService.FailedBackoff + TimeSpan.FromMinutes(1));
+        await a.UploadSave("g", "three", v2.VersionId);
+        await b.AckApplied(Assert.Single(await b.PendingDeliveries()).Id);
+        Assert.Equal(1, (await PruneTables(f)).Deliveries); // a newer success does
+        Assert.DoesNotContain(first.Id, await InDb(f, db => db.Deliveries.Select(d => d.Id).ToListAsync()));
+    }
+
+    [Fact]
     public async Task The_state_age_rule_drops_old_states_but_never_the_head_or_saves()
     {
         using var f = new ServerFactory();
