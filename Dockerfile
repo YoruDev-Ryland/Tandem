@@ -22,12 +22,15 @@ COPY web/ ./
 RUN npm run build
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+LABEL org.opencontainers.image.title="Tandem" \
+      org.opencontainers.image.description="Self-hosted server that syncs emulator saves, states and configs between Android handhelds." \
+      org.opencontainers.image.licenses="NOASSERTION"
 WORKDIR /app
 COPY --from=build /out/ ./
 # The server serves WEB_ROOT, which defaults to wwwroot beside the app.
 COPY --from=web /web/dist/ ./wwwroot/
 COPY docker/entrypoint.sh docker/admin-command.sh /app/docker/
-# curl for the healthcheck (the base image has none); setpriv, used to drop privileges, ships with util-linux.
+# curl for the healthcheck: the base image has none and the server has no healthcheck subcommand yet; setpriv, used to drop privileges, ships with util-linux.
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* \
     && chmod +x /app/docker/*.sh \
     && for c in list-users create-user reset-password revoke-device restore-backup; do \

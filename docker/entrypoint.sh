@@ -7,6 +7,12 @@ PGID="${PGID:-1654}"
 DATA_DIR="${DATA_DIR:-/data}"
 export DATA_DIR
 
+# Running the server as root is almost never wanted; require an explicit opt-in.
+if { [ "$PUID" = "0" ] || [ "$PGID" = "0" ]; } && [ "${ALLOW_ROOT:-}" != "true" ]; then
+    echo "error: PUID/PGID 0 would run the server as root. Set ALLOW_ROOT=true if you really want that." >&2
+    exit 1
+fi
+
 mkdir -p "$DATA_DIR"
 if [ "$(id -u)" = "0" ]; then
     # Only chown when needed: it is slow on a large library, and impossible on some network mounts.
