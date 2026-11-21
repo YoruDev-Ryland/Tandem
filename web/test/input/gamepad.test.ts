@@ -35,6 +35,13 @@ describe("gamepadToActions", () => {
 
 describe("gamepad loop", () => {
   let pad: boolean[];
+  /** No pad is reported until a test plugs one in. */
+  let plugged: boolean;
+  let mapping: string;
+  const plug = () => {
+    plugged = true;
+    window.dispatchEvent(new Event("gamepadconnected"));
+  };
   let stop: () => void;
   const got: Action[] = [];
   let off: () => void;
@@ -42,10 +49,12 @@ describe("gamepad loop", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     pad = none;
+    plugged = false;
+    mapping = "standard";
     got.length = 0;
     Object.defineProperty(navigator, "getGamepads", {
       configurable: true,
-      value: () => [{ connected: true, buttons: pad.map((pressed) => ({ pressed })) }],
+      value: () => (plugged ? [{ connected: true, mapping, buttons: pad.map((pressed) => ({ pressed })) }] : []),
     });
     off = onAction((a) => { got.push(a); return true; });
     stop = installGamepad();
@@ -60,7 +69,7 @@ describe("gamepad loop", () => {
     expect(raf).not.toHaveBeenCalled();
 
     pad = none;
-    window.dispatchEvent(new Event("gamepadconnected"));
+    plug();
     expect(gamepad.connected).toBe(true);
     vi.advanceTimersByTime(50);
     pad = down(0);
@@ -77,14 +86,14 @@ describe("gamepad loop", () => {
   });
 
   it("keeps polling while another pad is still connected", () => {
-    const pads: ({ connected: boolean; buttons: { pressed: boolean }[] } | null)[] = [
-      { connected: true, buttons: none.map((pressed) => ({ pressed })) },
-      { connected: true, buttons: none.map((pressed) => ({ pressed })) },
+    const pads: ({ connected: boolean; mapping: string; buttons: { pressed: boolean }[] } | null)[] = [
+      { connected: true, mapping: "standard", buttons: none.map((pressed) => ({ pressed })) },
+      { connected: true, mapping: "standard", buttons: none.map((pressed) => ({ pressed })) },
     ];
     Object.defineProperty(navigator, "getGamepads", { configurable: true, value: () => pads });
     const gone = (index: number) => Object.assign(new Event("gamepaddisconnected"), { gamepad: { index } });
 
-    window.dispatchEvent(new Event("gamepadconnected"));
+    plug();
     vi.advanceTimersByTime(50);
 
     pads[0] = null;
@@ -99,8 +108,32 @@ describe("gamepad loop", () => {
     expect(gamepad.connected).toBe(false);
   });
 
+  it("ignores a pad without the standard mapping", () => {
+    mapping = "";
+    plug();
+    expect(gamepad.connected).toBe(false);
+    pad = down(0);
+    vi.advanceTimersByTime(100);
+    expect(got).toEqual([]);
+  });
+
+  it("picks up a pad that was already connected when the page loaded", () => {
+    stop();
+    plugged = true;
+    pad = down(0); // held at load: not a press
+    stop = installGamepad();
+    expect(gamepad.connected).toBe(true);
+    vi.advanceTimersByTime(50);
+    expect(got).toEqual([]);
+    pad = none;
+    vi.advanceTimersByTime(50);
+    pad = down(1);
+    vi.advanceTimersByTime(50);
+    expect(got).toEqual(["b"]);
+  });
+
   it("repeats a held D-pad in real loop time", () => {
-    window.dispatchEvent(new Event("gamepadconnected"));
+    plug();
     vi.advanceTimersByTime(50);
     pad = down(15);
     vi.advanceTimersByTime(1000);

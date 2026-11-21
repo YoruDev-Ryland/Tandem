@@ -30,10 +30,25 @@ describe("systemLabel", () => {
     expect(systemLabel("dolphin", "gc/x")).toBe("GC");
     expect(systemLabel("dolphin", "wii/x")).toBe("WII");
   });
-  it("falls back to the emulator name", () => {
-    expect(systemLabel("retroarch", "mystery/x")).toBe("RetroArch");
-    expect(systemLabel("dolphin", "x")).toBe("Dolphin");
-    expect(systemLabel("other", "x")).toBe("other");
+  it("derives Dolphin's system from the game id: 6 characters or G/D is GameCube, 4 characters or R/S is Wii", () => {
+    expect(systemLabel("dolphin", "GZLE01")).toBe("GC");
+    expect(systemLabel("dolphin", "GALE01")).toBe("GC");
+    expect(systemLabel("dolphin", "RMCE")).toBe("WII");
+    expect(systemLabel("dolphin", "SB4E")).toBe("WII");
+    expect(systemLabel("dolphin", "Gx")).toBe("GC");
+    expect(systemLabel("dolphin", "Rx")).toBe("WII");
+  });
+  it("derives RetroArch's system from the save's core when the key has no system", () => {
+    expect(systemLabel("retroarch", "retroarch/Pokemon - Emerald Version", "mGBA")).toBe("GBA");
+    expect(systemLabel("retroarch", "retroarch/Pokemon Crystal", "gambatte_libretro")).toBe("GBC");
+    expect(systemLabel("retroarch", "retroarch/Super Metroid", "snes9x")).toBe("SNES");
+    expect(systemLabel("retroarch", "retroarch/x", "Mupen64Plus-Next")).toBe("N64");
+  });
+  it("never falls back to the emulator's name", () => {
+    expect(systemLabel("retroarch", "mystery/x")).toBeNull();
+    expect(systemLabel("retroarch", "retroarch/Pokemon - Emerald Version")).toBeNull();
+    expect(systemLabel("dolphin", "x")).toBeNull();
+    expect(systemLabel("other", "x")).toBeNull();
   });
 });
 

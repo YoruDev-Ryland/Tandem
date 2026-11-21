@@ -8,7 +8,8 @@
     rows: T[];
     /** CSS grid-template-columns shared by the header and every row. */
     columns: string;
-    header?: string[];
+    /** Column headers; a snippet draws a header cell of its own (the device names over the presence matrix). */
+    header?: (string | Snippet)[];
     /** Header cells to right-align, by column index, to sit over `.end` cells. */
     headerEnd?: number[];
     onOpen: (row: T) => void;
@@ -130,7 +131,7 @@
 <div class="list" style:--list-min={minWidth} style:--cols={columns} style:--cols-phone={phoneColumns ?? columns} bind:this={list}>
   {#if header}
     <div class="head {size}" aria-hidden="true">
-      {#each header as h, i (i)}<span class:end={headerEnd.includes(i)} class:sm-hide={phoneHide.includes(i)}>{h}</span>{/each}
+      {#each header as h, i (i)}<span class:end={headerEnd.includes(i)} class:sm-hide={phoneHide.includes(i)}>{#if typeof h === "string"}{h}{:else}{@render h()}{/if}</span>{/each}
     </div>
   {/if}
   {#each rows as r, i (key(r, i))}

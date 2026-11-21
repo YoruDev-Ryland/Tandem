@@ -2,17 +2,25 @@
   import { dispatch, type Action } from "../input/actions";
   import { gamepad } from "../input/gamepad.svelte";
   import Glyph from "./Glyph.svelte";
+  import { flash } from "./flash.svelte";
 
   let { status, hints }: { status?: string; hints: { glyph: Action; label: string }[] } = $props();
 
-  // Keyboard equivalents shown when no gamepad is connected. X and Y have none: the page's buttons carry them.
-  const KEYS: Partial<Record<Action, string>> = { a: "Enter", b: "Esc", l1: "[", r1: "]", l2: "{", r2: "}" };
+  // Keyboard equivalents shown when no gamepad is connected.
+  const KEYS: Partial<Record<Action, string>> = { a: "Enter", b: "Esc", x: "X", y: "Y", l1: "[", r1: "]", l2: "{", r2: "}" };
 
   const shown = $derived(gamepad.connected ? hints : hints.filter((h) => KEYS[h.glyph]));
 </script>
 
 <footer>
-  {#if status}<span class="status">{status}</span>{/if}
+  {#if flash.text}
+    {#key flash.seq}
+      <span class="status done" role="status">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5 5.5 11 12 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" pathLength="1" /></svg>
+        {flash.text}
+      </span>
+    {/key}
+  {:else if status}<span class="status">{status}</span>{/if}
   <div class="hints">
     {#each shown as h (h.glyph)}
       <button type="button" onclick={() => dispatch(h.glyph)}>
@@ -24,7 +32,12 @@
 </footer>
 
 <style>
+  /* Sticky: on a long list the hints and the status line stay in view. */
   footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    background: var(--bg);
     flex: none;
     display: flex;
     align-items: center;
@@ -41,6 +54,25 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--ink3);
+  }
+  .done {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink);
+  }
+  .done svg {
+    flex: none;
+  }
+  .done path {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 0;
+    animation: stroke 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  }
+  @keyframes stroke {
+    from {
+      stroke-dashoffset: 1;
+    }
   }
   .hints {
     display: flex;
@@ -75,6 +107,7 @@
   }
   @media (max-width: 640px) {
     footer {
+      position: static;
       padding: 0 16px;
     }
     .hints {

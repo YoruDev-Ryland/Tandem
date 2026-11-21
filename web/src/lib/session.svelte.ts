@@ -47,6 +47,12 @@ export const session = {
     returnTo = null;
     router.go(to);
   },
+  /** The account is gone (deleted, with the server clearing the cookie): forget it and go to sign-in. */
+  forget(): void {
+    account = null;
+    returnTo = null;
+    router.go("/sign-in");
+  },
   async signOut(): Promise<void> {
     try {
       await endpoints.signOut();

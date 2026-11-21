@@ -61,5 +61,41 @@ h2 {
 @media (max-width: 640px) {
   :root {
     --gutter: 16px;
+    --presence-col: 36px;
   }
+}
+
+/* A live update: the changed cell lights up and settles back to its own ink (colour only; see flash.svelte.ts). */
+.pulse {
+  animation: pulse 900ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes pulse {
+  from {
+    color: var(--ink);
+  }
+}
+
+/* The page title: 48 px, the count beside it in mono on the baseline. */
+.page-title {
+  margin: 0 0 18px;
+  font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.page-title .count {
+  margin-left: 14px;
+  font: 400 13px "JetBrains Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--ink3);
+}
+/* The one numeric display style: hero counts (Setup's "12 of 13", Home, Device). */
+.numeral {
+  font: 600 36px/1 "Barlow Semi Condensed", sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+/* Relative times: one face everywhere, Barlow with tabular numbers. */
+.when {
+  font-variant-numeric: tabular-nums;
 }

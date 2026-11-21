@@ -4,6 +4,8 @@ const KEYS: Record<string, Action> = {
   ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
   Enter: "a", Escape: "b",
   "[": "l1", "]": "r1", "{": "l2", "}": "r2",
+  // The two secondary actions, so the X and Y hints work from a keyboard too (never while typing in a field).
+  x: "x", X: "x", y: "y", Y: "y",
 };
 
 function isTextTarget(t: EventTarget | null): boolean {

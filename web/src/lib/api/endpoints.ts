@@ -17,6 +17,8 @@ export const signIn = (req: T.WebSessionRequest) => api<T.AccountInfo>("POST", "
 export const signOut = () => api<void>("DELETE", "/v1/web/session");
 export const getAccount = () => api<T.AccountInfo>("GET", "/v1/account");
 export const changePassword = (req: T.ChangePasswordRequest) => api<void>("POST", "/v1/account/password", req);
+/** 204 and the session cookie cleared; 403 bad_password; 409 last_admin. */
+export const deleteAccount = (password: string) => api<void>("DELETE", "/v1/account", { password } satisfies T.DeleteAccountRequest);
 
 // ---- Home, games, conflicts ----
 export const getHome = () => api<T.HomeResponse>("GET", "/v1/web/home");
@@ -24,6 +26,8 @@ export const getGames = (q?: string, emulator?: string) =>
   api<T.GameRow[]>("GET", `/v1/web/games${query({ q, emulator })}`);
 export const getGame = (emu: string, key: string) =>
   api<T.GameDetail>("GET", `/v1/web/games/${enc(emu)}/${encodeKey(key)}`);
+/** Deletes the game's saves and states from the server (404 not_found when there are none). */
+export const deleteGame = (emu: string, key: string) => api<void>("DELETE", `/v1/web/games/${enc(emu)}/${encodeKey(key)}`);
 export const getConflicts = () => api<T.ConflictRow[]>("GET", "/v1/web/conflicts");
 export const resolveConflict = (itemId: string, req: T.ResolveConflictRequest) =>
   api<void>("POST", `/v1/conflicts/${enc(itemId)}/resolve`, req);
@@ -97,6 +101,8 @@ export const testNotifications = () => api<T.NotifyTestResult[]>("POST", "/v1/se
 export const getUsers = () => api<T.UserInfo[]>("GET", "/v1/admin/users");
 export const createUser = (req: T.CreateUserRequest) => api<T.CreatedUserResponse>("POST", "/v1/admin/users", req);
 export const deleteUser = (id: string) => api<void>("DELETE", `/v1/admin/users/${enc(id)}`);
+/** A new generated password, shown once; the user's web sessions are signed out. */
+export const resetUserPassword = (id: string) => api<T.ResetPasswordResponse>("POST", `/v1/admin/users/${enc(id)}/reset-password`);
 export const getAdminSettings = () => api<T.AdminSettings>("GET", "/v1/admin/settings");
 export const putAdminSettings = (req: T.AdminSettings) => api<T.AdminSettings>("PUT", "/v1/admin/settings", req);
 export const getBackup = () => api<T.BackupSettingsResponse>("GET", "/v1/admin/backup");

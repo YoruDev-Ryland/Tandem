@@ -75,7 +75,7 @@ export const noHead = game({
 
 export const games: GameRow[] = [notInstalled, waiting, conflict, longName, fourDevices, noHead];
 
-export function home(firstSyncReviews = 0): HomeResponse {
+export function home(firstSyncReviews = 0, over: Partial<HomeResponse["attention"]> = {}): HomeResponse {
   return {
     continue: [],
     recent: [],
@@ -83,6 +83,6 @@ export function home(firstSyncReviews = 0): HomeResponse {
       { id: ODIN, name: "Odin 3", platform: "android", lastSeenUtc: new Date(Date.now() - 2 * 60_000).toISOString(), shizukuOk: true, isCurrent: false, runningEmulators: [] },
       { id: THOR, name: "Thor", platform: "android", lastSeenUtc: new Date(Date.now() - 3_600_000).toISOString(), shizukuOk: true, isCurrent: false, runningEmulators: ["eden"] },
     ],
-    attention: { openConflicts: 1, firstSyncReviews, shizukuOffDevices: [], failedDeliveries24h: 0, configConflicts: 0 },
+    attention: { openConflicts: 1, firstSyncReviews, shizukuOffDevices: [], failedDeliveries24h: 0, configConflicts: 0, diskLow: false, backupNotConfigured: false, silentDevices: [], ...over },
   };
 }
