@@ -183,7 +183,7 @@
     padding: 16px var(--gutter) 32px;
   }
   .hero {
-    max-width: 22ch;
+    max-width: 34ch;
     margin: 0;
     font: 600 46px/1.05 "Barlow Semi Condensed", sans-serif;
     letter-spacing: -0.02em;
