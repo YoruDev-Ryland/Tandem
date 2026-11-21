@@ -15,6 +15,7 @@
   import Field from "../lib/ui/Field.svelte";
   import Glyph from "../lib/ui/Glyph.svelte";
   import HintBar from "../lib/ui/HintBar.svelte";
+  import { flash } from "../lib/ui/flash.svelte";
 
   const { emu, key } = router.params as { emu: string; key: string };
   const back = gamePath(emu, key);
@@ -57,12 +58,13 @@
   let busy = $state(false);
   let failure = $state<unknown>(undefined);
 
-  async function send(itemId: string, req: Parameters<typeof resolveConflict>[1]) {
+  async function send(itemId: string, req: Parameters<typeof resolveConflict>[1], done: string) {
     if (busy) return;
     busy = true;
     failure = undefined;
     try {
       await resolveConflict(itemId, req);
+      flash.say(done);
       conflicts.reload();
       router.go(back);
     } catch (e) {
@@ -72,7 +74,8 @@
     }
   }
 
-  const keep = (r: ConflictRow, s: ConflictSide) => send(r.itemId, { choice: "KeepVersion", keepVersionId: s.versionId, variantName: null });
+  const keep = (r: ConflictRow, s: ConflictSide) =>
+    send(r.itemId, { choice: "KeepVersion", keepVersionId: s.versionId, variantName: null }, `Kept ${name(s)}'s save · every device gets it`);
 
   /** Chosen when the dialog opens; a live reload must not change what Keep both acts on. */
   let target = $state<{ itemId: string; versionId: string; keepName: string; others: string; variantName: string | null } | undefined>();
@@ -91,7 +94,7 @@
     const t = target;
     if (!t) return;
     confirming = false;
-    void send(t.itemId, { choice: "KeepBoth", keepVersionId: t.versionId, variantName: t.variantName });
+    void send(t.itemId, { choice: "KeepBoth", keepVersionId: t.versionId, variantName: t.variantName }, `Kept ${t.keepName}'s save · the other is kept as a named copy`);
   }
 
   let page: HTMLElement | undefined = $state();
@@ -171,7 +174,7 @@
                 />
                 <div class="actions">
                   <span class="cursor" class:on>
-                    <Button variant={on ? "primary" : "secondary"} glyph="a" disabled={busy} onclick={() => keep(r, s)}>Keep {name(s)}'s</Button>
+                    <Button variant={on ? "primary" : "secondary"} glyph={on ? "a" : undefined} disabled={busy} onclick={() => keep(r, s)}>Keep {name(s)}'s</Button>
                   </span>
                   <a class="dl" href={downloadUrl(s.versionId)} download>Download</a>
                 </div>
@@ -253,8 +256,8 @@
   }
   h1 {
     margin: 0 0 8px;
-    font: 600 40px/1 "Barlow Semi Condensed", sans-serif;
-    letter-spacing: -0.01em;
+    font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
+    letter-spacing: -0.02em;
     color: var(--ink);
   }
   h1.fault {

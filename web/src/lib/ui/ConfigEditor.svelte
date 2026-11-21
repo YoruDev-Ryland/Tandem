@@ -1,7 +1,7 @@
 <script lang="ts">
   import { editConfigFile, getConfigFileBytes } from "../api/endpoints";
   import { ApiError } from "../api/http";
-  import { decodeConfig, encodeConfig, type EditableText } from "../configText";
+  import { decodeConfig, encodeConfig, NotText, type EditableText } from "../configText";
   import { nameList } from "../deviceStates";
   import Button from "./Button.svelte";
   import Dialog from "./Dialog.svelte";
@@ -63,9 +63,14 @@
     loadError = undefined;
     getConfigFileBytes(baseVersionId, p, device.id).then(
       (bytes) => {
-        const file = decodeConfig(bytes);
-        original[p] = file;
-        text[p] = file.text;
+        try {
+          const file = decodeConfig(bytes);
+          original[p] = file;
+          text[p] = file.text;
+        } catch (e) {
+          // Refuse to edit: what the textarea showed would not be the file's bytes.
+          if (shown === p) loadError = e;
+        }
       },
       (e: unknown) => {
         if (shown === p) loadError = e;
@@ -113,7 +118,7 @@
     {/if}
     <p class="note">Folder paths are shown as they are on {device.name}.</p>
     {#if loadError}
-      <p class="fault" role="alert">{describeConfigError(loadError)}</p>
+      <p class="fault" role="alert">{loadError instanceof NotText ? loadError.message : describeConfigError(loadError)}</p>
     {:else if !(shown in text)}
       <p class="loading" aria-busy="true">— — —</p>
     {:else}

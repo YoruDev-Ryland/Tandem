@@ -88,18 +88,38 @@ describe("Game", () => {
     await waitFor(() => expect(screen.getAllByText(/^v[12]$/)).toHaveLength(4));
   });
 
-  it("lists only installed devices in Restore, and restores to the chosen one", async () => {
+  it("restores for every device: no device picker, the honest copy, and an installed device for the record", async () => {
     const calls = serve();
     render(Game);
     await screen.findByRole("heading", { name: "v4 from Odin 3" });
-    await fireEvent.click(screen.getByRole("button", { name: /Restore to/ }));
-    const select = (await screen.findByLabelText("Restore to")) as HTMLSelectElement;
-    expect([...select.options].map((o) => o.text)).toEqual(["Odin 3", "Thor"]);
-    expect(screen.getByText(/Odin 3's current save is kept as a new version first\. If melonDS is open there, it waits until it closes\./)).toBeTruthy();
-    await fireEvent.change(select, { target: { value: "d-thor" } });
-    await fireEvent.click(screen.getByRole("button", { name: "Restore" }));
-    expect(await screen.findByText("Sent to Thor. It goes in when melonDS is closed there.")).toBeTruthy();
-    expect(calls).toContainEqual({ method: "POST", url: "/v1/saves/item-save/versions/v4/restore", body: { deviceId: "d-thor" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Restore this version" }));
+    expect(await screen.findByRole("heading", { name: "Restore v4 — every device gets it" })).toBeTruthy();
+    expect(screen.queryByLabelText("Restore to")).toBeNull();
+    expect(screen.queryByText(/Restore to/)).toBeNull();
+    expect(screen.getByText("v4 becomes the current save again, and every device that has this game gets it.")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Restore v4" }));
+    expect(await screen.findByText(/^v4 is the current save again\. Every device with the game gets it/)).toBeTruthy();
+    expect(calls).toContainEqual({ method: "POST", url: "/v1/saves/item-save/versions/v4/restore", body: { deviceId: "d-odin" } });
+  });
+
+  it("deletes the game's saves from the server after a confirm that says devices upload them again", async () => {
+    const calls = serve();
+    render(Game);
+    await screen.findByRole("heading", { name: "v4 from Odin 3" });
+    await fireEvent.click(screen.getByRole("button", { name: "Delete from server…" }));
+    await screen.findByRole("heading", { name: "Delete these saves from the server?" });
+    expect(screen.getByText("Files on the devices are not touched. A device that still has them uploads them again as a new save.")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Delete from server" }));
+    await waitFor(() => expect(router.path).toBe("/games"));
+    expect(calls).toContainEqual({ method: "DELETE", url: "/v1/web/games/melonds/nds/platinum", body: undefined });
+  });
+
+  it("shows the uploading device's emulator version quietly in mono", async () => {
+    serve(undefined, (d) => { d.items[0]!.versions[0]!.emulatorVersion = "0.9.1"; });
+    render(Game);
+    await screen.findByRole("heading", { name: "v4 from Odin 3" });
+    const ver = screen.getAllByText("0.9.1");
+    expect(ver.some((e) => e.classList.contains("mono") && e.classList.contains("ink3"))).toBe(true);
   });
 
   it("pins a version and flips the label to Unpin once the list reloads", async () => {
@@ -226,8 +246,8 @@ describe("Game", () => {
     const calls = serve(undefined, undefined);
     render(Game);
     await screen.findByRole("heading", { name: "v4 from Odin 3" });
-    await fireEvent.click(screen.getByRole("button", { name: /Restore to/ }));
-    await screen.findByLabelText("Restore to");
+    await fireEvent.click(screen.getByRole("button", { name: "Restore this version" }));
+    await screen.findByRole("heading", { name: "Restore v4 — every device gets it" });
     // A newer version lands on the server and the page reloads behind the open dialog.
     const next = structuredClone(platinum);
     next.items[0]!.versions.unshift({ ...next.items[0]!.versions[0]!, id: "v5", seq: 5 });
@@ -238,8 +258,8 @@ describe("Game", () => {
     });
     emit("saves");
     await screen.findByText("v5");
-    await fireEvent.click(screen.getByRole("button", { name: "Restore" }));
-    await screen.findByText(/^Sent to /);
+    await fireEvent.click(screen.getByRole("button", { name: "Restore v4" }));
+    await screen.findByText(/^v4 is the current save again/);
     expect(calls.at(-1)!.url).toBe("/v1/saves/item-save/versions/v4/restore");
   });
 

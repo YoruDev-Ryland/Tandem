@@ -20,6 +20,8 @@
   import List from "../lib/ui/List.svelte";
   import Tabs from "../lib/ui/Tabs.svelte";
   import { describeConfigError } from "../lib/ui/errors";
+  import { flash } from "../lib/ui/flash.svelte";
+  import { configConflictPath } from "../lib/attention";
 
   const configs = resource(getConfigs, ["configs"]);
   // The overview names groups; their bundle (for history and edits) comes from the group list.
@@ -248,9 +250,14 @@
     pane = "left";
   }
 
+  function openConflict(b: Bundle | undefined) {
+    if (b?.bundleId) router.go(configConflictPath(emu, b.bundleId));
+  }
+
   function activate(l: Line) {
     if (l.kind === "bundle") {
-      if (l.b.key === selected?.key) openGroup(l.b);
+      if (l.b.key === selected?.key && l.b.openConflict && l.b.bundleId) openConflict(l.b);
+      else if (l.b.key === selected?.key) openGroup(l.b);
       else choose(l.b);
     } else {
       toId = l.v.id;
@@ -312,6 +319,7 @@
     message = mode === "Linked"
       ? `${name} now follows ${t?.groupName ?? "the new group"}. ${waits}`
       : `Copied ${t?.label ?? "it"} to ${name}. ${waits}`;
+    flash.say(mode === "Linked" ? `Applied · ${name} now follows ${t?.groupName ?? "the group"}` : `Applied ${t?.label ?? "it"} to ${name}`);
     reloadAll();
   }
 
@@ -401,7 +409,7 @@
   );
 
   const aLabel = $derived(
-    pane === "diff" ? undefined : focus?.kind === "version" ? "Compare" : focus && focus.b.key === selected?.key ? (focus.b.kind === "group" ? "Change group" : "Make a group") : "Show history",
+    pane === "diff" ? undefined : focus?.kind === "version" ? "Compare" : focus && focus.b.key === selected?.key ? (focus.b.openConflict ? "Choose a version" : focus.b.kind === "group" ? "Change group" : "Make a group") : "Show history",
   );
   const hints = $derived([
     ...(aLabel ? [{ glyph: "a" as const, label: aLabel }] : []),
@@ -443,7 +451,7 @@
                 <span class="bundle">
                   <span class="name" class:fault={b.openConflict}>{b.name}</span>
                   {#if b.openConflict}
-                    <span class="fault">Two versions — choose</span>
+                    <span class="fault strong">Two versions — choose</span>
                   {:else if b.kind === "group"}
                     <span class="ink2">{nameList(b.members.map((m) => m.name))}</span>
                     <span class="ink3">Folder paths stay per device.</span>
@@ -465,6 +473,12 @@
           {#if !to}
             {#if !versionsError}<p class="loading" aria-busy="true">— — —</p>{/if}
           {:else}
+            {#if selected?.openConflict}
+              <div class="conflict">
+                <p><span class="strong">{selected.name} has two versions of this config.</span> Changes, edits and applies are on hold until you keep one.</p>
+                <Button variant="primary" glyph="a" onclick={() => openConflict(selected)} disabled={!selected.bundleId}>Choose a version</Button>
+              </div>
+            {/if}
             <div class="head">
               <h2>
                 {request && "from" in request && request.from ? `${request.from} → ${label(to)}` : label(to)}
@@ -525,6 +539,7 @@
       {...editTarget}
       onsaved={() => {
         message = `Saved. It goes to ${editTarget?.appliesTo ?? "the device"}; ${editTarget?.emulatorName ?? emuName} must be closed there, until then it waits.`;
+        flash.say(`Saved ${editTarget?.label ?? "the edit"} · it goes to ${editTarget?.appliesTo ?? "the device"}`);
         resetCompare();
         reloadAll();
       }}
@@ -664,6 +679,24 @@
   }
   .nested {
     padding-left: 12px;
+  }
+  .conflict {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 24px;
+    margin: 0 0 24px;
+    padding: 0 0 20px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .conflict p {
+    flex: 1 1 320px;
+    margin: 0;
+    color: var(--fault);
+    font-size: 15px;
+  }
+  .strong {
+    font-weight: 600;
   }
   .note {
     margin: 16px 0 0;
