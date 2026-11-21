@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { getDevice, renameDevice, revokeDevice } from "../lib/api/endpoints";
+  import { getDevice, getGames, renameDevice, revokeDevice } from "../lib/api/endpoints";
+  import { deviceSaveCounts } from "../lib/deviceStates";
+  import { waitingDevices } from "../lib/state/waiting";
+  import Segments from "../lib/ui/Segments.svelte";
+  import { configConflictPath } from "../lib/attention";
   import { resource } from "../lib/api/resource.svelte";
   import { deviceStatus } from "../lib/deviceStatus";
   import { emulatorName } from "../lib/emulators";
@@ -17,18 +21,17 @@
   const { id } = router.params as { id: string };
   const device = resource(() => getDevice(id), ["devices", "configs", "saves"]);
 
+  const games = resource(() => getGames(), ["saves", "conflicts", "devices"]);
   const summary = $derived(device.data?.summary);
   const name = $derived(summary?.name ?? "Device");
-  const status = $derived(summary ? deviceStatus(summary, Date.now()) : undefined);
+  const status = $derived(summary ? deviceStatus(summary, Date.now(), waitingDevices(games.data ?? [])) : undefined);
+  const counts = $derived(games.data ? deviceSaveCounts(games.data, id) : undefined);
 
   const facts = $derived.by<[string, string][]>(() => {
     const d = device.data;
     if (!d) return [];
     return [
-      ["Platform", d.summary.platform],
       ["Last seen", d.summary.lastSeenUtc ? formatWhen(d.summary.lastSeenUtc) : "never"],
-      ["Storage used", formatSize(d.storageBytes)],
-      ["Pending changes", String(d.pendingDeliveries)],
     ];
   });
 
@@ -111,7 +114,24 @@
       <p class="loading" aria-busy="true">— — —</p>
     {:else}
       <h1>{name}</h1>
-      {#if status}<p class="sub"><span class={status.tone}>{status.text}</span></p>{/if}
+      {#if status}<p class="sub"><span class="plat">{device.data.summary.platform}</span><span class={status.tone}>{status.text}</span></p>{/if}
+
+      <div class="hero">
+        {#if counts && counts.total > 0}
+          <p class="readout">
+            <span class="numeral">{counts.current}</span><span class="of"> of {counts.total}</span>
+            <span class="what">{counts.total === 1 ? "save is" : "saves are"} the newest here</span>
+          </p>
+          <Segments done={counts.current} total={counts.total} max={40} />
+        {:else if counts}
+          <p class="readout"><span class="what">No saves on this device yet.</span></p>
+        {/if}
+        <p class="facts">
+          <span><span class="mono">{formatSize(device.data.storageBytes)}</span> of saves stored</span>
+          {#if counts && counts.newestHere > 0}<span>{counts.newestHere} {counts.newestHere === 1 ? "game was" : "games were"} last saved here</span>{/if}
+          {#if device.data.pendingDeliveries > 0}<span class="wait">{device.data.pendingDeliveries} {device.data.pendingDeliveries === 1 ? "change" : "changes"} on the way</span>{/if}
+        </p>
+      </div>
 
       <div class="split">
         <div>
@@ -141,7 +161,7 @@
                   <span class="name">{emulatorName(c.emulatorId)}</span>
                   <span class="ink2 ellipsis">{c.groupName ?? "on its own"}</span>
                   {#if c.openConflict}
-                    <span class="fault end">two versions</span>
+                    <a class="fault end choose" href={configConflictPath(c.emulatorId, c.bundleId)} onclick={(e) => { e.preventDefault(); router.go(configConflictPath(c.emulatorId, c.bundleId)); }}>two versions — choose</a>
                   {:else if c.upToDate}
                     <span class="ink3 end">up to date</span>
                   {:else}
@@ -202,8 +222,8 @@
   }
   h1 {
     margin: 0 0 8px;
-    font: 600 40px/1 "Barlow Semi Condensed", sans-serif;
-    letter-spacing: -0.01em;
+    font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
+    letter-spacing: -0.02em;
     color: var(--ink);
   }
   h2 {
@@ -216,7 +236,41 @@
     margin-top: 28px;
   }
   .sub {
-    margin: 0 0 24px;
+    display: flex;
+    gap: 14px;
+    margin: 0 0 28px;
+    font-size: 15px;
+  }
+  .plat {
+    color: var(--ink3);
+    text-transform: capitalize;
+  }
+  .hero {
+    margin: 0 0 40px;
+  }
+  .readout {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0 4px;
+    margin: 0 0 12px;
+    color: var(--ink);
+  }
+  .of {
+    font: 600 22px/1 "Barlow Semi Condensed", sans-serif;
+    color: var(--ink3);
+  }
+  .what {
+    margin-left: 10px;
+    font-size: 17px;
+    color: var(--ink2);
+  }
+  .facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 28px;
+    margin: 14px 0 0;
+    color: var(--ink2);
     font-size: 15px;
   }
   .split {
@@ -230,7 +284,7 @@
   }
   .buttons {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
     align-items: flex-start;
     gap: 10px;
     margin-top: 24px;
@@ -274,6 +328,10 @@
   }
   .end {
     text-align: right;
+  }
+  .choose {
+    font-weight: 600;
+    text-underline-offset: 3px;
   }
   .ink2 {
     color: var(--ink2);

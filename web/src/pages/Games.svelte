@@ -3,10 +3,10 @@
   import { gamePath } from "../lib/api/paths";
   import { resource } from "../lib/api/resource.svelte";
   import { EMULATOR_IDS, type GameRow } from "../lib/api/types";
-  import { deviceStateCopy, differing, otherDevices } from "../lib/deviceStates";
+  import { differing, matrixColumns } from "../lib/deviceStates";
   import { emulatorName } from "../lib/emulators";
   import { router } from "../lib/router.svelte";
-  import { systemLabel } from "../lib/systems";
+  import { bareKey } from "../lib/systems";
   import { relativeTime } from "../lib/time";
   import Empty from "../lib/ui/Empty.svelte";
   import ErrorLine from "../lib/ui/ErrorLine.svelte";
@@ -14,6 +14,10 @@
   import HintBar from "../lib/ui/HintBar.svelte";
   import List from "../lib/ui/List.svelte";
   import Tabs from "../lib/ui/Tabs.svelte";
+  import GameTitle from "../lib/ui/GameTitle.svelte";
+  import Presence, { presenceWidth } from "../lib/ui/Presence.svelte";
+  import SystemTag from "../lib/ui/SystemTag.svelte";
+  import { pulse } from "../lib/ui/flash.svelte";
 
   const games = resource(() => getGames(), ["saves", "conflicts", "devices"]);
 
@@ -21,7 +25,7 @@
   let emulator = $state("all");
   let index = $state(0);
 
-  const title = (g: GameRow) => g.displayName ?? g.gameKey;
+  const title = (g: GameRow) => g.displayName ?? bareKey(g.emulatorId, g.gameKey);
 
   // Tabs follow the module order, and only for emulators that have games.
   const tabs = $derived.by(() => {
@@ -39,17 +43,22 @@
       .filter((g) => !q || title(g).toLowerCase().includes(q) || g.gameKey.toLowerCase().includes(q))
       .sort((a, b) => {
         if (a.openConflict !== b.openConflict) return a.openConflict ? -1 : 1;
+        // Unnamed games sort after the named ones, by id.
+        if (!a.displayName !== !b.displayName) return a.displayName ? -1 : 1;
         return title(a).localeCompare(title(b));
       });
   });
 
-  const COLUMNS = "72px minmax(0,1fr) 128px 130px 210px 96px";
-  const HEADER = ["System", "Game", "Emulator", "Newest on", "Other devices", "Saved"];
+  const columns = $derived(matrixColumns(games.data ?? []));
+  const COLUMNS = $derived(`48px minmax(0,1fr) 112px 128px ${presenceWidth(columns.length)} 96px`);
+  const HEADER = $derived(["System", "Game", "Emulator", "Newest on", matrixHead, "Saved"]);
 
   function open(g: GameRow) {
     router.go(gamePath(g.emulatorId, g.gameKey));
   }
 </script>
+
+{#snippet matrixHead()}<Presence {columns} head />{/snippet}
 
 <div class="page">
   <section>
@@ -71,28 +80,24 @@
     {:else if rows.length === 0}
       <Empty text="No games match." />
     {:else}
-      <List {rows} columns={COLUMNS} header={HEADER} headerEnd={[5]} phoneColumns="minmax(0,1fr) 84px 60px" phoneHide={[0, 2, 4]} minWidth="0px" bind:index onOpen={open} key={(g) => g.emulatorId + "/" + g.gameKey}>
+      <List {rows} columns={COLUMNS} header={HEADER} headerEnd={[5]} phoneColumns={`minmax(0,1fr) ${presenceWidth(columns.length)} 80px`} phoneHide={[0, 2, 3]} minWidth="0px" bind:index onOpen={open} key={(g) => g.emulatorId + "/" + g.gameKey}>
         {#snippet row(g: GameRow)}
           {@const bad = g.openConflict}
-          <span class="sys ink3 sm-hide">{systemLabel(g.emulatorId, g.gameKey)}</span>
-          <span class="name ellipsis" class:fault={bad} title={title(g)}>{title(g)}</span>
+          <span class="sm-hide"><SystemTag emulatorId={g.emulatorId} gameKey={g.gameKey} /></span>
+          <GameTitle name={g.displayName} emulatorId={g.emulatorId} gameKey={g.gameKey} fault={bad} />
           <span class="ink2 sm-hide">{emulatorName(g.emulatorId)}</span>
           {#if bad}
-            <span class="strong fault">Two saves</span>
-            <span class="fault sm-hide">{differing(g)}</span>
+            <span class="newest fault sm-hide" title={differing(g)}>Two saves</span>
+          {:else if g.newestOnDeviceName}
+            <span class="newest sm-hide">{g.newestOnDeviceName}</span>
+          {:else}
+            <span class="ink3 sm-hide">{g.newestUtc ? "—" : "no save yet"}</span>
+          {/if}
+          <Presence {columns} row={g} />
+          {#if bad}
             <span class="end fault">choose</span>
           {:else}
-            {#if g.newestOnDeviceName}
-              <span class="strong">{g.newestOnDeviceName}</span>
-            {:else}
-              <span class="ink3">—</span>
-            {/if}
-            <span class="sm-hide">
-              {#each otherDevices(g) as d, i (d.deviceId)}
-                {@const c = deviceStateCopy(d, g.emulatorId)}{#if i > 0}<span class="ink2">;&nbsp;</span>{/if}<span class={c.tone || "ink2"}>{c.text}</span>
-              {/each}
-            </span>
-            <span class="end ink3">{g.newestUtc ? relativeTime(g.newestUtc) : "—"}</span>
+            <span class="end ink3 when" use:pulse={g.newestUtc}>{g.newestUtc ? relativeTime(g.newestUtc) : "—"}</span>
           {/if}
         {/snippet}
       </List>
@@ -114,13 +119,14 @@
   }
   h1 {
     margin: 0 0 18px;
-    font: 600 40px/1 "Barlow Semi Condensed", sans-serif;
-    letter-spacing: -0.01em;
+    font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
+    letter-spacing: -0.02em;
     color: var(--ink);
   }
   h1 small {
-    margin-left: 10px;
-    font: 500 20px "Barlow", system-ui, sans-serif;
+    margin-left: 14px;
+    font: 400 13px "JetBrains Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
     letter-spacing: 0;
     color: var(--ink3);
   }
@@ -136,17 +142,12 @@
     width: 280px;
     flex: none;
   }
-  .sys {
-    font: 600 13px "Barlow Semi Condensed", sans-serif;
+  .newest {
+    font-weight: 500;
   }
   .loading {
     color: var(--ink3);
     margin: 0;
     padding: 12px 16px;
-  }
-  .ellipsis {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 </style>

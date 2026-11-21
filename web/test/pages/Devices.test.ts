@@ -41,7 +41,8 @@ describe("Devices", () => {
     serve(() => devices);
     render(Devices);
     await screen.findByText("Odin 3");
-    await fireEvent.click(screen.getByRole("button", { name: /Pair a new device/ }));
+    // The page's button (the hint bar offers the same action under its X key).
+    await fireEvent.click(screen.getAllByRole("button", { name: /Pair a new device/ })[0]!);
     expect(router.path).toBe("/devices/pair");
   });
 
@@ -92,7 +93,7 @@ describe("Device", () => {
     render(Device);
     await screen.findByRole("heading", { name: "Odin 3" });
     expect(screen.getByText("5.0 MB")).toBeTruthy();
-    expect(screen.getByText("2")).toBeTruthy();
+    expect(screen.getByText("2 changes on the way").classList.contains("wait")).toBe(true);
     expect(screen.getByText("dev.eden.eden_emulator")).toBeTruthy();
     expect(screen.getByText("mgba, gambatte")).toBeTruthy();
     expect(screen.getByText("AYN handhelds")).toBeTruthy();

@@ -31,7 +31,13 @@ const devices = await getJson("/v1/devices");
 const conflicts = await getJson("/v1/web/conflicts");
 const configs = await getJson("/v1/web/configs");
 const gameUrl = (g) => `/games/${encodeURIComponent(g.emulatorId)}/${g.gameKey.split("/").map(encodeURIComponent).join("/")}`;
-const game = games.find((g) => !g.openConflict) ?? games[0];
+const game = games.find((g) => !g.openConflict && g.newestUtc) ?? games[0];
+// A config bundle with an open conflict, if there is one.
+const groups = (await getJson("/v1/configs/groups")).items ?? [];
+const configConflict = (configs.emulators ?? []).flatMap((e) => [
+  ...e.groups.filter((g) => g.openConflict).map((g) => ({ emu: e.emulatorId, bundle: groups.find((s) => s.id === g.id)?.bundleId })),
+  ...e.solo.filter((s) => s.openConflict).map((s) => ({ emu: e.emulatorId, bundle: s.bundleId })),
+]).find((c) => c.bundle);
 
 const routes = [
   { name: "home", path: "/", wait: "h1, nav[aria-label=Sections]" },
@@ -45,6 +51,7 @@ const routes = [
   { name: "device-pair", path: "/devices/pair", wait: "h1, nav[aria-label=Sections]" },
   { name: "configs", path: "/configs", wait: "h1, nav[aria-label=Sections]" },
   configs.emulators?.[0] && { name: "config-emulator", path: `/configs/${encodeURIComponent(configs.emulators[0].emulatorId)}`, wait: "h1, nav[aria-label=Sections]" },
+  configConflict && { name: "config-conflict", path: `/configs/${encodeURIComponent(configConflict.emu)}/conflict/${encodeURIComponent(configConflict.bundle)}`, wait: "h1, nav[aria-label=Sections]" },
   { name: "vault", path: "/vault", wait: "h1, nav[aria-label=Sections]" },
   { name: "activity", path: "/activity", wait: "h1, nav[aria-label=Sections]" },
   { name: "settings", path: "/settings", wait: "h1, nav[aria-label=Sections]" },
