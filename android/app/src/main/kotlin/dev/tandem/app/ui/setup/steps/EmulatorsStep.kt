@@ -28,6 +28,7 @@ import dev.tandem.app.ui.kit.Tone
 import dev.tandem.app.ui.screens.PathSheet
 import dev.tandem.app.ui.screens.SettingsUi
 import dev.tandem.app.ui.screens.VariantLine
+import dev.tandem.app.ui.screens.MELONDS_EXPORT_NOTE
 import dev.tandem.app.ui.setup.SetupFrame
 import dev.tandem.app.ui.setup.SetupStep
 import dev.tandem.app.ui.setup.SetupViewModel
@@ -164,6 +165,7 @@ internal fun EmulatorsStep(vm: SetupViewModel, status: TopStatus, later: (() -> 
                     }
                 }
                 StepNote("ROM folders let Tandem tell which games each emulator can play here.")
+                if (ui.variants.any { it.emulatorId == "melonds" && it.pkg != null }) StepNote(MELONDS_EXPORT_NOTE)
             }
             if (open != null) PathSheet(open.title, open.detail, open.confirm, text, askError, ::submit) { ask = null }
         }

@@ -14,6 +14,9 @@ import dev.tandem.app.ui.input.Action
 /** How long a confirm sheet is on screen before its confirm button acts. */
 const val SHEET_SETTLE_MS = 500L
 
+/** How long a confirm sheet is on screen before a tap on its confirm button acts (a double tap is shorter). */
+const val TAP_SETTLE_MS = 300L
+
 /**
  * The cursor of a sheet that confirms a destructive or overwriting choice (sign out, remove a folder, a choice for
  * every game). It opens on the safe button, so a second press of the button that opened the sheet cancels it; Left
@@ -40,9 +43,18 @@ class SheetChoice(private val now: () -> Long) {
     /** A: whatever the cursor's button does. */
     fun press(confirm: () -> Unit, cancel: () -> Unit) = if (onConfirm) confirmIfSettled(confirm) else cancel()
 
-    /** The confirm button itself (A on it, or a tap): acts only once the sheet has settled on screen. */
+    /** The confirm button itself (A on it): acts only once the sheet has settled on screen. */
     fun confirmIfSettled(confirm: () -> Unit) {
         if (now() - shownAt >= SHEET_SETTLE_MS) confirm()
+    }
+
+    /**
+     * A touch on the confirm button. A tap lands where the finger aims, not where a held button repeats, so it needs
+     * only [TAP_SETTLE_MS] (a double tap's span) on screen, not [SHEET_SETTLE_MS]. A tap even sooner is never dropped
+     * silently: it moves the cursor onto confirm, so the next tap or A confirms.
+     */
+    fun tap(confirm: () -> Unit) {
+        if (now() - shownAt >= TAP_SETTLE_MS) confirm() else onConfirm = true
     }
 
     /** The hint bar's A: named after the cursor's button. */
@@ -71,7 +83,7 @@ fun rememberSheetChoice(sheet: Any?, now: () -> Long): SheetChoice = remember(sh
 @Composable
 fun SheetButtons(choice: SheetChoice, confirmLabel: String, cancelLabel: String, confirm: () -> Unit, cancel: () -> Unit, modifier: Modifier = Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        EmuButton(confirmLabel, primary = choice.onConfirm, glyph = if (choice.onConfirm) Action.A else null) { choice.confirmIfSettled(confirm) }
+        EmuButton(confirmLabel, primary = choice.onConfirm, glyph = if (choice.onConfirm) Action.A else null) { choice.tap(confirm) }
         EmuButton(cancelLabel, primary = !choice.onConfirm, glyph = if (choice.onConfirm) Action.B else Action.A, onClick = cancel)
     }
 }

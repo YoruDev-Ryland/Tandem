@@ -9,7 +9,15 @@ import dev.tandem.app.sync.StateStore
 import dev.tandem.app.ui.theme.ThemeMode
 import dev.tandem.app.ui.theme.setting
 import dev.tandem.app.ui.theme.themeModeOf
+import dev.tandem.app.api.Api
+import dev.tandem.app.ui.state.FixedPermissions
+import dev.tandem.app.ui.state.PermissionRequest
+import dev.tandem.app.ui.state.PermissionState
+import dev.tandem.app.ui.state.Permissions
+import dev.tandem.app.ui.state.ServerChange
+import dev.tandem.app.ui.state.checkNewServer
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -17,7 +25,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 
 enum class SettingsSection(val label: String) {
-    Sync("Sync"), Emulators("Emulators"), Appearance("Appearance"), Account("Account"), Diagnostics("Diagnostics")
+    Sync("Sync"), Emulators("Emulators"), Appearance("Appearance"), Account("Account"), About("About"), Diagnostics("Diagnostics")
 }
 
 /** One row of Settings › Emulators: an installed variant of an emulator, or the emulator with none ([pkg] null). */
@@ -46,6 +54,13 @@ data class SettingsUi(
     val signedIn: Boolean = false,
     val serverUrl: String? = null,
     val deviceName: String? = null,
+    /** Notifications and the battery exemption, for Settings › Sync's rows. */
+    val permissions: PermissionState = PermissionState(),
+    /** The server removed this device (Account says so). */
+    val revoked: Boolean = false,
+    /** Account › Change server address: the check in progress or its outcome. */
+    val serverChange: ServerChange = ServerChange.Idle,
+    val appVersion: String = "",
 )
 
 const val AZAHAR_ROOT = "azahar.root"
@@ -66,21 +81,33 @@ class SettingsViewModel(
     private val reload: () -> Unit,
     private val stopSync: () -> Unit,
     private val afterSignOut: () -> Unit,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
+    val permissions: Permissions = FixedPermissions(),
+    /** A client for a server URL with no key, and one with this device's key (Change server address). */
+    private val anon: (String) -> Api = { error("no client") },
+    private val keyed: (String) -> Api = { error("no client") },
+    private val appVersion: String = "",
 ) {
     private val section = MutableStateFlow(SettingsSection.Sync)
     private val focus = MutableStateFlow<EmulatorFocus?>(null)
     private val packages = MutableStateFlow(installed())
+    private val serverChange = MutableStateFlow<ServerChange>(ServerChange.Idle)
     private var focusSeq = 0
 
     val ui: StateFlow<SettingsUi> =
-        combine(store.changes, deviceName, section, focus, packages) { _, name, sec, f, inst -> build(name, sec, f, inst) }
-            .stateIn(scope, SharingStarted.Eagerly, build(deviceName.value, section.value, focus.value, packages.value))
+        combine(
+            combine(store.changes, deviceName, section, focus, packages) { _, name, sec, f, inst -> build(name, sec, f, inst) },
+            permissions.state, serverChange,
+        ) { u, p, c -> u.copy(permissions = p, serverChange = c) }
+            .stateIn(scope, SharingStarted.Eagerly, build(deviceName.value, section.value, focus.value, packages.value)
+                .copy(permissions = permissions.state.value))
 
     private fun build(name: String?, sec: SettingsSection, f: EmulatorFocus?, inst: Set<String>): SettingsUi {
         val st = store.settings
         val signedIn = store.deviceKey != null
         return SettingsUi(
+            revoked = signedIn && store.revoked,
+            appVersion = appVersion,
             section = sec,
             autoApply = st.autoApply,
             romDirs = st.romDirs,
@@ -106,8 +133,37 @@ class SettingsViewModel(
         }
     }
 
-    /** The tab is on screen: look at the installed packages again. */
-    fun show() { packages.value = installed() }
+    /** The tab is on screen: look at the installed packages (and the permissions) again. */
+    fun show() { packages.value = installed(); permissions.refresh() }
+
+    fun requestPermission(r: PermissionRequest) = permissions.request(r)
+
+    /**
+     * Account › Change server address: checks [raw] is this same server under another address (it answers
+     * /v1/server-info with this protocol, and this device's key works there), then switches to it keeping the key and
+     * every bit of sync state, and restarts sync. A refusal is [SettingsUi.serverChange] Failed, with nothing changed.
+     */
+    fun changeServer(raw: String) {
+        if (serverChange.value == ServerChange.Checking) return
+        val url = dev.tandem.app.ui.setup.normalizeUrl(raw)
+            ?: run { serverChange.value = ServerChange.Failed(dev.tandem.app.ui.setup.URL_HELP); return }
+        if (store.deviceKey == null) return
+        if (url.equals(store.serverUrl?.trimEnd('/'), ignoreCase = true)) {
+            serverChange.value = ServerChange.Failed("That is the address in use already."); return
+        }
+        serverChange.value = ServerChange.Checking
+        scope.launch {
+            val r = checkNewServer(url, store.deviceId, anon, keyed)
+            if (r is ServerChange.Done) {
+                store.changeServer(url)
+                reload()
+            }
+            serverChange.value = r
+        }
+    }
+
+    /** The server-address sheet closed: forget the last check. */
+    fun clearServerChange() { if (serverChange.value != ServerChange.Checking) serverChange.value = ServerChange.Idle }
 
     fun select(s: SettingsSection) { section.value = s }
 

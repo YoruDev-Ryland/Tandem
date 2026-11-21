@@ -19,6 +19,9 @@ import dev.tandem.app.ui.screens.AZAHAR_ROOT
 import dev.tandem.app.ui.screens.ConflictsViewModel
 import dev.tandem.app.ui.screens.SettingsViewModel
 import dev.tandem.app.ui.state.Loaded
+import dev.tandem.app.ui.state.FixedPermissions
+import dev.tandem.app.ui.state.PermissionRequest
+import dev.tandem.app.ui.state.Permissions
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +40,8 @@ import kotlinx.coroutines.launch
 enum class SetupStep(val label: String) {
     Server("Server and sign-in"),
     Shizuku("Shizuku"),
+    /** Notifications and the battery exemption; skipped when both are already granted. */
+    Background("Keep it running"),
     Emulators("Emulators found"),
     SyncChoice("How each one syncs"),
     FirstSync("First sync"),
@@ -76,11 +81,13 @@ fun configOptions(row: EmulatorConfigRow?, me: String): List<ConfigOption> {
     val groups = row?.groups.orEmpty()
     val solo = row?.solo.orEmpty()
     val out = mutableListOf<ConfigOption>()
-    groups.firstOrNull { g -> g.members.any { it.id == me } }?.let { g ->
+    val mine = groups.firstOrNull { g -> g.members.any { it.id == me } }
+    mine?.let { g ->
         out += ConfigOption("g/${g.id}", "Keep following \"${g.name}\"", "Nothing changes here. This device keeps the group's settings.", ConfigChoice.Follow)
     }
+    // A device follows one group per emulator: while it is in one, no other is offered (leave it on the web first).
     for (g in groups) {
-        if (g.headVersionId == null || g.members.any { it.id == me }) continue
+        if (mine != null || g.headVersionId == null || g.members.any { it.id == me }) continue
         val with = g.members.map { it.name }.takeIf { it.isNotEmpty() }?.let { " with ${nameList(it)}" }.orEmpty()
         out += ConfigOption(
             "g/${g.id}", "Join \"${g.name}\"$with",
@@ -143,6 +150,8 @@ private const val K_BACKED = "setup.backedIntoShizuku"
 private const val K_EMUS = "setup.emulators"
 private const val K_EMU_AT = "setup.emulatorAt"
 private const val K_CHOICES = "setup.choices"
+private const val K_SAW_BACKGROUND = "setup.sawBackground"
+private const val K_BACKGROUND_AT = "setup.backgroundAt"
 
 /**
  * The first-run setup flow: five steps, one question per screen. Where it is and what was chosen live in the
@@ -175,6 +184,8 @@ class SetupViewModel(
     private val defaultDeviceName: String,
     /** How long step 5 waits for its scan before it says it is still scanning. */
     private val scanPatienceMillis: Long = 120_000L,
+    /** Notifications and the battery exemption, asked for on the Background step. */
+    val permissions: Permissions = FixedPermissions(),
 ) {
     /** A value kept in the saved state, readable as a flow. */
     private inner class Saved<T>(private val key: String, initial: T) {
@@ -201,6 +212,8 @@ class SetupViewModel(
     private val emusS = Saved<ArrayList<String>?>(K_EMUS, null)
     private val emuAtS = Saved(K_EMU_AT, 0)
     private val choicesS = Saved(K_CHOICES, ArrayList<String>())
+    private val sawBackgroundS = Saved(K_SAW_BACKGROUND, false)
+    private val backgroundAtS = Saved(K_BACKGROUND_AT, 0)
 
     /** Whether the flow is on screen instead of the tabs. Starts on when the app opens signed out. */
     val active: StateFlow<Boolean> = activeS.flow
@@ -286,7 +299,7 @@ class SetupViewModel(
         // Shizuku ready while its step is shown: carry on, unless the user came back to look at it.
         scope.launch {
             combine(stepFlow, shizuku, backedS.flow) { s, st, b -> s == SetupStep.Shizuku && st == ShizukuState.Ready && !b }
-                .collect { if (it) goTo(SetupStep.Emulators) }
+                .collect { if (it) goTo(afterShizuku()) }
         }
         // Step 4 asks about the emulators found when it was first shown, even while a reload empties the list.
         scope.launch {
@@ -317,14 +330,24 @@ class SetupViewModel(
         overviewFlow.value = Fetch()
         errorFlow.value = null
         choiceErrorFlow.value = null
+        sawBackgroundS.value = false
+        backgroundAtS.value = 0
         activeS.value = true
-        goTo(if (store.deviceKey != null) SetupStep.Shizuku else SetupStep.Server)
+        // Signed in, Set up again picks up where Finish later left it (else at Shizuku, past the sign-in).
+        val resume = store.setupResume?.let { n -> SetupStep.entries.firstOrNull { it.name == n } }
+        goTo(if (store.deviceKey == null) SetupStep.Server else resume?.takeIf { it != SetupStep.Server } ?: SetupStep.Shizuku)
     }
 
     /** Leaves the flow (finished, or B on its first screen). */
     fun finish() {
         firstSyncJob?.cancel()
         activeS.value = false
+    }
+
+    /** The last screen was reached ("Go to This device"): nothing is left to resume. */
+    fun completed() {
+        store.setupResume = null
+        finish()
     }
 
     /** B: one screen back. On the first screen it leaves only when there is somewhere to go back to. */
@@ -340,7 +363,8 @@ class SetupViewModel(
                 else -> setPart(SignInPart.Server)
             }
             SetupStep.Shizuku -> goTo(SetupStep.Server)
-            SetupStep.Emulators -> { backedS.value = true; goTo(SetupStep.Shizuku) }
+            SetupStep.Background -> { backedS.value = true; goTo(SetupStep.Shizuku) }
+            SetupStep.Emulators -> if (sawBackgroundS.value) goTo(SetupStep.Background) else { backedS.value = true; goTo(SetupStep.Shizuku) }
             SetupStep.SyncChoice -> {
                 choiceErrorFlow.value = null
                 if (emuAtS.value > 0) emuAtS.value -= 1
@@ -357,7 +381,8 @@ class SetupViewModel(
 
     private fun goTo(s: SetupStep) {
         if (s != SetupStep.FirstSync) firstSyncJob?.cancel()
-        if (s == SetupStep.Shizuku && stepFlow.value != SetupStep.Emulators) backedS.value = false
+        if (s == SetupStep.Shizuku && stepFlow.value != SetupStep.Emulators && stepFlow.value != SetupStep.Background) backedS.value = false
+        if (s == SetupStep.Background) sawBackgroundS.value = true
         stepS.value = s.name
         stepFlow.value = s
         enter(s)
@@ -365,10 +390,32 @@ class SetupViewModel(
 
     private fun enter(s: SetupStep) {
         when (s) {
-            SetupStep.SyncChoice -> if (overviewFlow.value.value == null) loadConfigs()
+            // Every visit reads the groups again: a choice made here (or on the web) changes what step 4 may offer.
+            SetupStep.SyncChoice -> loadConfigs()
             SetupStep.FirstSync -> startFirstSync()
+            SetupStep.Background -> permissions.refresh()
             else -> {}
         }
+    }
+
+    /** After Shizuku: the Background step, unless notifications and the battery exemption are already granted. */
+    private fun afterShizuku(): SetupStep {
+        permissions.refresh()
+        return if (permissions.state.value.allGranted) SetupStep.Emulators else SetupStep.Background
+    }
+
+    // ---- the Background step ----
+
+    /** The Background step's cursor: notifications, battery, continue. */
+    val backgroundAt: StateFlow<Int> = backgroundAtS.flow
+    fun pointBackground(i: Int) { backgroundAtS.value = i }
+    fun requestPermission(r: PermissionRequest) = permissions.request(r)
+    fun backgroundDone() = goTo(SetupStep.Emulators)
+
+    /** "Finish later": leaves the flow and remembers where, so Settings › Set up again comes back to this step. */
+    fun finishLater() {
+        store.setupResume = stepFlow.value.name
+        finish()
     }
 
     // ---- step 1 ----
@@ -462,10 +509,10 @@ class SetupViewModel(
     // ---- step 2 ----
 
     fun requestShizuku() = askShizuku()
-    fun continueShizuku() { if (shizuku.value == ShizukuState.Ready) goTo(SetupStep.Emulators) }
+    fun continueShizuku() { if (shizuku.value == ShizukuState.Ready) goTo(afterShizuku()) }
 
     /** On without Shizuku: sync waits until it is ready, and This device says so. */
-    fun skipShizuku() = goTo(SetupStep.Emulators)
+    fun skipShizuku() = goTo(afterShizuku())
 
     // ---- step 3 ----
 
@@ -512,6 +559,8 @@ class SetupViewModel(
                 choicesS.value = ArrayList(encodeChoices(choices.value + (emulatorId to option.key)))
                 // A joined or copied config is now this device's to receive: apply it (held while the emulator runs).
                 if (option.choice is ConfigChoice.Join || option.choice is ConfigChoice.Copy) service(SyncService.ACTION_APPLY)
+                // The server's groups changed: the next emulator's options (and this one's, coming back) read them again.
+                if (option.choice !is ConfigChoice.Follow) loadConfigs()
                 choosingFlow.value = null
                 advance()
             } catch (e: CancellationException) {

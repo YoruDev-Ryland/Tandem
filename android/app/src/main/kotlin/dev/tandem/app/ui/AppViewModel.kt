@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import dev.tandem.app.ui.state.AppState
 import dev.tandem.app.ui.state.ServerRepo
+import dev.tandem.app.ui.state.AndroidPermissions
 
 /**
  * The screens' state, kept across rotation: the server cache, the app state over it and each tab's model. The
@@ -36,7 +37,8 @@ class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewMode
         val url = store.serverUrl ?: return null
         val key = store.deviceKey ?: return null
         client?.let { (u, k, c) -> if (u == url && k == key) return c }
-        return ApiClient(url, key).also { client = Triple(url, key, it) }
+        // A screen's read can be the first to hear the device was removed: it stops sync just as the service would.
+        return ApiClient(url, key, onRevoked = { AppGraph.revoked(getApplication()) }).also { client = Triple(url, key, it) }
     }
 
     val server = ServerRepo(
@@ -69,6 +71,9 @@ class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewMode
         nudges = merge<Any?>(AppGraph.deliveryNudges, server.games.map { it.updatedAt }),
     )
 
+    /** Notifications and the battery exemption, asked for in setup and Settings; the activity shows the prompts. */
+    val permissions = AndroidPermissions(app)
+
     val settings = SettingsViewModel(
         store = store,
         modules = modules,
@@ -81,6 +86,10 @@ class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewMode
         stopSync = { SyncService.stop(app) },
         afterSignOut = { server.refresh() },   // no key: the server data clears
         scope = viewModelScope,
+        permissions = permissions,
+        anon = { url -> ApiClient(url, null) },
+        keyed = { url -> ApiClient(url, store.deviceKey) },
+        appVersion = dev.tandem.app.BuildConfig.VERSION_NAME,
     )
 
     /** The first-run setup flow; its place and choices live in [handle], so process death resumes it. */
@@ -100,6 +109,7 @@ class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewMode
         running = state.running,
         emulatorName = { emulatorNames[it] ?: it },
         defaultDeviceName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android",
+        permissions = permissions,
     )
 
     /** The server URL for links to the web app, or null when signed out. */

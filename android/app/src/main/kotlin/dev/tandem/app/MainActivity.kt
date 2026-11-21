@@ -40,6 +40,14 @@ import dev.tandem.app.ui.screens.DeviceScreen
 import dev.tandem.app.ui.screens.SettingsScreen
 import dev.tandem.app.ui.screens.actions
 import dev.tandem.app.ui.screens.gameUrl
+import dev.tandem.app.ui.screens.licenceText
+import dev.tandem.app.ui.state.PermissionRequest
+import android.Manifest
+import android.provider.Settings
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import dev.tandem.app.ui.screens.syncNow
 import dev.tandem.app.ui.setup.SetupFlow
 import dev.tandem.app.sync.StateStore
@@ -51,6 +59,7 @@ import dev.tandem.app.ui.theme.themeModeOf
 
 private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
 private const val DEBUG_ACTIVITY = "dev.tandem.app.debug.DebugActivity"
+private const val REQ_NOTIFICATIONS = 7
 private val TABS = listOf("This device", "Activity", "Conflicts", "Settings")
 private const val TAB_DEVICE = 0
 private const val TAB_ACTIVITY = 1
@@ -67,6 +76,38 @@ class MainActivity : ComponentActivity() {
         // Before the first frame, so a Light choice on a dark system (or the reverse) never flashes the other colours.
         applyWindowTheme(themeModeOf(store.settings.theme).let { it == ThemeMode.Dark || (it == ThemeMode.System && systemDark()) })
         setContent { StoredTheme(store, onDark = ::applyWindowTheme) { TandemRoot(vm, this) } }
+        // Setup and Settings ask for notifications and the battery exemption; the prompts need this activity.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) { vm.permissions.requests.collect(::ask) }
+        }
+    }
+
+    /** Bumped on every resume: what depends on other apps (Shizuku installed meanwhile) is read again. */
+    internal var resumes by mutableIntStateOf(0)
+        private set
+
+    override fun onResume() {
+        super.onResume()
+        resumes++
+        vm.permissions.refresh()   // a prompt (or the system settings) may have changed them
+    }
+
+    private fun ask(r: PermissionRequest) {
+        when (r) {
+            PermissionRequest.Notifications -> requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFICATIONS)
+            PermissionRequest.Battery -> try {
+                @Suppress("BatteryLife")   // a sync service that must outlive the screen is what the exemption is for
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+            } catch (_: ActivityNotFoundException) {
+                try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (_: ActivityNotFoundException) { }
+            }
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        vm.permissions.refresh()
     }
 
     override fun onStart() {
@@ -112,15 +153,15 @@ private fun TandemRoot(vm: AppViewModel, activity: MainActivity) {
     var tab by rememberSaveable { mutableIntStateOf(TAB_DEVICE) }
     val status by vm.state.top.collectAsStateWithLifecycle()
     val setupActive by vm.setup.active.collectAsStateWithLifecycle()
-    // Shizuku help is a later task; until then the fix opens Shizuku itself, when it is installed.
-    val shizuku = remember { activity.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE) }
+    // Opens Shizuku when it is installed (null: not installed; setup then explains and links its download page).
+    val shizuku = remember(activity.resumes) { activity.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE) }
 
     // Signed out at launch, or opened from This device or Settings: the setup flow instead of the tabs.
     if (setupActive) {
         // The system back (gesture or key outside the scaffold) is B too: it never leaves the app mid-setup.
         BackHandler { vm.setup.back() }
         SetupFlow(vm.setup, status, openShizuku = shizuku?.let { i -> { activity.startActivity(i) } }, onDone = { tab = TAB_DEVICE },
-            diagnostics = activity.diagnostics(),
+            diagnostics = activity.diagnostics(), openUrl = activity::view,
         )
         return
     }
@@ -174,6 +215,7 @@ private fun TandemRoot(vm: AppViewModel, activity: MainActivity) {
                     diagnostics = activity.diagnostics(),
                     setUp = { vm.setup.start(exitable = true) },
                     back = { tab = TAB_DEVICE },
+                    licences = { licenceText { p -> runCatching { activity.assets.open(p).bufferedReader().use { it.readText() } }.getOrNull() } },
                 ),
             )
         }

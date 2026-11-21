@@ -30,6 +30,12 @@ import dev.tandem.app.ui.setup.StepSub
 import dev.tandem.app.ui.setup.StepTitle
 import dev.tandem.app.ui.setup.describeSetupError
 import dev.tandem.app.ui.state.TopStatus
+import dev.tandem.app.ui.state.INSECURE_URL_WARNING
+import dev.tandem.app.ui.state.insecureUrl
+import dev.tandem.app.ui.theme.EmuType
+import dev.tandem.app.ui.theme.LocalEmu
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.BasicText
 
 /**
  * Step 1, server and sign-in: the server's address (checked with the server, which names itself), then how to sign
@@ -55,7 +61,7 @@ internal fun ServerStep(vm: SetupViewModel, status: TopStatus, diagnostics: (() 
             val url by vm.url.collectAsState()
             SetupFrame(status, SetupStep.Server, listOfNotNull(Hint(Action.A, "Continue", vm::continueSignedIn), diag), back) {
                 StepTitle("Signed in")
-                StepSub("This device is signed in. To use another account or server, sign out in Settings first.")
+                StepSub("This device is signed in. To use another account, sign out in Settings first; a new address for the same server is under Settings › Account.")
                 Facts(listOf(Fact("Server", url, mono = true), Fact("This device", status.deviceName ?: "Signed in")))
             }
         }
@@ -70,6 +76,12 @@ internal fun ServerStep(vm: SetupViewModel, status: TopStatus, diagnostics: (() 
                     KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go), vm::connect,
                     mono = true, focus = focus,
                 )
+                if (insecureUrl(url)) {
+                    BasicText(
+                        INSECURE_URL_WARNING, Modifier.padding(bottom = 10.dp).widthIn(max = 560.dp),
+                        style = EmuType.meta.copy(color = LocalEmu.current.wait),
+                    )
+                }
                 error?.let { ErrorLine(it, text = ::describeSetupError) }
             }
             LaunchedEffect(Unit) { focus.requestFocus() }

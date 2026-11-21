@@ -66,7 +66,7 @@ internal fun FirstSyncStep(vm: SetupViewModel, status: TopStatus, onDone: () -> 
     val shizuku by vm.shizuku.collectAsState()
     val slow by vm.scanSlow.collectAsState()
     val autoApply by vm.autoApply.collectAsState()
-    fun done() { vm.finish(); onDone() }
+    fun done() { vm.completed(); onDone() }
     // X flips auto-apply on every screen of the step but the review, where X picks the other device's save.
     val toggle = Hint(Action.X, if (autoApply) "Turn off" else "Turn on") { vm.setAutoApply(!autoApply) }
     val line: @Composable () -> Unit = {

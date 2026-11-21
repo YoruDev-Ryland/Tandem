@@ -57,6 +57,7 @@ import dev.tandem.app.ui.kit.describeError
 import dev.tandem.app.ui.kit.noKeyFocus
 import dev.tandem.app.ui.kit.serverCopy
 import dev.tandem.app.ui.kit.tone
+import dev.tandem.app.ui.setup.steps.BackgroundStep
 import dev.tandem.app.ui.setup.steps.EmulatorsStep
 import dev.tandem.app.ui.setup.steps.FirstSyncStep
 import dev.tandem.app.ui.setup.steps.ServerStep
@@ -80,14 +81,17 @@ fun SetupFlow(
     /** Opens the diagnostics screen; null in release builds. */
     diagnostics: (() -> Unit)?,
     now: () -> Long = { SystemClock.uptimeMillis() },
+    /** Opens a web page in the browser (Shizuku's download page). */
+    openUrl: (String) -> Unit = {},
 ) {
     val step by vm.step.collectAsState()
     val signedIn by vm.signedIn.collectAsState()
     // Signed in, every step after the first can be left for the tabs; Settings › Set up again comes back.
-    val later: (() -> Unit)? = if (signedIn) ({ vm.finish(); onDone() }) else null
+    val later: (() -> Unit)? = if (signedIn) ({ vm.finishLater(); onDone() }) else null
     when (step) {
         SetupStep.Server -> ServerStep(vm, status, diagnostics)
-        SetupStep.Shizuku -> ShizukuStep(vm, status, openShizuku, later)
+        SetupStep.Shizuku -> ShizukuStep(vm, status, openShizuku, later, openUrl)
+        SetupStep.Background -> BackgroundStep(vm, status, later)
         SetupStep.Emulators -> EmulatorsStep(vm, status, later)
         SetupStep.SyncChoice -> SyncChoiceStep(vm, status, later, now)
         SetupStep.FirstSync -> FirstSyncStep(vm, status, onDone, later, now)
