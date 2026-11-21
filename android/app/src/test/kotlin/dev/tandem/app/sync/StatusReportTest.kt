@@ -174,10 +174,12 @@ class StatusReportTest {
     @Test(timeout = 10_000L) fun a_hung_server_does_not_hold_the_engine_or_pile_up_reports() = runBlocking {
         val release = CountDownLatch(1)
         val puts = AtomicInteger()
+        val started = CountDownLatch(1)   // the background PUT is in flight (it runs on another thread)
         val hung = object : Api by client {
             override suspend fun putStatus(req: DeviceStatusRequest) {
                 if (req.runningEmulators.orEmpty().isEmpty()) return client.putStatus(req)   // the full scan's report
                 puts.incrementAndGet()
+                started.countDown()
                 release.await()   // blocking, non-cancellable
             }
             override suspend fun putStatus(req: DeviceStatusRequest, callTimeoutMillis: Long) = putStatus(req)
@@ -185,6 +187,8 @@ class StatusReportTest {
         val e = engine(hung, statusTimeoutMillis = 0L)   // gives up at once instead of waiting 10 s
         e.fullScan(); statusBodies()
         withTimeout(5_000) { e.reportRunning(setOf("eden")) }   // returns although the PUT hangs
+        // With a zero timeout reportRunning returns before the PUT has even started: wait for it, never race it.
+        assertTrue("the first report reached the server", started.await(5, TimeUnit.SECONDS))
         withTimeout(5_000) { e.onEmulatorExited("eden"); e.tick() }   // the engine lock is free
         now += 90_000L
         e.reportRunning(setOf("eden"))   // due, but the previous report is still in flight: not resent
