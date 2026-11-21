@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Diagnostics (debug builds only); reached from Settings, not the launcher. -->
+        <activity
+            android:name=".debug.DebugActivity"
+            android:exported="false" />
+    </application>
+</manifest>

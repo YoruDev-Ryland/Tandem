@@ -77,7 +77,8 @@ fun SetupFlow(
     status: TopStatus,
     openShizuku: (() -> Unit)?,
     onDone: () -> Unit,
-    diagnostics: () -> Unit,
+    /** Opens the diagnostics screen; null in release builds. */
+    diagnostics: (() -> Unit)?,
     now: () -> Long = { SystemClock.uptimeMillis() },
 ) {
     val step by vm.step.collectAsState()

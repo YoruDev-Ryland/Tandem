@@ -25,7 +25,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.tandem.app.debug.DebugActivity
 import dev.tandem.app.service.AppGraph
 import dev.tandem.app.service.LogBuffer
 import dev.tandem.app.service.SyncService
@@ -50,6 +49,7 @@ import dev.tandem.app.ui.theme.isDark
 import dev.tandem.app.ui.theme.themeModeOf
 
 private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+private const val DEBUG_ACTIVITY = "dev.tandem.app.debug.DebugActivity"
 private val TABS = listOf("This device", "Activity", "Conflicts", "Settings")
 private const val TAB_DEVICE = 0
 private const val TAB_ACTIVITY = 1
@@ -92,6 +92,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge(bars, bars)
     }
 
+    /** Opens the diagnostics screen; null in release builds, which don't contain it (it lives in src/debug). */
+    internal fun diagnostics(): (() -> Unit)? = if (!BuildConfig.DEBUG) null else ({
+        try { startActivity(Intent().setClassName(this, DEBUG_ACTIVITY)) } catch (_: ActivityNotFoundException) { }
+    })
+
     internal fun view(url: String) {
         try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: ActivityNotFoundException) { }
     }
@@ -110,7 +115,7 @@ private fun TandemRoot(vm: AppViewModel, activity: MainActivity) {
         // The system back (gesture or key outside the scaffold) is B too: it never leaves the app mid-setup.
         BackHandler { vm.setup.back() }
         SetupFlow(vm.setup, status, openShizuku = shizuku?.let { i -> { activity.startActivity(i) } }, onDone = { tab = TAB_DEVICE },
-            diagnostics = { activity.startActivity(Intent(activity, DebugActivity::class.java)) },
+            diagnostics = activity.diagnostics(),
         )
         return
     }
@@ -159,7 +164,7 @@ private fun TandemRoot(vm: AppViewModel, activity: MainActivity) {
             SettingsScreen(
                 settingsUi, top,
                 vm.settings.actions(
-                    diagnostics = { activity.startActivity(Intent(activity, DebugActivity::class.java)) },
+                    diagnostics = activity.diagnostics(),
                     setUp = { vm.setup.start(exitable = true) },
                     back = { tab = TAB_DEVICE },
                 ),

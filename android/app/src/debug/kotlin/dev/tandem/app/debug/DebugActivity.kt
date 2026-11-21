@@ -34,10 +34,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** Temporary setup and diagnostics screen, built in code. Replaced by the real UI after the mockups. */
+/** Diagnostics screen for debug builds only (src/debug), built in code: the log, Shizuku and the service as it sees them. */
 class DebugActivity : Activity() {
     private companion object {
-        const val DEFAULT_SERVER = "http://192.168.1.117:5100"
         const val LOG_LINES = 200
         const val REFRESH_MS = 2_000L
         const val REQ_NOTIFICATIONS = 1
@@ -125,7 +124,7 @@ class DebugActivity : Activity() {
 
         header("Server and sign-in")
         val form = store.signInForm
-        server = field("Server URL", form.serverUrl ?: store.serverUrl ?: DEFAULT_SERVER, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        server = field("Server URL", form.serverUrl ?: store.serverUrl ?: "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         deviceName = field("Device name", Build.MODEL ?: "Android")
         email = field("Email", form.email ?: "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
         password = field("Password", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)

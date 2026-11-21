@@ -4,3 +4,7 @@ local.properties
 *.iml
 .idea/
 .kotlin/
+# Release signing: the keystore lives outside the repository (scripts/make-release-key.sh).
+keystore.properties
+*.jks
+*.keystore

@@ -77,13 +77,14 @@ class SettingsActions(
     val consumeFocus: () -> Unit = {},
     val setTheme: (ThemeMode) -> Unit = {},
     val signOut: () -> Unit = {},
-    val diagnostics: () -> Unit = {},
+    /** Opens the diagnostics screen; null in release builds, which have no Diagnostics section. */
+    val diagnostics: (() -> Unit)? = {},
     /** Opens the setup flow (Account › Set up again). */
     val setUp: () -> Unit = {},
     val back: () -> Unit = {},
 )
 
-fun SettingsViewModel.actions(diagnostics: () -> Unit, setUp: () -> Unit, back: () -> Unit) = SettingsActions(
+fun SettingsViewModel.actions(diagnostics: (() -> Unit)?, setUp: () -> Unit, back: () -> Unit) = SettingsActions(
     select = ::select, setAutoApply = ::setAutoApply, addRomDir = ::addRomDir, removeRomDir = ::removeRomDir,
     setOverride = ::setOverride, chooseVariant = ::chooseVariant, consumeFocus = ::consumeFocus, setTheme = ::setTheme, signOut = ::signOut,
     diagnostics = diagnostics, setUp = setUp, back = back,
@@ -136,6 +137,8 @@ fun SettingsScreen(
     actions: SettingsActions,
     now: () -> Long = { SystemClock.uptimeMillis() },
 ) {
+    // A release build has no diagnostics screen, so no Diagnostics section either.
+    val sections = SettingsSection.entries.filter { it != SettingsSection.Diagnostics || actions.diagnostics != null }
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var syncAt by remember { mutableIntStateOf(0) }
     var emuAt by remember { mutableIntStateOf(0) }
@@ -212,7 +215,7 @@ fun SettingsScreen(
             SettingsSection.Account ->
                 if (ui.signedIn) listOf(Hint(Action.A, "Sign out") { sheet = Sheet.SignOut }, Hint(Action.X, SET_UP_AGAIN, actions.setUp), back)
                 else listOf(Hint(Action.A, SET_UP, actions.setUp), back)
-            SettingsSection.Diagnostics -> listOf(Hint(Action.A, "Open", actions.diagnostics), back)
+            SettingsSection.Diagnostics -> listOfNotNull(actions.diagnostics?.let { Hint(Action.A, "Open", it) }, back)
         }
     }
     val status = when (ui.section) {
@@ -223,7 +226,7 @@ fun SettingsScreen(
     ConsoleScaffold(
         top = top,
         tabs = {
-            BumperTabs(SettingsSection.entries.map { it.label }, ui.section.ordinal, { actions.select(SettingsSection.entries[it]) }, level = 2)
+            BumperTabs(sections.map { it.label }, sections.indexOf(ui.section).coerceAtLeast(0), { actions.select(sections[it]) }, level = 2)
         },
         hints = hints,
         status = if (open == null) status else null,
@@ -251,7 +254,7 @@ fun SettingsScreen(
                         if (mode == ui.theme) Cell("active", tone = Tone.Ink2, style = EmuType.meta)
                     }
                     SettingsSection.Account -> Account(ui, actions.setUp) { sheet = Sheet.SignOut }
-                    SettingsSection.Diagnostics -> Diagnostics(actions.diagnostics)
+                    SettingsSection.Diagnostics -> actions.diagnostics?.let { Diagnostics(it) }
                 }
             }
             when (open) {

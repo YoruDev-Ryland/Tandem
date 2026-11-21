@@ -37,7 +37,7 @@ import dev.tandem.app.ui.state.TopStatus
  * password. A device that is already signed in shows where, and moves on.
  */
 @Composable
-internal fun ServerStep(vm: SetupViewModel, status: TopStatus, diagnostics: () -> Unit) {
+internal fun ServerStep(vm: SetupViewModel, status: TopStatus, diagnostics: (() -> Unit)?) {
     val signedIn by vm.signedIn.collectAsState()
     val part by vm.part.collectAsState()
     val exitable by vm.exitable.collectAsState()
@@ -47,13 +47,13 @@ internal fun ServerStep(vm: SetupViewModel, status: TopStatus, diagnostics: () -
     // Signed in, B leaves for the tabs.
     val back: (() -> Unit)? = if (signedIn || part != SignInPart.Server || exitable) vm::back else null
     // Y: the diagnostics screen, so a connection that won't work can be looked into before signing in.
-    val diag = Hint(Action.Y, "Diagnostics", diagnostics)
+    val diag = diagnostics?.let { Hint(Action.Y, "Diagnostics", it) }
     val note = if (busy) "Talking to the server" else null
 
     when {
         signedIn -> {
             val url by vm.url.collectAsState()
-            SetupFrame(status, SetupStep.Server, listOf(Hint(Action.A, "Continue", vm::continueSignedIn), diag), back) {
+            SetupFrame(status, SetupStep.Server, listOfNotNull(Hint(Action.A, "Continue", vm::continueSignedIn), diag), back) {
                 StepTitle("Signed in")
                 StepSub("This device is signed in. To use another account or server, sign out in Settings first.")
                 Facts(listOf(Fact("Server", url, mono = true), Fact("This device", status.deviceName ?: "Signed in")))
@@ -62,7 +62,7 @@ internal fun ServerStep(vm: SetupViewModel, status: TopStatus, diagnostics: () -
         part == SignInPart.Server -> {
             val url by vm.url.collectAsState()
             val focus = remember { FocusRequester() }
-            SetupFrame(status, SetupStep.Server, listOf(Hint(Action.A, "Connect", vm::connect), diag), back, note) {
+            SetupFrame(status, SetupStep.Server, listOfNotNull(Hint(Action.A, "Connect", vm::connect), diag), back, note) {
                 StepTitle("Which server?")
                 StepSub("The address of your Tandem server, as you open it in a browser.")
                 SetupField(
@@ -90,13 +90,13 @@ internal fun ServerStep(vm: SetupViewModel, status: TopStatus, diagnostics: () -
 }
 
 @Composable
-private fun Entry(vm: SetupViewModel, status: TopStatus, back: (() -> Unit)?, note: String?, diag: Hint) {
+private fun Entry(vm: SetupViewModel, status: TopStatus, back: (() -> Unit)?, note: String?, diag: Hint?) {
     val method by vm.method.collectAsState()
     val error by vm.error.collectAsState()
     val name by vm.deviceName.collectAsState()
     val focus = remember { FocusRequester() }
     val confirm = if (method == SignInMethod.Register) "Create account" else "Sign in"
-    SetupFrame(status, SetupStep.Server, listOf(Hint(Action.A, confirm, vm::signIn), diag), back, note) {
+    SetupFrame(status, SetupStep.Server, listOfNotNull(Hint(Action.A, confirm, vm::signIn), diag), back, note) {
         StepTitle(method.label)
         when (method) {
             SignInMethod.Code -> {
