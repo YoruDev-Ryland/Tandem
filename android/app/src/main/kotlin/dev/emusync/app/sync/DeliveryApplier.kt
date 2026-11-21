@@ -17,13 +17,17 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** What a pass did. [waitingOn] holds the emulators whose running held back at least one delivery. */
+/**
+ * What a pass did. [waitingOn] holds the emulators whose running held back at least one delivery. [reachedServer] is
+ * false when the pass's last delivery fetch failed (offline, server error), so it saw only part of the list or none.
+ */
 data class ApplyReport(
     val applied: Int,
     val skipped: Int,
     val failed: Int,
     val waitingForEmulator: Int,
     val waitingOn: Set<String> = emptySet(),
+    val reachedServer: Boolean = true,
 )
 
 /**
@@ -186,7 +190,9 @@ class DeliveryApplier(
         val seen = HashSet<String>()
         var applied = 0; var skipped = 0; var failed = 0; var waiting = 0
         val waitingOn = LinkedHashSet<String>()
+        var reached = false
         for (i in 1..MAX_PASSES) {
+            reached = false
             val fetched = try {
                 api.deliveries()
             } catch (e: ApiException) {
@@ -196,6 +202,7 @@ class DeliveryApplier(
             } catch (e: kotlinx.serialization.SerializationException) {
                 log("deliveries: server response not understood (update the app?)"); break
             }
+            reached = true
             onFetched()
             val list = fetched.filter { filter(it) && it.id !in seen }
             if (list.isEmpty()) break
@@ -209,7 +216,7 @@ class DeliveryApplier(
                 }
             }
         }
-        return ApplyReport(applied, skipped, failed, waiting, waitingOn)
+        return ApplyReport(applied, skipped, failed, waiting, waitingOn, reached)
     }
 
     private suspend fun applyOne(d: DeliveryDto): Outcome = try {

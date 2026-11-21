@@ -14,8 +14,8 @@ class WorkPlannerTest {
         p.tick(), p.monitor(), p.periodicScan(), p.explicitScan(),
     ).flatten()
 
-    private fun report(waitingOn: Set<String> = emptySet(), applied: Int = 0) =
-        ApplyReport(applied, 0, 0, waitingOn.size, waitingOn)
+    private fun report(waitingOn: Set<String> = emptySet(), applied: Int = 0, reachedServer: Boolean = true) =
+        ApplyReport(applied, 0, 0, waitingOn.size, waitingOn, reachedServer)
 
     /** Runs an exit of [id] and records what it did: "apply(requested)" or "forget". */
     private fun exit(p: WorkPlanner, id: String, result: ApplyReport = report(applied = 1)): Pair<List<String>, ApplyReport?> {
@@ -103,5 +103,38 @@ class WorkPlannerTest {
         p.applied(SyncWork.ApplyAll, report(waitingOn = setOf("eden")))
         assertEquals(listOf("apply(false)"), exit(p, "eden").first)
         assertEquals(listOf("apply(false)"), exit(p, "azahar").first)
+    }
+
+    // ---- follow-up 1: the flag records exactly the latest asked-for apply ----
+
+    @Test fun an_explicit_apply_that_reached_the_server_replaces_stale_flags() {
+        val flags = MemoryApplyOnExitFlags()
+        flags.flag(setOf("eden", "azahar"))   // left by an exit the service never saw
+        val p = WorkPlanner(autoApply = false, flags)
+        p.applied(SyncWork.ApplyRequested, report(waitingOn = setOf("azahar")))
+        assertEquals(setOf("azahar"), flags.flagged())
+        assertEquals(listOf("forget"), exit(p, "eden").first)   // no unprompted apply from the stale flag
+    }
+
+    @Test fun an_explicit_apply_that_never_reached_the_server_keeps_the_flags() {
+        val flags = MemoryApplyOnExitFlags()
+        flags.flag(setOf("eden"))
+        val p = WorkPlanner(autoApply = false, flags)
+        p.applied(SyncWork.ApplyRequested, report(reachedServer = false))
+        assertEquals(setOf("eden"), flags.flagged())
+    }
+
+    @Test fun an_exit_apply_that_never_reached_the_server_keeps_the_request() {
+        val flags = MemoryApplyOnExitFlags()
+        val p = WorkPlanner(autoApply = false, flags)
+        p.applied(SyncWork.ApplyRequested, report(waitingOn = setOf("eden")))
+        exit(p, "eden", result = report(reachedServer = false))
+        assertEquals(setOf("eden"), flags.flagged())
+    }
+
+    @Test fun flagged_emulators_are_the_exits_to_watch_for_at_session_start() {
+        val flags = MemoryApplyOnExitFlags()
+        flags.flag(setOf("eden"))
+        assertEquals(setOf("eden"), WorkPlanner(autoApply = false, flags).awaitingExit())
     }
 }

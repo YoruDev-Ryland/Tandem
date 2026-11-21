@@ -84,7 +84,9 @@ class DeliveryApplierTest {
             configs += req; n++
             return ConfigUploadResponse(configStatus, "bundle", "cup$n")
         }
+        var deliveriesError: Throwable? = null
         override suspend fun deliveries(): List<DeliveryDto> {
+            deliveriesError?.let { throw it }
             deliveryCalls++
             val acked = acks.map { it.first }.toSet()
             return (pages.removeFirstOrNull() ?: standing).filter { it.id !in acked }
@@ -273,6 +275,13 @@ class DeliveryApplierTest {
         assertEquals(1, a.applyAll().skipped)
         assertEquals(h("bbbb"), api.configs.single().files.single().hash)
         assertEquals(DeliveryResult.SkippedLocalChanged, ackOf("c1").result)
+    }
+
+    @Test fun a_pass_reports_whether_it_reached_the_server() = runBlocking {
+        api.standing = emptyList()
+        assertTrue(applier().applyAll().reachedServer)
+        api.deliveriesError = IOException("offline")
+        assertFalse(applier().applyAll().reachedServer)
     }
 
     @Test fun failed_upload_of_local_change_leaves_delivery_unacked() = runBlocking {

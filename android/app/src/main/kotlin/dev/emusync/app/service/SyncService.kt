@@ -255,6 +255,9 @@ class SyncService : Service() {
                     publish()
                 },
             )
+            // An emulator an asked-for apply waits on may have closed while the service was down: the first monitor
+            // that finds it closed finishes the apply as an exit would.
+            sess.exits.assumeRunning(planner.awaitingExit())
             try {
                 launch { sess.queue.consume { handle(sess, it) } }
                 launch { every(TICK_MS) { offer(planner.tick()) } }

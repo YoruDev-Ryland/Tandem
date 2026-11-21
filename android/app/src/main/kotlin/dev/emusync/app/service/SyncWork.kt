@@ -19,6 +19,8 @@ interface ApplyOnExitFlags {
     fun flagged(): Set<String>
     fun flag(ids: Set<String>)
     fun clear(id: String)
+    /** Makes the flagged set exactly [ids]. */
+    fun replace(ids: Set<String>)
 }
 
 class MemoryApplyOnExitFlags : ApplyOnExitFlags {
@@ -26,6 +28,7 @@ class MemoryApplyOnExitFlags : ApplyOnExitFlags {
     @Synchronized override fun flagged(): Set<String> = ids.toSet()
     @Synchronized override fun flag(ids: Set<String>) { this.ids += ids }
     @Synchronized override fun clear(id: String) { ids -= id }
+    @Synchronized override fun replace(ids: Set<String>) { this.ids.clear(); this.ids += ids }
 }
 
 /** The flags persisted in [StateStore], so a session or process restart keeps them. */
@@ -33,6 +36,7 @@ class StoredApplyOnExitFlags(private val store: StateStore) : ApplyOnExitFlags {
     override fun flagged(): Set<String> = store.applyOnExit
     override fun flag(ids: Set<String>) { if (!store.applyOnExit.containsAll(ids)) store.flagApplyOnExit(ids) }
     override fun clear(id: String) { if (id in store.applyOnExit) store.clearApplyOnExit(id) }
+    override fun replace(ids: Set<String>) { if (store.applyOnExit != ids) store.setApplyOnExit(ids) }
 }
 
 /**
@@ -56,16 +60,26 @@ class WorkPlanner(private val autoApply: Boolean, private val flags: ApplyOnExit
     /** "Sync now", a resolve, a setup choice, "Apply deliveries now". Always applies (marker recovery runs at the start of every apply). */
     fun explicitApply(): List<SyncWork> = listOf(SyncWork.ApplyRequested)
 
-    /** After an apply pass ran [work]: the emulators an asked-for apply waited on finish it when they close. */
+    /**
+     * After an apply pass ran [work]: the emulators an asked-for apply waited on finish it when they close. A pass that
+     * reached the server saw every delivery, so its waiting set replaces the flags (dropping any left by an exit the
+     * service missed); one that didn't keeps them and only adds what it saw held.
+     */
     fun applied(work: SyncWork, report: ApplyReport) {
-        if (work == SyncWork.ApplyRequested && report.waitingOn.isNotEmpty()) flags.flag(report.waitingOn)
+        if (work != SyncWork.ApplyRequested) return
+        if (report.reachedServer) flags.replace(report.waitingOn)
+        else if (report.waitingOn.isNotEmpty()) flags.flag(report.waitingOn)
     }
+
+    /** The emulators an asked-for apply still waits on; the session treats them as running until it sees them closed. */
+    fun awaitingExit(): Set<String> = flags.flagged()
 
     /**
      * Emulator [id] exited. Applies through [apply] (the normal applier pass, which re-checks the process and backs
      * up before writing) when auto-apply is on or an asked-for apply waited for it; `requested` tells the applier to
      * run even if this session held nothing. Otherwise only [forget]s the waiting entries. The flag is cleared once
-     * the pass returns, and set again when the emulator held the deliveries back once more (reopened at once).
+     * the pass returns, and set again when the emulator held the deliveries back once more (reopened at once); it stays when the pass
+     * never reached the server.
      * Returns the pass's report, or null when nothing was applied.
      */
     suspend fun exited(id: String, apply: suspend (requested: Boolean) -> ApplyReport, forget: suspend () -> Unit): ApplyReport? {
@@ -75,7 +89,8 @@ class WorkPlanner(private val autoApply: Boolean, private val flags: ApplyOnExit
             return null
         }
         val r = apply(requested)
-        if (requested) {
+        // A pass that never reached the server finished nothing: the request stands until one does.
+        if (requested && r.reachedServer) {
             flags.clear(id)
             if (id in r.waitingOn) flags.flag(setOf(id))
         }

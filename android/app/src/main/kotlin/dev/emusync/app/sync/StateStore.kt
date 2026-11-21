@@ -247,6 +247,7 @@ class StateStore(
     val applyOnExit: Set<String> get() = synchronized(lock) { data.applyOnExit }
     fun flagApplyOnExit(ids: Set<String>) = mutate { it.copy(applyOnExit = it.applyOnExit + ids) }
     fun clearApplyOnExit(id: String) = mutate { it.copy(applyOnExit = it.applyOnExit - id) }
+    fun setApplyOnExit(ids: Set<String>) = mutate { it.copy(applyOnExit = ids) }
 
     var signInForm: SignInForm
         get() = synchronized(lock) { data.signInForm }
