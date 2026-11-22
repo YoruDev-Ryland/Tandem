@@ -41,6 +41,16 @@ public sealed class ServerOptions
     public string? DiscTitleNamesUrl { get; set; } = "https://www.gametdb.com/wiitdb.txt?LANG=EN";
     public int TitleNamesRefreshDays { get; set; } = 7;
 
+    /// <summary>Fetches cover art for the focused game from libretro-thumbnails and GameTDB (ART; on by default). Off, no
+    /// art request leaves the server and every game shows the no-art card.</summary>
+    public bool EnableArt { get; set; } = true;
+    /// <summary>A cover bigger than this is discarded and counted as a miss.</summary>
+    public long ArtMaxImageBytes { get; set; } = 2L * 1024 * 1024;
+    /// <summary>Cap on the art cache; past it the least recently shown covers are deleted.</summary>
+    public long ArtCacheBytes { get; set; } = 500L * 1024 * 1024;
+    /// <summary>A game whose sources had nothing is asked again after this many days.</summary>
+    public int ArtMissDays { get; set; } = 7;
+
     /// <summary>Below this many free bytes in the data directory, uploads get 507 storage_full, /healthz reports degraded
     /// and admins are notified once (default 1 GiB).</summary>
     public long MinFreeBytes { get; set; } = 1L << 30;

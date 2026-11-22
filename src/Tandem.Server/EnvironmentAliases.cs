@@ -16,6 +16,7 @@ public static class EnvironmentAliases
         ("SERVER_NAME", "ServerName"),
         ("WEB_ROOT", "WebRoot"),
         ("TITLE_NAMES", "EnableTitleNames"),
+        ("ART", "EnableArt"),
         ("MIN_FREE_BYTES", "MinFreeBytes"),
         ("SILENT_DEVICE_HOURS", "SilentDeviceHours"),
         ("KNOWN_PROXIES", "KnownProxies"),

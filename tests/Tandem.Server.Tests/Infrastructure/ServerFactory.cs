@@ -20,6 +20,7 @@ public sealed class ServerFactory : WebApplicationFactory<Program>
         ["Tandem:EnableBackups"] = "false",
         ["Tandem:EnableNotifyChecks"] = "false",
         ["Tandem:EnableTitleNames"] = "false",
+        ["Tandem:EnableArt"] = "false",
     };
 
     public FakeTimeProvider Time { get; } = new(DateTimeOffset.Parse("2026-11-19T12:00:00Z"));

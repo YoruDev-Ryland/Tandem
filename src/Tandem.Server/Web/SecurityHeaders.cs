@@ -18,7 +18,7 @@ public static partial class SecurityHeaders
         return "default-src 'self'; " +
                $"script-src 'self'{scripts}; " +
                "style-src 'self' 'unsafe-inline'; " +
-               "img-src 'self' data:; " +
+               "img-src 'self' data: blob:; " +
                "font-src 'self' data:; " +
                "connect-src 'self'; " +
                "object-src 'none'; " +
