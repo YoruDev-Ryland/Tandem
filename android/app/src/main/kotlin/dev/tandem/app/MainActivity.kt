@@ -62,7 +62,7 @@ import dev.tandem.app.ui.screens.ActivityScreen
 import dev.tandem.app.ui.screens.ConflictsActions
 import dev.tandem.app.ui.screens.ConflictsScreen
 import dev.tandem.app.ui.screens.DeviceActions
-import dev.tandem.app.ui.screens.DeviceScreen
+import dev.tandem.app.ui.screens.ShelfScreen
 import dev.tandem.app.ui.screens.SettingsScreen
 import dev.tandem.app.ui.screens.actions
 import dev.tandem.app.ui.screens.gameUrl
@@ -86,7 +86,7 @@ import dev.tandem.app.ui.theme.themeModeOf
 private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
 private const val DEBUG_ACTIVITY = "dev.tandem.app.debug.DebugActivity"
 private const val REQ_NOTIFICATIONS = 7
-private val TABS = listOf("This device", "Activity", "Conflicts", "Settings")
+private val TABS = listOf("Library", "Activity", "Conflicts", "Settings")
 private const val TAB_DEVICE = 0
 private const val TAB_ACTIVITY = 1
 private const val TAB_CONFLICTS = 2
@@ -246,7 +246,7 @@ private fun TandemRoot(vm: AppViewModel, activity: MainActivity) {
     val synced = if (status.signedIn && status.server != ServerConn.Revoked) syncedAgo(status.lastSyncedAt, now) else null
     CompositionLocalProvider(LocalStatusLine provides synced, LocalNotice provides notice, LocalTabEntrance provides entrance) {
     when (tab) {
-        TAB_DEVICE -> DeviceScreen(
+        TAB_DEVICE -> ShelfScreen(
             device, top,
             DeviceActions(
                 openGame = { emu, key -> vm.serverUrl?.let { activity.view(gameUrl(it, emu, key)) } },

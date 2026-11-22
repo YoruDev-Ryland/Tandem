@@ -53,7 +53,7 @@ class MainActivityLaunchTest {
     }
 
     @Test fun opensOnThisDeviceAndTheBumpersSwitchTabs() {
-        compose.onNodeWithText("Emulators").assertIsDisplayed()
+        compose.onNodeWithText("Emulator settings").assertIsDisplayed()   // the Library tab's hint
         compose.key(KeyEvent.KEYCODE_BUTTON_R1)
         compose.key(KeyEvent.KEYCODE_BUTTON_R1)
         compose.key(KeyEvent.KEYCODE_BUTTON_R1)
@@ -63,7 +63,7 @@ class MainActivityLaunchTest {
         compose.onNodeWithText(AUTO_APPLY_COPY).assertIsDisplayed()
         compose.key(KeyEvent.KEYCODE_BUTTON_B)   // B goes back to This device
         compose.onNodeWithText(AUTO_APPLY_COPY).assertDoesNotExist()
-        compose.onNodeWithText("Emulators").assertIsDisplayed()
+        compose.onNodeWithText("Emulator settings").assertIsDisplayed()   // the Library tab's hint
     }
 
     @Test fun yOnThisDeviceOpensSettingsEmulatorsOnThatEmulator() {

@@ -26,7 +26,8 @@ class SuccessLinesTest {
     }
 
     @Test fun a_landed_delivery_says_what_is_in_place_and_from_where() {
-        val row = game("0100ABF008968000", "Pokémon Sword", dev.tandem.app.model.DeviceGameState.HasIt)
+        val row = shelfGame("eden", "0100ABF008968000", "Pokémon Sword", dev.tandem.app.model.DeviceGameState.HasIt, dev.tandem.app.model.DeviceGameState.Newest,
+            devices = listOf("dev-thor" to "Thor", "dev-odin" to "Odin 3")).copy(newestOnDeviceName = "Odin 3")
         assertEquals("Pokémon Sword from Odin 3 is in place.", receivedLine(ReceivedDelivery("d", "eden", "0100ABF008968000", null), "Eden", row))
         assertEquals("Pokémon Sword is in place.", receivedLine(ReceivedDelivery("d", "eden", "x", "Pokémon Sword"), "Eden", null))
         assertEquals("Emerald is in place.", receivedLine(ReceivedDelivery("d", "retroarch", "retroarch/Emerald", null), "RetroArch", null))

@@ -141,12 +141,8 @@ internal fun hereCopy(state: DeviceGameState?, emulator: String): Pair<String, T
     DeviceGameState.NotInstalled, null -> "not on this device" to Tone.Ink3
 }
 
-/** A system's name for the card's kicker. */
-private val SYSTEM_NAMES = mapOf(
-    "GC" to "GameCube", "WII" to "Wii", "GB" to "Game Boy", "GBC" to "Game Boy Color", "GBA" to "Game Boy Advance",
-    "DS" to "Nintendo DS", "3DS" to "Nintendo 3DS", "SWITCH" to "Switch", "NES" to "NES", "SNES" to "SNES", "N64" to "N64",
-    "PSX" to "PlayStation", "PSP" to "PSP", "VITA" to "PS Vita", "MD" to "Mega Drive",
-)
+/** A system's name for the card's kicker, where it says more than the code and still fits the card's line. */
+private val SYSTEM_NAMES = mapOf("GC" to "GameCube", "PSX" to "PS1", "VITA" to "PS Vita", "MD" to "Mega Drive")
 
 private fun relative(iso: String, now: Instant): String? {
     val at = runCatching { Instant.parse(iso) }.getOrNull() ?: return null
