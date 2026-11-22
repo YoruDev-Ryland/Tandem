@@ -64,7 +64,7 @@ export async function fetchArt(
   return once();
 }
 
-export const getConflicts =() => api<T.ConflictRow[]>("GET", "/v1/web/conflicts");
+export const getConflicts = () => api<T.ConflictRow[]>("GET", "/v1/web/conflicts");
 export const resolveConflict = (itemId: string, req: T.ResolveConflictRequest) =>
   api<void>("POST", `/v1/conflicts/${enc(itemId)}/resolve`, req);
 export const bulkFirstSync = (deviceId: string, choice: T.FirstSyncChoice, itemIds?: string[]) =>

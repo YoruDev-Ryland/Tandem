@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cardCopy, cursorIndex, railLabel, railRows, shelfOrder, systemName } from "../src/lib/shelf";
+import { cardCopy, cursorIndex, railLabel, railLabels, railRows, shelfOrder, systemName } from "../src/lib/shelf";
 import { SPINES, spineColour, spineInk, spineKey } from "../src/lib/spines";
 import { fetchArt } from "../src/lib/api/endpoints";
 import { AYN, ODIN, RP, THOR, dev, game } from "./fixtures/home";
@@ -14,6 +14,12 @@ describe("shelf order", () => {
     expect(shelfOrder(rows).map((g) => g.gameKey)).toEqual(["a", "b", "c", "A", "Z"]);
   });
 
+  // The same order and fixture as the app's ShelfTest.order_names_by_code_point_ignoring_case.
+  it("orders names by code point ignoring case, as the app does", () => {
+    const rows = ["Zelda", "Ōkami", "okami", "Éclair", "eve", "Apple", "_Underscore"].map((n, i) => named(`k${i}`, n));
+    expect(shelfOrder(rows).map((g) => g.displayName)).toEqual(["_Underscore", "Apple", "eve", "okami", "Zelda", "Éclair", "Ōkami"]);
+  });
+
   it("does not change the list it is given", () => {
     const rows = [named("b", "b"), named("a", "a")];
     shelfOrder(rows);
@@ -22,18 +28,24 @@ describe("shelf order", () => {
 });
 
 describe("rail", () => {
-  it("labels drop AYN, go to capitals and cut to five", () => {
-    expect(railLabel("AYN Thor")).toBe("THOR");
-    expect(railLabel("ayn odin 3")).toBe("ODIN");
-    expect(railLabel("Odin3")).toBe("ODIN3");
-    expect(railLabel("Steam Deck")).toBe("STEAM");
+  // The same table as the app's ShelfTest.rail_label_drops_ayn_and_cuts_to_five.
+  it.each([
+    ["AYN Thor", "THOR"], ["ayn thor", "THOR"], ["ayn odin 3", "ODIN3"], ["Odin3", "ODIN3"], ["Odin 3", "ODIN3"],
+    ["Steam Deck", "STEAM"], ["Odin3 (2)", "ODIN3·2"], ["Retroid Pocket 5 (3)", "RETRO·3"],
+  ])("rail labels: the shared table: %s → %s", (name, label) => {
+    expect(railLabel(name)).toBe(label);
+  });
+
+  it("numbers names that cut to the same label", () => {
+    expect(railLabels(["Odin 3", "Odin3 Pro", "Odin3 (2)"])).toEqual(["ODIN3", "ODIN3·2", "ODIN3·3"]);
+    expect(railLabels(["AYN Thor", "Odin3", "Odin3 (2)"])).toEqual(["THOR", "ODIN3", "ODIN3·2"]);
   });
 
   it("orders devices by name and keeps three rows", () => {
     const g = game({ emulatorId: "eden", gameKey: "k", devices: [dev(THOR, "Newest"), dev(ODIN, "HasIt"), dev(RP, "Behind"), dev(AYN, "Pending")] });
     const rows = railRows([g]);
     expect(rows.map((r) => r.name)).toEqual(["Ayn", "Odin 3", "Retroid"]);
-    expect(rows.map((r) => r.label)).toEqual(["AYN", "ODIN", "RETRO"]);
+    expect(rows.map((r) => r.label)).toEqual(["AYN", "ODIN3", "RETRO"]);
     expect(rows.map((r) => r.deviceId)).toEqual([AYN, ODIN, RP]);
   });
 
@@ -98,6 +110,11 @@ describe("card copy", () => {
     expect(c.kicker).toBe("PSP · PPSSPP");
   });
 
+  it("names systems with the app's table: only GC, PSX, VITA and MD are spelled out", () => {
+    expect(["GC", "PSX", "VITA", "MD", "GBA", "DS", "SWITCH"].map(systemName)).toEqual(
+      ["GameCube", "PS1", "PS Vita", "Mega Drive", "GBA", "DS", "SWITCH"]);
+  });
+
   it("leaves the system out of the kicker when it cannot be told", () => {
     const g = game({ emulatorId: "retroarch", gameKey: "retroarch/Mystery" });
     expect(cardCopy(g, "RetroArch", [g], now).kicker).toBe("RetroArch");
@@ -107,12 +124,16 @@ describe("card copy", () => {
 
 describe("cursor", () => {
   it("follows the remembered game when the list changes around it", () => {
-    expect(cursorIndex({ key: "c", index: 2 }, ["x", "a", "b", "c"])).toBe(3);
+    expect(cursorIndex({ key: "c", keys: ["a", "b", "c"] }, ["x", "a", "b", "c"])).toBe(3);
   });
-  it("falls back to the nearest earlier place when the game is gone", () => {
-    expect(cursorIndex({ key: "z", index: 5 }, ["a", "b", "c"])).toBe(2);
-    expect(cursorIndex({ key: "b", index: 1 }, ["a", "c"])).toBe(1);
-    expect(cursorIndex({ key: "a", index: 0 }, [])).toBe(0);
+  // The app's ShelfCursor rule: the nearest earlier game still there, not the next one.
+  it("falls back to the nearest earlier game still there when the game is gone", () => {
+    expect(cursorIndex({ key: "b", keys: ["a", "b", "c"] }, ["a", "c"])).toBe(0);
+    expect(cursorIndex({ key: "c", keys: ["a", "b", "c", "d"] }, ["a", "d"])).toBe(0);
+    expect(cursorIndex({ key: "c", keys: ["a", "b", "c", "d"] }, ["d", "b"])).toBe(1);
+    expect(cursorIndex({ key: "a", keys: ["a", "b"] }, ["b"])).toBe(0);
+    expect(cursorIndex({ key: "z", keys: [] }, ["a", "b", "c"])).toBe(0);
+    expect(cursorIndex({ key: "a", keys: ["a"] }, [])).toBe(0);
     expect(cursorIndex(undefined, ["a"])).toBe(0);
   });
 });

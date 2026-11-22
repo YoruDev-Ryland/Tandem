@@ -44,7 +44,8 @@ describe("Games shelf", () => {
   it("has a shelf per emulator in module order, with no All", async () => {
     render(Games);
     await screen.findByText("Pokémon Brilliant Diamond");
-    expect(tabNames()).toEqual(["Eden", "RetroArch", "PPSSPP", "melonDS"]);
+    // The spec's module order (the app's ModuleRegistry): Eden, Dolphin, RetroArch, melonDS, Azahar, PPSSPP, Vita3K.
+    expect(tabNames()).toEqual(["Eden", "RetroArch", "melonDS", "PPSSPP"]);
     expect(screen.getByRole("heading", { name: /Games/ }).textContent).toContain("3 games");
   });
 
@@ -106,7 +107,7 @@ describe("Games shelf", () => {
     render(Games);
     await screen.findByText("Pokémon Brilliant Diamond");
     // Four devices in the data; the rail keeps three (by name), the card lists all four.
-    expect([...document.querySelectorAll(".labels li")].map((l) => l.textContent)).toEqual(["AYN", "ODIN", "RETRO"]);
+    expect([...document.querySelectorAll(".labels li")].map((l) => l.textContent)).toEqual(["AYN", "ODIN3", "RETRO"]);
     const cols = [...document.querySelectorAll(".rail .col")];
     expect(cols).toHaveLength(spines().length);
     for (const c of cols) expect(c.querySelectorAll('[role="img"]')).toHaveLength(3);
@@ -151,14 +152,47 @@ describe("Games shelf", () => {
     rows = [game({ emulatorId: "melonds", gameKey: "nds/a", displayName: "A first game" }), ...games.filter((g) => g.emulatorId === "melonds")];
     render(Games);
     await screen.findByText("A first game");
-    const long = spines()[1]!.querySelector(".title") as HTMLElement;
+    const long = spines()[1]!.querySelector(".spine > span") as HTMLElement;
     expect(long.textContent).toBe("L".repeat(90));
-    expect(long.classList.contains("title")).toBe(true);
-    // jsdom has no layout: the clipping is pinned in the spine title's own rule.
-    const src = readFileSync(join(process.cwd(), "src/lib/ui/Shelf.svelte"), "utf8");
-    const rule = /\n  \.title \{([^}]*)\}/.exec(src)![1]!;
-    for (const d of ["max-height: 100%", "overflow: hidden", "text-overflow: ellipsis", "white-space: nowrap"]) expect(rule).toContain(d);
+    // jsdom has no layout, but it does cascade the component's CSS (injected in tests): the spine title is cut.
+    const cs = getComputedStyle(long);
+    expect([cs.maxHeight, cs.overflow, cs.textOverflow, cs.whiteSpace, cs.writingMode]).toEqual(["100%", "hidden", "ellipsis", "nowrap", "vertical-rl"]);
     expect(screen.getByRole("button", { name: `${"L".repeat(90)}, DS` })).toBeTruthy();
+  });
+
+  it("clamps a long title in the card to two lines", async () => {
+    rows = [game({ emulatorId: "melonds", gameKey: "nds/l", displayName: "L".repeat(90) })];
+    render(Games);
+    await screen.findByText("L".repeat(90));
+    const title = card().querySelector(".text > div:nth-child(2)") as HTMLElement;
+    expect(title.textContent).toBe("L".repeat(90));
+    expect(title.getAttribute("title")).toBe("L".repeat(90));
+    const cs = getComputedStyle(title);
+    expect([cs.display, cs.overflow, cs.getPropertyValue("-webkit-line-clamp") || cs.getPropertyValue("line-clamp")]).toEqual(["-webkit-box", "hidden", "2"]);
+  });
+
+  it("enter on a spine reached with Tab opens that spine's game, not the cursor's", async () => {
+    render(Games);
+    await screen.findByText("Pokémon Brilliant Diamond");
+    const other = spines()[2]!.querySelector("button")!;
+    other.focus();
+    await fireEvent.click(other, { detail: 0 });
+    expect(router.path).toBe(gamePath("eden", "0100ABF008968000"));
+  });
+
+  it("draws waiting by its shape, not only its colour, where the word has no room", async () => {
+    render(Games);
+    await screen.findByText("Pokémon Brilliant Diamond");
+    dispatch("right");
+    dispatch("right");
+    await waitFor(() => expect(cardTitle()).toBe("Pokémon Sword"));   // Thor waits; the card has no room for the word
+    const marks = [...document.querySelectorAll<HTMLElement>(".rail .cell, .lines .cell")];
+    const waiting = marks.find((m) => m.classList.contains("waiting"))!;
+    const older = marks.find((m) => m.classList.contains("older"))!;
+    expect(getComputedStyle(waiting.querySelector(".word")!).display).toBe("none");
+    expect(waiting.querySelector("polygon")).not.toBeNull();
+    expect(older.querySelector("polygon")).toBeNull();
+    expect(waiting.querySelector("svg")!.innerHTML).not.toBe(older.querySelector("svg")!.innerHTML);
   });
 
   it("shows an unnamed game's key in mono, never as a title", async () => {
@@ -184,6 +218,11 @@ describe("Games shelf", () => {
     emit("saves");
     await waitFor(() => expect(spines()).toHaveLength(3));
     expect(cardTitle()).toBe("Bravo");
+    // A game in the middle goes: the nearest earlier one, as in the app (not the next one).
+    rows = [ok("a", "Alpha"), ok("c", "Charlie"), ok("z", "Zulu")];
+    emit("saves");
+    await waitFor(() => expect(spines().some((s) => s.textContent?.includes("Charlie"))).toBe(true));
+    expect(cardTitle()).toBe("Alpha");
   });
 
   it("shows the no-art cover when art fails, and the image when it comes", async () => {

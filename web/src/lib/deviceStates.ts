@@ -37,13 +37,23 @@ export type Presence = "newest" | "older" | "coming" | "waiting" | "empty" | "ab
 
 export interface MatrixColumn { id: string; name: string }
 
+/**
+ * Names in the app's order (Kotlin's String.CASE_INSENSITIVE_ORDER): by code point, ignoring case, with no locale
+ * collation, so "Ōkami" sorts after "Zelda" on both.
+ */
+export function byName(a: string, b: string): number {
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
 /** One column per device that appears in any row, by name; repeated names get a number. */
 export function matrixColumns(rows: GameRow[]): MatrixColumn[] {
   const seen = new Map<string, string>();
   for (const r of rows) for (const d of r.devices) if (!seen.has(d.deviceId)) seen.set(d.deviceId, d.deviceName);
   const cols = [...seen]
     .map(([id, name]) => ({ id, name }))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id));
+    .sort((a, b) => byName(a.name, b.name) || byName(a.id, b.id));
   const count = new Map<string, number>();
   return cols.map((c) => {
     const n = (count.get(c.name) ?? 0) + 1;

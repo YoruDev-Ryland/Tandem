@@ -101,6 +101,19 @@ describe.each([
   });
 });
 
+describe("the shelf matches the app (EmuColors)", () => {
+  it("has the app's raised card colour in both themes", () => {
+    expect(resolve(dark, "--raised").toLowerCase()).toBe("#1c1c1b");
+    expect(resolve(light, "--raised").toLowerCase()).toBe("#f8f7f3");
+  });
+  it("draws the shelf edge in ink2 in dark (no glare) and ink in light", () => {
+    expect(resolve(dark, "--shelf-edge")).toBe(resolve(dark, "--ink2"));
+    expect(resolve(light, "--shelf-edge")).toBe(resolve(light, "--ink"));
+    const island = parse(block('[data-theme="light"]:not(:root)'));
+    expect(island["--shelf-edge"]).toBe(resolve(light, "--ink"));
+  });
+});
+
 describe("light theme via the system preference", () => {
   it("repeats the data-theme light values", () => {
     const media = css.slice(css.indexOf("@media (prefers-color-scheme: light)"));

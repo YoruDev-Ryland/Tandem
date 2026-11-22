@@ -15,10 +15,10 @@
   import ErrorLine from "../lib/ui/ErrorLine.svelte";
   import Field from "../lib/ui/Field.svelte";
   import HintBar from "../lib/ui/HintBar.svelte";
+  import { EMULATOR_IDS } from "../lib/api/types";
   import List from "../lib/ui/List.svelte";
 
   const LIMIT = 50;
-  const EMULATOR_IDS = ["eden", "retroarch", "azahar", "ppsspp", "vita3k", "dolphin", "melonds"];
 
   // Filters live in the URL so other pages can link here.
   const query = $derived(new URLSearchParams(router.search));

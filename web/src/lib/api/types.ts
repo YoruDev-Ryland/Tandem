@@ -26,7 +26,8 @@ export type SetupStepKind =
   | "ChooseConfig";
 
 export type EmulatorId = "eden" | "retroarch" | "azahar" | "ppsspp" | "vita3k" | "dolphin" | "melonds";
-export const EMULATOR_IDS: readonly EmulatorId[] = ["eden", "retroarch", "azahar", "ppsspp", "vita3k", "dolphin", "melonds"];
+/** Module order: the app's ModuleRegistry order, which the shelf's strip and the gamepad's Up/Down follow. */
+export const EMULATOR_IDS: readonly EmulatorId[] = ["eden", "dolphin", "retroarch", "melonds", "azahar", "ppsspp", "vita3k"];
 
 // ---- Errors, server, accounts ----
 export interface ErrorResponse { code: string; message: string }

@@ -22,8 +22,9 @@
   // the same shelf and game.
   const params = new URLSearchParams(router.search);
   let chosen = $state<string | null>(params.get("e"));
-  let memory = $state<Record<string, ShelfMemory>>(
-    params.get("e") && params.get("g") ? { [params.get("e")!]: { key: params.get("g")!, index: 0 } } : {},
+  // Raw (not a deep proxy), so the keys stored are the shelf's own array and compare by identity; changed by reassigning.
+  let memory = $state.raw<Record<string, ShelfMemory>>(
+    params.get("e") && params.get("g") ? { [params.get("e")!]: { key: params.get("g")!, keys: [] } } : {},
   );
   let query = $state("");
 
@@ -52,16 +53,16 @@
   });
   const elsewhereCount = $derived(elsewhere.reduce((n, x) => n + x.count, 0));
 
-  const index = $derived(cursorIndex(memory[emulator], shelf.map((g) => g.gameKey)));
+  const keys = $derived(shelf.map((g) => g.gameKey));
+  const index = $derived(cursorIndex(memory[emulator], keys));
   const focused = $derived(shelf[index] as GameRow | undefined);
   const rail = $derived(railRows(all));
   const copy = $derived(focused ? cardCopy(focused, emulatorName(emulator), all) : null);
 
-  // The cursor follows its game when the list changes; a game that went away leaves it at the nearest place.
+  // The cursor follows its game when the list changes; a game that went away leaves it on the nearest earlier one.
   $effect(() => {
-    if (focused && (memory[emulator]?.key !== focused.gameKey || memory[emulator]?.index !== index)) {
-      memory[emulator] = { key: focused.gameKey, index };
-    }
+    const m = memory[emulator];
+    if (focused && (m?.key !== focused.gameKey || m.keys !== keys)) memory = { ...memory, [emulator]: { key: focused.gameKey, keys } };
   });
 
   $effect(() => {
@@ -75,7 +76,7 @@
 
   function select(i: number) {
     const g = shelf[i];
-    if (g) memory[emulator] = { key: g.gameKey, index: i };
+    if (g) memory = { ...memory, [emulator]: { key: g.gameKey, keys } };
   }
   function open(i: number) {
     const g = shelf[i];

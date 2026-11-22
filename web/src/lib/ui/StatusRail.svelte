@@ -44,7 +44,7 @@
       transition: width 120ms cubic-bezier(0.23, 1, 0.32, 1);
     }
   }
-  /* A 34 px column has no room for the "wait" word: the amber outline and the label say it. */
+  /* A 34 px column has no room for the "wait" word: the waiting glyph's own shape and the label say it. */
   .col :global(.word) {
     display: none;
   }

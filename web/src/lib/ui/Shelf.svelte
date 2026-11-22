@@ -59,8 +59,9 @@
   });
 
   function click(e: MouseEvent, i: number) {
-    // detail 0 is a keyboard activation (Enter on a focused spine): it opens the cursor game.
-    if (e.detail === 0 || i === index) onOpen(index);
+    // detail 0 is a keyboard activation (Enter on a Tab-focused spine): it opens that spine's game, which may not be
+    // the cursor's. A click selects a spine, and opens the card.
+    if (e.detail === 0 || i === index) onOpen(i);
     else onSelect(i);
   }
 </script>
@@ -110,27 +111,31 @@
     --spine-w: 34px;
     --spine-gap: 5px;
     --card-w: 262px;
-    --shelf-h: clamp(260px, calc(100vh - 480px), 400px);
+    /* Low floor, so on a short window the rail still clears the sticky hint bar. */
+    --shelf-h: clamp(200px, calc(100vh - 480px), 400px);
+    --label-w: 52px;
     --rail-gap: 2px;
     --mark-h: 20px;
     position: relative;
     display: grid;
-    grid-template-columns: var(--gutter) minmax(0, 1fr);
+    /* The labels' column starts at the page's left edge (the h1's), inside the content, not in the page margin. */
+    grid-template-columns: var(--label-w) minmax(0, 1fr);
+    padding-left: var(--gutter);
   }
   @media (max-width: 600px) {
     .shelf {
       --card-w: 224px;
       --shelf-h: 470px;
-      grid-template-columns: 46px minmax(0, 1fr);
+      --label-w: 50px;
     }
   }
 
-  /* The device labels sit in the gutter, level with their rail rows, and stay put while the shelf scrolls. */
+  /* The device labels sit in their own column, level with their rail rows, and stay put while the shelf scrolls. */
   .labels {
     grid-column: 1;
     align-self: start;
     margin: calc(var(--shelf-h) + 6px + 12px) 0 0;
-    padding: 0 6px 0 0;
+    padding: 0 8px 0 0;
     list-style: none;
     display: flex;
     flex-direction: column;
@@ -138,7 +143,7 @@
     font: 400 10px/var(--mark-h) "JetBrains Mono", ui-monospace, monospace;
     letter-spacing: 0.02em;
     color: var(--ink3);
-    text-align: right;
+    text-align: left;
     white-space: nowrap;
   }
 
@@ -237,6 +242,6 @@
 
   .edge {
     height: 6px;
-    background: var(--ink);
+    background: var(--shelf-edge);
   }
 </style>

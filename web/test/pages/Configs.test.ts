@@ -65,7 +65,7 @@ describe("Configs", () => {
     await screen.findByText("AYN handhelds");
     const nav = screen.getByRole("navigation", { name: "Sections" });
     expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(
-      ["Eden", "RetroArch", "Azahar", "PPSSPP", "Vita3K", "Dolphin", "melonDS"],
+      ["Eden", "Dolphin", "RetroArch", "melonDS", "Azahar", "PPSSPP", "Vita3K"],
     );
     // The first emulator with configs is shown.
     expect(within(nav).getByRole("link", { name: "RetroArch" }).getAttribute("aria-current")).toBe("page");
