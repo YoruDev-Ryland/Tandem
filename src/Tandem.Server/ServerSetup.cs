@@ -81,6 +81,7 @@ public static class ServerSetup
                 c.Timeout = Art.ArtFetcher.RequestTimeout;
                 c.DefaultRequestHeaders.UserAgent.ParseAdd(Art.ArtFetcher.UserAgent);
             })
+            .ConfigurePrimaryHttpMessageHandler(Art.ArtFetcher.CreatePrimaryHandler)
             .RemoveAllLoggers(); // one Information line per cover is noise
         builder.Services.AddSingleton<NotifyTriggers>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<NotifyTriggers>());

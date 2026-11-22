@@ -147,6 +147,87 @@ public class ArtEndpointTests
     }
 
     [Fact]
+    public async Task An_unreachable_source_is_a_short_transient_miss()
+    {
+        var sources = new FakeSources(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        using var f = Factory(sources);
+        var (device, _) = await f.Register(Email);
+        await device.UploadSave("GXBE69", "card", null, "dolphin");
+
+        Assert.Equal(HttpStatusCode.Accepted, (await device.GetAsync("/v1/web/art/dolphin/GXBE69")).StatusCode);
+        await Drain(f);
+        var second = await device.GetAsync("/v1/web/art/dolphin/GXBE69");
+
+        Assert.Equal(HttpStatusCode.NotFound, second.StatusCode);
+        Assert.Equal("art_unavailable", await ErrorCode(second)); // not no_art: clients don't remember it
+        Assert.Equal("private, max-age=3600", CacheControl(second));
+
+        f.Time.Advance(TimeSpan.FromMinutes(45));
+        var later = await device.GetAsync("/v1/web/art/dolphin/GXBE69");
+        Assert.Equal("private, max-age=900", CacheControl(later)); // only for what is left of the hour
+
+        f.Time.Advance(TimeSpan.FromMinutes(16));
+        Assert.Equal(HttpStatusCode.Accepted, (await device.GetAsync("/v1/web/art/dolphin/GXBE69")).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_failed_save_is_a_transient_miss_not_a_refetch_per_request()
+    {
+        var sources = new FakeSources(u => u == SsxCover ? FakeSources.Image(FakePng()) : FakeSources.NotFound());
+        using var f = Factory(sources);
+        var (device, _) = await f.Register(Email);
+        await device.UploadSave("GXBE69", "card", null, "dolphin");
+        // A directory where the image should go makes the store's move fail, as a full or read-only disk would.
+        Directory.CreateDirectory(Path.Combine(f.DataDirectory, "art", ArtStore.NameOf("dolphin", "GXBE69") + ".png"));
+
+        Assert.Equal(HttpStatusCode.Accepted, (await device.GetAsync("/v1/web/art/dolphin/GXBE69")).StatusCode);
+        await Drain(f);
+        var calls = sources.Calls;
+        var second = await device.GetAsync("/v1/web/art/dolphin/GXBE69");
+        await Drain(f);
+
+        Assert.Equal(HttpStatusCode.NotFound, second.StatusCode);
+        Assert.Equal("art_unavailable", await ErrorCode(second));
+        Assert.Equal(calls, sources.Calls);
+    }
+
+    [Fact]
+    public async Task The_size_cap_holds_without_a_content_length()
+    {
+        var big = FakePng(4096);
+        var sources = new FakeSources(u => u == SsxCover
+            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new OneWayStream(big)) }
+            : FakeSources.NotFound());
+        using var f = Factory(sources, maxImageBytes: 1024);
+        var (device, _) = await f.Register(Email);
+        await device.UploadSave("GXBE69", "card", null, "dolphin");
+
+        Assert.Equal(HttpStatusCode.Accepted, (await device.GetAsync("/v1/web/art/dolphin/GXBE69")).StatusCode);
+        await Drain(f);
+        var r = await device.GetAsync("/v1/web/art/dolphin/GXBE69");
+
+        Assert.Equal(HttpStatusCode.NotFound, r.StatusCode);
+        Assert.Equal("no_art", await ErrorCode(r));
+        Assert.Empty(Directory.GetFiles(Path.Combine(f.DataDirectory, "art"), "*.png"));
+    }
+
+    [Fact]
+    public async Task Content_without_a_length_is_capped_while_streaming()
+    {
+        var content = new StreamContent(new OneWayStream(FakePng(200_000)));
+        Assert.Null(content.Headers.ContentLength); // so the header check can't catch it
+        Assert.Null(await ArtFetcher.ReadCappedAsync(content, 100_000, default));
+        var small = new StreamContent(new OneWayStream(FakePng(500)));
+        Assert.Equal(500, (await ArtFetcher.ReadCappedAsync(small, 100_000, default))!.Length);
+    }
+
+    /// <summary>A body that can't seek, so it has no Content-Length, as a chunked response.</summary>
+    private sealed class OneWayStream(byte[] bytes) : MemoryStream(bytes)
+    {
+        public override bool CanSeek => false;
+    }
+
+    [Fact]
     public async Task Non_image_and_oversized_are_misses()
     {
         var html = Encoding.UTF8.GetBytes("<!DOCTYPE html><html><body>not a cover</body></html>");

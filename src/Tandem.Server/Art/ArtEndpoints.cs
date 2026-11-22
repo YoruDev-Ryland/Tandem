@@ -10,12 +10,13 @@ namespace Tandem.Server.Art;
 /// <summary>
 /// <c>GET /v1/web/art/{emulatorId}/{*gameKey}</c>, for a device key or a web session like the rest of /v1/web:
 /// 200 with the image; 202 art_pending while a fetch is queued or running; 404 no_art when the sources have nothing or
-/// art is off; 404 not_found when the user has no save item for the game. Art is only looked up for the user's own
+/// art is off; 404 art_unavailable (cached for the rest of the hour at most) when a source could not be reached; 404 not_found when the user has no save item for the game. Art is only looked up for the user's own
 /// games, and the request never waits on an outbound call.
 /// </summary>
 public static class ArtEndpoints
 {
     public const string ImageCache = "private, max-age=604800";
+    public const long MissCacheSeconds = 86400;
     public const string MissCache = "private, max-age=86400";
 
     public static IEndpointRouteBuilder MapArtEndpoints(this IEndpointRouteBuilder app)
@@ -28,7 +29,7 @@ public static class ArtEndpoints
     }
 
     private static async Task<IResult> GetAsync(HttpContext http, TandemDbContext db, ArtStore store, ArtFetcher fetcher,
-        GameNames names, IOptions<ServerOptions> options, string emulatorId, string gameKey, CancellationToken ct)
+        GameNames names, IOptions<ServerOptions> options, TimeProvider time, string emulatorId, string gameKey, CancellationToken ct)
     {
         var key = gameKey.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase);
         var userId = http.User.UserId();
@@ -47,8 +48,14 @@ public static class ArtEndpoints
                 catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { break; } // evicted meanwhile
                 http.Response.Headers.CacheControl = ImageCache;
                 return Results.Bytes(bytes, image.ContentType, entityTag: new EntityTagHeaderValue(image.ETag));
-            case ArtLookup.Miss:
-                return Error(http, StatusCodes.Status404NotFound, "no_art", "No cover art was found for this game.", MissCache);
+            case ArtLookup.Miss miss:
+                // Cached no longer than the miss lasts. A transient miss (a source was down) has its own code, so a client
+                // doesn't remember it as "no art", and lasts an hour at most.
+                var seconds = (long)Math.Ceiling(Math.Clamp((miss.Until - time.GetUtcNow()).TotalSeconds, 1, MissCacheSeconds));
+                var cache = $"private, max-age={seconds}";
+                return miss.Transient
+                    ? Error(http, StatusCodes.Status404NotFound, "art_unavailable", "The cover art sources could not be reached; try again later.", cache)
+                    : Error(http, StatusCodes.Status404NotFound, "no_art", "No cover art was found for this game.", cache);
         }
 
         var display = items.Select(i => i.DisplayName).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n)) ?? names.Resolve(emulatorId, key, null);

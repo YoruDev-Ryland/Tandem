@@ -185,7 +185,8 @@ public interface ILibretroIndex
 
 /// <summary>
 /// Loads each repository's Named_Boxarts listing from the GitHub API (one request per system), keeps it in memory and in
-/// <c>art/index/{repo}.txt</c>, and reloads it after ArtMissDays. A failed reload keeps the old listing.
+/// <c>art/index/{repo}.txt</c>, and reloads it after ArtMissDays. A failed reload keeps the old listing, and after any
+/// failed fetch the API is not asked again for that repository for an hour.
 /// </summary>
 public sealed class LibretroIndex(IHttpClientFactory http, IOptions<ServerOptions> options, TimeProvider time, ILogger<LibretroIndex> log)
     : ILibretroIndex
@@ -194,7 +195,11 @@ public sealed class LibretroIndex(IHttpClientFactory http, IOptions<ServerOption
     private const long MaxListingBytes = 32L * 1024 * 1024;
     private const string StampPrefix = "# fetched ";
 
+    /// <summary>How long a failed listing fetch keeps the API from being asked again for that repository.</summary>
+    public static readonly TimeSpan RetryAfterFailure = TimeSpan.FromHours(1);
+
     private readonly Dictionary<string, (DateTimeOffset Fetched, IReadOnlyCollection<string> Files)> _memory = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> _failedUntil = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public static Uri ListingUri(string repo) => new($"{ApiBase}{repo}/git/trees/master:Named_Boxarts");
@@ -213,16 +218,23 @@ public sealed class LibretroIndex(IHttpClientFactory http, IOptions<ServerOption
                 _memory[repo] = known;
                 return known.Files;
             }
+            if (known.Files is not null) _memory[repo] = known;
+            // After a failure the API is left alone for an hour: unauthenticated calls are limited per IP, and asking once
+            // per game would keep that limit hit.
+            if (_failedUntil.TryGetValue(repo, out var until) && now < until)
+                return known.Files ?? throw new ArtSourceUnavailableException($"The {repo} cover listing could not be loaded recently.");
             try
             {
                 var files = await DownloadAsync(repo, o.ArtMaxImageBytes, ct);
                 Save(repo, now, files);
                 _memory[repo] = (now, files);
+                _failedUntil.Remove(repo);
                 return files;
             }
             catch (Exception e) when (e is HttpRequestException or IOException or JsonException or InvalidDataException
                                           or TaskCanceledException && !ct.IsCancellationRequested)
             {
+                _failedUntil[repo] = now + RetryAfterFailure;
                 if (known.Files is not null)
                 {
                     log.LogDebug(e, "Keeping the old {Repo} cover listing", repo);

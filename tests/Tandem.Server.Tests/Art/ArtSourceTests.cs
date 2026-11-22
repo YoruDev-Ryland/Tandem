@@ -209,6 +209,113 @@ public class ArtSourceTests
     }
 
     [Fact]
+    public async Task A_failed_listing_is_asked_for_once_an_hour_not_once_per_game()
+    {
+        var data = Directory.CreateTempSubdirectory("tandem-art-").FullName;
+        try
+        {
+            var handler = new ArtEndpointTests.FakeSources(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden));
+            var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-19T12:00:00Z"));
+            var index = new LibretroIndex(new SingleClient(handler), Options.Create(new ServerOptions { DataDirectory = data }),
+                time, NullLogger<LibretroIndex>.Instance);
+            var source = new LibretroThumbnailSource(index);
+
+            foreach (var game in new[] { "GBA/Advance Wars (USA).srm", "GBA/Golden Sun (USA).srm", "GBA/Metroid Fusion (USA).srm" })
+                await Assert.ThrowsAsync<ArtSourceUnavailableException>(() => source.CandidatesAsync(new ArtRequest("retroarch", game, null, null), default));
+            Assert.Equal(1, handler.Calls);
+
+            time.Advance(TimeSpan.FromMinutes(61));
+            await Assert.ThrowsAsync<ArtSourceUnavailableException>(() => index.FilesAsync("Nintendo_-_Game_Boy_Advance", default));
+            Assert.Equal(2, handler.Calls);
+        }
+        finally { Directory.Delete(data, recursive: true); }
+    }
+
+    [Fact]
+    public async Task A_stale_listing_is_kept_and_its_refresh_backs_off()
+    {
+        var data = Directory.CreateTempSubdirectory("tandem-art-").FullName;
+        try
+        {
+            var up = true;
+            var handler = new ArtEndpointTests.FakeSources(_ => up
+                ? new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                    { Content = new StringContent("""{ "tree": [ { "path": "Pokemon X (USA).png", "mode": "100644", "type": "blob", "size": 9 } ] }""") }
+                : new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable));
+            var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-19T12:00:00Z"));
+            var index = new LibretroIndex(new SingleClient(handler), Options.Create(new ServerOptions { DataDirectory = data }),
+                time, NullLogger<LibretroIndex>.Instance);
+            await index.FilesAsync("Nintendo_-_Nintendo_3DS", default);
+
+            up = false;
+            time.Advance(TimeSpan.FromDays(8));
+            for (var i = 0; i < 3; i++)
+                Assert.Equal(["Pokemon X (USA).png"], await index.FilesAsync("Nintendo_-_Nintendo_3DS", default));
+            Assert.Equal(2, handler.Calls); // the first load, then one failed refresh
+
+            up = true;
+            time.Advance(TimeSpan.FromMinutes(61));
+            await index.FilesAsync("Nintendo_-_Nintendo_3DS", default);
+            await index.FilesAsync("Nintendo_-_Nintendo_3DS", default);
+            Assert.Equal(3, handler.Calls);
+        }
+        finally { Directory.Delete(data, recursive: true); }
+    }
+
+    [Fact]
+    public void The_store_sweeps_old_temp_files_and_expired_misses()
+    {
+        var data = Directory.CreateTempSubdirectory("tandem-art-").FullName;
+        try
+        {
+            var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+            var store = new ArtStore(Options.Create(new ServerOptions { DataDirectory = data }), time, NullLogger<ArtStore>.Instance);
+            store.RecordMiss("e", "old", time.GetUtcNow().AddHours(1));
+            store.RecordMiss("e", "new", time.GetUtcNow().AddDays(7));
+            Directory.CreateDirectory(Path.Combine(store.Directory, "index"));
+            var staleTmp = Path.Combine(store.Directory, "index", "repo.txt.tmp");
+            var freshTmp = Path.Combine(store.Directory, "abc.png.tmp");
+            File.WriteAllText(staleTmp, "x");
+            File.WriteAllText(freshTmp, "x");
+            File.SetLastWriteTimeUtc(staleTmp, time.GetUtcNow().UtcDateTime.AddHours(-2));
+            File.SetLastWriteTimeUtc(freshTmp, time.GetUtcNow().UtcDateTime);
+
+            time.Advance(TimeSpan.FromHours(2));
+            File.SetLastWriteTimeUtc(freshTmp, time.GetUtcNow().UtcDateTime.AddMinutes(-5));
+            store.Sweep();
+
+            Assert.False(File.Exists(staleTmp));
+            Assert.True(File.Exists(freshTmp));
+            Assert.False(File.Exists(Path.Combine(store.Directory, ArtStore.NameOf("e", "old") + ".miss")));
+            Assert.IsType<ArtLookup.Miss>(store.TryGet("e", "new"));
+        }
+        finally { Directory.Delete(data, recursive: true); }
+    }
+
+    [Fact]
+    public void A_transient_miss_says_so_and_carries_its_expiry()
+    {
+        var data = Directory.CreateTempSubdirectory("tandem-art-").FullName;
+        try
+        {
+            var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-19T12:00:00Z"));
+            var store = new ArtStore(Options.Create(new ServerOptions { DataDirectory = data }), time, NullLogger<ArtStore>.Instance);
+            store.RecordMiss("e", "a", time.GetUtcNow().AddHours(1), transient: true);
+            store.RecordMiss("e", "b", time.GetUtcNow().AddDays(7));
+            Assert.Equal(new ArtLookup.Miss(time.GetUtcNow().AddHours(1), true), store.TryGet("e", "a"));
+            Assert.Equal(new ArtLookup.Miss(time.GetUtcNow().AddDays(7), false), store.TryGet("e", "b"));
+        }
+        finally { Directory.Delete(data, recursive: true); }
+    }
+
+    [Fact]
+    public void The_art_client_does_not_follow_redirects()
+    {
+        using var handler = Assert.IsType<SocketsHttpHandler>(ArtFetcher.CreatePrimaryHandler());
+        Assert.False(handler.AllowAutoRedirect);
+    }
+
+    [Fact]
     public void The_store_evicts_the_least_recently_read_image()
     {
         var data = Directory.CreateTempSubdirectory("tandem-art-").FullName;

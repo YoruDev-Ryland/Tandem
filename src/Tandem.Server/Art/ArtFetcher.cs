@@ -9,7 +9,8 @@ namespace Tandem.Server.Art;
 /// Fetches covers in the background, one at a time: a de-duplicated queue that tries the sources in order, downloads at
 /// most ArtMaxImageBytes, keeps only real PNG or JPEG bytes (by their magic numbers, not the claimed type), then stores
 /// the image or records a miss for ArtMissDays. When a source could not be reached (network error, timeout, 5xx, 429),
-/// the miss is recorded for an hour only. Nothing runs, and nothing is fetched, with <c>ART=false</c>.
+/// the miss is recorded for an hour only, and marked transient. Any other failure (a full disk, say) is also a
+/// transient miss for an hour. Nothing runs, and nothing is fetched, with <c>ART=false</c>.
 /// </summary>
 public sealed class ArtFetcher(IEnumerable<IArtSource> sources, ArtStore store, IHttpClientFactory http, IOptions<ServerOptions> options,
     TimeProvider time, ILogger<ArtFetcher> log) : BackgroundService
@@ -19,6 +20,10 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, ArtStore store, 
     public const string UserAgent = "Tandem-server";
     private const int QueueCapacity = 256;
     private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromHours(1);
+
+    /// <summary>The art client's handler: redirects are not followed, so a source can't send the server to another
+    /// host (an internal address, say). The sources' URLs are fixed and answer directly.</summary>
+    public static HttpMessageHandler CreatePrimaryHandler() => new SocketsHttpHandler { AllowAutoRedirect = false };
 
     private readonly Channel<ArtRequest> _queue = Channel.CreateBounded<ArtRequest>(new BoundedChannelOptions(QueueCapacity)
     {
@@ -70,11 +75,19 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, ArtStore store, 
     protected override async Task ExecuteAsync(CancellationToken stop)
     {
         if (!options.Value.EnableArt) return;
+        try { store.Sweep(); }
+        catch (Exception e) { log.LogDebug(e, "Couldn't sweep the cover cache"); }
         await foreach (var request in _queue.Reader.ReadAllAsync(stop))
         {
             try { await FetchAsync(request, stop); }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { throw; }
-            catch (Exception e) { log.LogWarning(e, "Cover fetch for {Emulator} failed", request.EmulatorId); }
+            catch (Exception e)
+            {
+                // Not a source saying no (for example a full disk): ask again in an hour, not on every request.
+                log.LogWarning(e, "Cover fetch for {Emulator} failed", request.EmulatorId);
+                try { store.RecordMiss(request.EmulatorId, request.GameKey, time.GetUtcNow() + RetryAfterFailure, transient: true); }
+                catch (Exception again) { log.LogDebug(again, "Couldn't record the failed cover fetch"); }
+            }
             finally { Done(ArtStore.NameOf(request.EmulatorId, request.GameKey)); }
         }
     }
@@ -103,7 +116,7 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, ArtStore store, 
             }
         }
         var wait = unreachable ? RetryAfterFailure : TimeSpan.FromDays(Math.Max(1, o.ArtMissDays));
-        store.RecordMiss(request.EmulatorId, request.GameKey, time.GetUtcNow() + wait);
+        store.RecordMiss(request.EmulatorId, request.GameKey, time.GetUtcNow() + wait, transient: unreachable);
     }
 
     /// <summary>The image at [uri], or null; Failed is true when the source could not be reached rather than said no.</summary>

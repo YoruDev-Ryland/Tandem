@@ -29,7 +29,7 @@ when a client shows that game, from one of the sources below, and caches it only
 every game then shows the no-art card.
 
 - [libretro-thumbnails](https://github.com/libretro-thumbnails) box art (`Named_Boxarts`), by game name. The server also
-  reads each system's file listing through the GitHub API, once a week at most.
+  reads each system's file listing through the GitHub API, once a week at most (once an hour while the API is failing).
 - GameTDB covers (https://art.gametdb.com), by GameCube/Wii game id. See https://www.gametdb.com for its terms.
 
 ## Server (.NET 10)

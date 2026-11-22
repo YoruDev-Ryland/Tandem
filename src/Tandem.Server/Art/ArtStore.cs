@@ -9,19 +9,26 @@ namespace Tandem.Server.Art;
 public abstract record ArtLookup
 {
     public sealed record Image(string Path, string ContentType, string ETag) : ArtLookup;
-    public sealed record Miss : ArtLookup;
+    /// <summary>No cover until [Until]. Transient when a source could not be reached (the sources are asked again
+    /// within the hour), rather than having said it has nothing.</summary>
+    public sealed record Miss(DateTimeOffset Until, bool Transient) : ArtLookup;
     public sealed record Unknown : ArtLookup;
 }
 
 /// <summary>
 /// Covers on disk under <c>{DataDirectory}/art/</c>. A game's file is named by the lower-case hex SHA-256 of
 /// <c>emulatorId + "\n" + gameKey</c>, with ".png" or ".jpg" for an image or ".miss" for a recorded miss (whose text is
-/// the time after which the sources are asked again). Each read touches the image's last-access time; when the images
+/// the time after which the sources are asked again, then "transient" on a second line when a source could not be reached).
+/// Each read touches the image's last-access time; when the images
 /// together pass ArtCacheBytes, the least recently read go first.
 /// </summary>
 public sealed class ArtStore(IOptions<ServerOptions> options, TimeProvider time, ILogger<ArtStore> log)
 {
+    private const string TransientMark = "transient";
+    private static readonly TimeSpan StaleTemp = TimeSpan.FromHours(1);
+    private static readonly TimeSpan MissSweepEvery = TimeSpan.FromDays(1);
     private readonly object _evictGate = new();
+    private DateTimeOffset _lastMissSweep = DateTimeOffset.MinValue;
 
     public static string DirectoryOf(ServerOptions o) => Path.GetFullPath(Path.Combine(o.DataDirectory, "art"));
 
@@ -47,9 +54,11 @@ public sealed class ArtStore(IOptions<ServerOptions> options, TimeProvider time,
         {
             try
             {
-                if (DateTimeOffset.TryParse(File.ReadAllText(miss).Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var until)
+                var lines = File.ReadAllLines(miss);
+                if (lines.Length > 0
+                    && DateTimeOffset.TryParse(lines[0].Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var until)
                     && time.GetUtcNow() < until)
-                    return new ArtLookup.Miss();
+                    return new ArtLookup.Miss(until, lines.Skip(1).Any(l => l.Trim() == TransientMark));
                 File.Delete(miss);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log.LogDebug(e, "Couldn't read {File}", miss); }
@@ -72,12 +81,37 @@ public sealed class ArtStore(IOptions<ServerOptions> options, TimeProvider time,
         Evict();
     }
 
-    /// <summary>Records that the sources have nothing until [until].</summary>
-    public void RecordMiss(string emulatorId, string gameKey, DateTimeOffset until)
+    /// <summary>Records that the sources have nothing until [until]; [transient] when one could not be reached.</summary>
+    public void RecordMiss(string emulatorId, string gameKey, DateTimeOffset until, bool transient = false)
     {
         System.IO.Directory.CreateDirectory(Directory);
         var path = Path.Combine(Directory, NameOf(emulatorId, gameKey) + ".miss");
-        File.WriteAllText(path, until.ToString("O", CultureInfo.InvariantCulture));
+        var text = until.ToString("O", CultureInfo.InvariantCulture);
+        File.WriteAllText(path, transient ? text + "\n" + TransientMark : text);
+    }
+
+    /// <summary>Deletes temp files a crash left behind (older than an hour), here and under index/, and expired miss
+    /// records. Run at start-up, and from <see cref="Evict"/> at most once a day.</summary>
+    public void Sweep()
+    {
+        var now = time.GetUtcNow();
+        _lastMissSweep = now;
+        var dir = new DirectoryInfo(Directory);
+        if (!dir.Exists) return;
+        foreach (var f in dir.EnumerateFiles("*", SearchOption.AllDirectories))
+        {
+            try
+            {
+                if (f.Extension == ".tmp" && now.UtcDateTime - f.LastWriteTimeUtc > StaleTemp) f.Delete();
+                else if (f.Extension == ".miss" && f.DirectoryName == dir.FullName)
+                {
+                    var first = File.ReadLines(f.FullName).FirstOrDefault()?.Trim();
+                    if (!DateTimeOffset.TryParse(first, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var until) || until <= now)
+                        f.Delete();
+                }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log.LogDebug(e, "Couldn't sweep {File}", f.Name); }
+        }
     }
 
     /// <summary>Deletes the least recently read images until the rest fit in ArtCacheBytes.</summary>
@@ -87,6 +121,7 @@ public sealed class ArtStore(IOptions<ServerOptions> options, TimeProvider time,
         {
             var dir = new DirectoryInfo(Directory);
             if (!dir.Exists) return;
+            if (time.GetUtcNow() - _lastMissSweep >= MissSweepEvery) Sweep();
             var images = dir.EnumerateFiles().Where(f => f.Extension is ".png" or ".jpg").ToList();
             var total = images.Sum(f => f.Length);
             var cap = options.Value.ArtCacheBytes;
