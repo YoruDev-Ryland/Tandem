@@ -32,33 +32,59 @@ fun shelfOrder(rows: List<GameRow>): List<GameRow> = rows.sortedWith(
         .thenBy { it.gameKey },
 )
 
-/** A rail row's label: the device name without a leading "AYN ", without spaces, in capitals, cut to 5. */
-fun railLabel(deviceName: String): String {
-    val n = deviceName.trim().let { if (it.startsWith("AYN ", ignoreCase = true)) it.substring(4) else it }
+private val NUMBERED = Regex("""^(.*) \((\d+)\)$""")
+
+private fun baseLabel(name: String): String {
+    val n = name.trim().let { if (it.startsWith("AYN ", ignoreCase = true)) it.substring(4) else it }
     return n.filterNot { it.isWhitespace() }.uppercase().take(5)
+}
+
+/**
+ * A rail row's label, the same rule as the web's railLabel: the device name without a leading "AYN ", without spaces,
+ * in capitals, cut to 5. A repeated name's number stays: "Odin3 (2)" is "ODIN3·2".
+ */
+fun railLabel(deviceName: String): String {
+    val m = NUMBERED.find(deviceName) ?: return baseLabel(deviceName)
+    return baseLabel(m.groupValues[1]) + "·" + m.groupValues[2]
+}
+
+/**
+ * The labels for [names] (already numbered where repeated), in order, each one different: a label an earlier name
+ * already has gets the next free number ("Odin 3" and "Odin3 Pro" read "ODIN3" and "ODIN3·2").
+ */
+fun railLabels(names: List<String>): List<String> {
+    val used = HashSet<String>()
+    return names.map { name ->
+        val label = railLabel(name)
+        if (used.add(label)) return@map label
+        val base = baseLabel(NUMBERED.find(name)?.groupValues?.get(1) ?: name)
+        var n = 2
+        while (!used.add("$base·$n")) n++
+        "$base·$n"
+    }
 }
 
 /** One device on the rail: its id, its short [label] in the rail's gutter, and its [name] (disambiguated). */
 data class RailRow(val deviceId: String, val label: String, val name: String)
 
 /**
- * Every device in [rows]: this device first, then the others as Presence.kt's columns have them (by name, a repeated
- * name numbered "Odin3 (2)"). This device is there even when no game lists it yet, named [thisDeviceName]. Labels
- * that would read the same get a number: "ODIN3", "ODIN·2".
+ * Every device in [rows]: this device first, then the others by name (Presence.kt's order). This device is there even
+ * when no game lists it yet, named [thisDeviceName]. A name repeated anywhere in the list, this device's included, is
+ * numbered in that order ("Odin3", "Odin3 (2)"), and the labels are [railLabels].
  */
 fun railDevices(rows: List<GameRow>, thisDeviceId: String?, thisDeviceName: String? = null): List<RailRow> {
-    val others = deviceColumns(rows, thisDeviceId).map { it.id to it.name }
+    val others = otherDevices(rows, thisDeviceId).map { it.id to it.name }
     val self = thisDeviceId?.let { id ->
         val name = rows.firstNotNullOfOrNull { r -> r.devices.firstOrNull { it.deviceId == id }?.deviceName } ?: thisDeviceName ?: "This device"
         id to name
     }
-    val all = listOfNotNull(self) + others
-    val seen = HashMap<String, Int>()
-    return all.map { (id, name) ->
-        val base = railLabel(name)
-        val n = seen.merge(base, 1, Int::plus)!!
-        RailRow(id, if (n == 1) base else base.take(4) + "·" + n, name)
+    val count = HashMap<String, Int>()
+    val named = (listOfNotNull(self) + others).map { (id, name) ->
+        val n = count.merge(name, 1, Int::plus)!!
+        id to if (n == 1) name else "$name ($n)"
     }
+    val labels = railLabels(named.map { it.second })
+    return named.mapIndexed { i, (id, name) -> RailRow(id, labels[i], name) }
 }
 
 /** The rail's rows: [railDevices], at most [MAX_RAIL]. */

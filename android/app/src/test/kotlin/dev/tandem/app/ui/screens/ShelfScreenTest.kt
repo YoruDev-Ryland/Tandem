@@ -10,6 +10,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -247,6 +248,21 @@ class ShelfScreenTest {
         compose.onNodeWithContentDescription("Cover of Medal of Honor: Rising Sun").assertExists()
         compose.onNodeWithTag("no-art", useUnmergedTree = true).assertDoesNotExist()
         assertEquals("GR8E69", asked.last())
+    }
+
+    @Test fun the_card_folding_back_keeps_its_cover() {
+        val cover = androidx.compose.ui.graphics.ImageBitmap(4, 4)
+        compose.setContent {
+            EmuTheme(ThemeMode.Light) {
+                ShelfScreen(shelfSample(), top = {}, actions = DeviceActions(), art = { _, _ -> cover }, artNow = { _, _ -> cover })
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        compose.key(KeyEvent.KEYCODE_DPAD_RIGHT)
+        compose.mainClock.advanceTimeBy(48)   // mid-fold: the old card and the new one are both drawn
+        compose.onAllNodesWithTag("card").assertCountEquals(2)
+        compose.onAllNodesWithTag("no-art", useUnmergedTree = true).assertCountEquals(0)
+        compose.mainClock.autoAdvance = true
     }
 
     @Test fun the_cursor_clamps_when_its_game_disappears() {

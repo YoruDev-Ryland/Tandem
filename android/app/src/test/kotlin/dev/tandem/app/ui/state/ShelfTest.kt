@@ -53,12 +53,25 @@ class ShelfTest {
         assertEquals(listOf("ka", "kb", "kc", "A", "Z"), shelfOrder(rows).map { it.gameKey })
     }
 
+    // The same fixture as the web's shelf.test.ts ("orders names by code point ignoring case").
+    @Test fun order_names_by_code_point_ignoring_case() {
+        val names = listOf("Zelda", "Ōkami", "okami", "Éclair", "eve", "Apple", "_Underscore")
+        val rows = names.mapIndexed { i, n -> row("k$i", n) }
+        assertEquals(listOf("_Underscore", "Apple", "eve", "okami", "Zelda", "Éclair", "Ōkami"), shelfOrder(rows).map { it.displayName })
+    }
+
+    // The same table as the web's shelf.test.ts ("rail labels: the shared table").
     @Test fun rail_label_drops_ayn_and_cuts_to_five() {
-        assertEquals("THOR", railLabel("AYN Thor"))
-        assertEquals("ODIN3", railLabel("Odin3"))
-        assertEquals("STEAM", railLabel("Steam Deck"))
-        assertEquals("ODIN3", railLabel("Odin 3"))
-        assertEquals("THOR", railLabel("ayn thor"))
+        val table = listOf(
+            "AYN Thor" to "THOR", "ayn thor" to "THOR", "ayn odin 3" to "ODIN3", "Odin3" to "ODIN3", "Odin 3" to "ODIN3",
+            "Steam Deck" to "STEAM", "Odin3 (2)" to "ODIN3·2", "Retroid Pocket 5 (3)" to "RETRO·3",
+        )
+        for ((name, label) in table) assertEquals(name, label, railLabel(name))
+    }
+
+    @Test fun rail_labels_number_names_that_cut_to_the_same_label() {
+        assertEquals(listOf("ODIN3", "ODIN3·2", "ODIN3·3"), railLabels(listOf("Odin 3", "Odin3 Pro", "Odin3 (2)")))
+        assertEquals(listOf("THOR", "ODIN3", "ODIN3·2"), railLabels(listOf("AYN Thor", "Odin3", "Odin3 (2)")))
     }
 
     @Test fun rail_this_device_first_then_by_name_max_three() {
@@ -88,7 +101,19 @@ class ShelfTest {
         assertEquals(deviceColumns(listOf(row("k", "K", devices = devices)), HERE).map { it.name }, rail.drop(1).map { it.name })
         assertEquals(3, rail.map { it.label }.toSet().size)
         assertEquals("ODIN3", rail[1].label)
-        assertEquals("ODIN·2", rail[2].label)
+        assertEquals("ODIN3·2", rail[2].label)
+    }
+
+    @Test fun this_device_and_another_with_its_name_are_told_apart() {
+        val devices = listOf(dev(HERE, "Odin3", DeviceGameState.Newest), dev("o1", "Odin3", DeviceGameState.Behind))
+        val r = row("k", "K", devices = devices)
+        val rail = railRows(listOf(r), HERE)
+        assertEquals(listOf(HERE, "o1"), rail.map { it.deviceId })
+        assertEquals(listOf("Odin3", "Odin3 (2)"), rail.map { it.name })
+        assertEquals(listOf("ODIN3", "ODIN3·2"), rail.map { it.label })
+        val spine = spineOf(r, HERE, "Dolphin", rail, null)
+        assertEquals(listOf("Odin3", "Odin3 (2)"), spine.card.lines.map { it.name })
+        assertEquals(2, spine.marks.map { it.description }.toSet().size)
     }
 
     @Test fun card_lists_every_device_even_beyond_rail() {

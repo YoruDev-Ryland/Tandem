@@ -2,10 +2,13 @@ package dev.tandem.app.api
 
 import dev.tandem.app.model.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,6 +18,7 @@ import okhttp3.Response
 import okio.BufferedSink
 import okio.source
 import java.io.InputStream
+import kotlin.coroutines.resume
 
 const val PROTOCOL_VERSION = "1"
 
@@ -195,26 +199,41 @@ class ApiClient(
 
     /**
      * The cover, by the same path encoding as [game]. 200 is the image (at most [MAX_ART_BYTES]), 202 pending, 404 none;
-     * anything else, or no answer at all, is a failure. A revoked key is still reported through onRevoked.
+     * 404 art_unavailable (the server couldn't reach a source), anything else, or no answer at all, is a failure. A
+     * revoked key is still reported through onRevoked. Cancelling the caller cancels the request.
      */
-    override suspend fun art(emulatorId: String, gameKey: String): ArtResult = withContext(Dispatchers.IO) {
-        try {
-            http.newCall(req("/v1/web/art/${encodeSegment(emulatorId)}/${encodeKey(gameKey)}").get().build()).execute().use { r ->
-                when (r.code) {
-                    200 -> {
-                        val bytes = r.body.source().let { src ->
-                            if (!src.request(MAX_ART_BYTES + 1)) src.readByteArray() else null   // too big: not a cover
-                        }
-                        if (bytes == null || bytes.isEmpty()) ArtResult.Failed else ArtResult.Image(bytes)
-                    }
-                    202 -> ArtResult.Pending
-                    404 -> ArtResult.None
-                    401 -> { runCatching { check(r) }; ArtResult.Failed }
-                    else -> ArtResult.Failed
+    override suspend fun art(emulatorId: String, gameKey: String): ArtResult {
+        val call = http.newCall(req("/v1/web/art/${encodeSegment(emulatorId)}/${encodeKey(gameKey)}").get().build())
+        return suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: java.io.IOException) {
+                    if (cont.isActive) cont.resume(ArtResult.Failed)
                 }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val result = try { artResult(response) } catch (_: java.io.IOException) { ArtResult.Failed }
+                    if (cont.isActive) cont.resume(result)
+                }
+            })
+        }
+    }
+
+    private fun artResult(response: Response): ArtResult = response.use { r ->
+        when (r.code) {
+            200 -> {
+                val bytes = r.body.source().let { src ->
+                    if (!src.request(MAX_ART_BYTES + 1)) src.readByteArray() else null   // too big: not a cover
+                }
+                if (bytes == null || bytes.isEmpty()) ArtResult.Failed else ArtResult.Image(bytes)
             }
-        } catch (_: java.io.IOException) {
-            ArtResult.Failed
+            202 -> ArtResult.Pending
+            404 -> {
+                val code = runCatching { ProtocolJson.decodeFromString(ErrorBody.serializer(), r.body.string()).code }.getOrNull()
+                if (code == "art_unavailable") ArtResult.Failed else ArtResult.None
+            }
+            401 -> { runCatching { check(r) }; ArtResult.Failed }
+            else -> ArtResult.Failed
         }
     }
 }

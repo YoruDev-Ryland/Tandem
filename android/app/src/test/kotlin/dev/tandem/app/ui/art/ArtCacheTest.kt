@@ -7,6 +7,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import javax.imageio.ImageIO
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -157,7 +158,7 @@ class ArtCacheTest {
         val ui = dev.tandem.app.ui.screens.shelfUi(emptyList(), dev.tandem.app.ui.state.Loaded(emptyList()), emptyList(), "d", true)
         val key = androidx.compose.runtime.mutableStateOf("GSXE69")
         var shown: androidx.compose.ui.graphics.ImageBitmap? = null
-        compose.setContent { shown = shelfArt(c, ui, "dolphin", key.value) }
+        compose.setContent { shown = shelfArt(c, ui, "dolphin", key.value, settle = {}) }
         settle { calls.isNotEmpty() }
         assertEquals(listOf("dolphin" to "GSXE69"), calls)   // pending: now waiting to ask again
         assertNull(shown)
@@ -166,5 +167,53 @@ class ArtCacheTest {
         assertNotNull(shown)
         assertEquals(listOf(true), cancelled)                 // the old game's retry went with its focus
         assertEquals(listOf("dolphin" to "GSXE69", "dolphin" to "GM8E01"), calls)
+    }
+
+    @Test fun a_load_joins_the_prefetch_of_the_same_game() = runBlocking {
+        val asked = java.util.concurrent.atomic.AtomicInteger()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val c = ArtCache(dir, api = { _, _ -> asked.incrementAndGet(); gate.await(); ArtResult.Image(png()) }, clock = { now }, delay = {})
+        c.prefetch(listOf("dolphin" to "GSXE69"))
+        kotlinx.coroutines.withTimeout(5000) { while (asked.get() == 0) kotlinx.coroutines.delay(5) }
+        val loading = async { c.load("dolphin", "GSXE69") }
+        kotlinx.coroutines.delay(50)
+        gate.complete(Unit)
+        assertNotNull(loading.await())
+        assertEquals(1, asked.get())                       // one request, not one per caller
+        assertEquals(listOf(".img"), dir.listFiles()!!.map { "." + it.name.substringAfterLast('.') })
+    }
+
+    @Test fun a_part_file_left_behind_is_cleared() = runBlocking {
+        now = 10L * 60 * 60 * 1000
+        dir.mkdirs()
+        val old = File(dir, "abc.img123.part").apply { writeBytes(byteArrayOf(1)); setLastModified(1000) }
+        val fresh = File(dir, "def.img456.part").apply { writeBytes(byteArrayOf(1)); setLastModified(now - 1000) }
+        answer(ArtResult.Image(png()))
+        assertNotNull(cache().load("dolphin", "GSXE69"))
+        assertTrue(!old.exists())
+        assertTrue(fresh.exists())                         // may still be another writer's
+    }
+
+    @Test fun the_slot_asks_only_once_the_cursor_rests() {
+        val asked = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val c = ArtCache(dir, api = { _, k -> asked += k; ArtResult.Image(png()) }, clock = { now })
+        val ui = dev.tandem.app.ui.screens.shelfUi(emptyList(), dev.tandem.app.ui.state.Loaded(emptyList()), emptyList(), "d", true)
+        val key = androidx.compose.runtime.mutableStateOf("GSXE69")
+        val rested = HashMap<String, kotlinx.coroutines.CompletableDeferred<Unit>>()
+        val waits = mutableListOf<String>()
+        var shown: androidx.compose.ui.graphics.ImageBitmap? = null
+        compose.setContent {
+            val k = key.value
+            shown = shelfArt(c, ui, "dolphin", k, settle = { waits += k; rested.getOrPut(k) { kotlinx.coroutines.CompletableDeferred() }.await() })
+        }
+        for (k in listOf("GM8E01", "GR8E69", "GALE01")) {
+            compose.waitForIdle()
+            key.value = k
+        }
+        settle { waits.size == 4 }
+        assertEquals(listOf("GSXE69", "GM8E01", "GR8E69", "GALE01"), waits)
+        rested.values.forEach { it.complete(Unit) }        // too late for the games passed over: their waits were cancelled
+        settle { shown != null }
+        assertEquals(listOf("GALE01"), asked.toList())     // passing over games asks for none of them
     }
 }

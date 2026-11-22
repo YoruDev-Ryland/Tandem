@@ -260,6 +260,7 @@ private fun TandemRoot(vm: AppViewModel, activity: MainActivity) {
                 back = { activity.onBackPressedDispatcher.onBackPressed() },
             ),
             art = { emu, key -> shelfArt(vm.art, device, emu, key) },
+            artNow = vm.art::inMemory,
         )
         TAB_ACTIVITY -> {
             // Visible: fetch now, and refresh on nudges until the tab changes.

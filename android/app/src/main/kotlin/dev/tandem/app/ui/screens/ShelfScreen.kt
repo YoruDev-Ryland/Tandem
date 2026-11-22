@@ -124,6 +124,7 @@ private val railLabel = TextStyle(fontFamily = EmuFonts.JetBrainsMono, fontSize 
  * just landed. A opens the game's versions on the web, X syncs now, Y opens the emulator's settings.
  *
  * [art] gives the cover for the focused game, or null while there is none (the card then shows the system's code).
+ * [artNow] is the cover only if it is at hand already, without loading: the card folding back into its spine shows it.
  */
 @Composable
 fun ShelfScreen(
@@ -131,6 +132,7 @@ fun ShelfScreen(
     top: @Composable RowScope.() -> Unit,
     actions: DeviceActions,
     art: @Composable (emulatorId: String, gameKey: String) -> ImageBitmap? = { _, _ -> null },
+    artNow: (emulatorId: String, gameKey: String) -> ImageBitmap? = { _, _ -> null },
 ) {
     // -1: the user hasn't chosen yet, so the shelf follows the model's pick (the first emulator with games).
     var chosen by rememberSaveable { mutableIntStateOf(-1) }
@@ -201,7 +203,7 @@ fun ShelfScreen(
                     !ui.signedIn -> EmptyLine("Sign in to see your games.")
                     shelf == null -> {}
                     spines.isNotEmpty() -> Shelf(
-                        ui.rail, shelf, spines, at, art,
+                        ui.rail, shelf, spines, at, art, artNow,
                         onSpine = { i -> cues?.cue(Cue.Move); moveTo(i) },
                         onCard = open,
                     )
@@ -285,6 +287,7 @@ private fun Shelf(
     spines: List<Spine>,
     at: Int,
     art: @Composable (String, String) -> ImageBitmap?,
+    artNow: (String, String) -> ImageBitmap?,
     onSpine: (Int) -> Unit,
     onCard: () -> Unit,
 ) {
@@ -320,7 +323,7 @@ private fun Shelf(
                         Box(Modifier.height(shelfH).fillMaxWidth().clipToBounds(), contentAlignment = Alignment.BottomStart) {
                             // The new card grows out of its spine; the old one folds back into its spine.
                             if (isCursor || w > SPINE_W + 1.dp) {
-                                Card(s, shelfH, if (isCursor) art(s.emulatorId, s.gameKey) else null, onCard)
+                                Card(s, shelfH, if (isCursor) art(s.emulatorId, s.gameKey) else artNow(s.emulatorId, s.gameKey), onCard)
                             } else {
                                 SpineView(s, shelfH - SPINE_TOP) { onSpine(i) }
                             }

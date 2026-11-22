@@ -4,6 +4,8 @@ import dev.tandem.app.model.ItemKind
 import dev.tandem.app.model.ManifestEntry
 import dev.tandem.app.model.SaveUploadRequest
 import dev.tandem.app.model.SaveUploadStatus
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -180,12 +182,28 @@ class ApiClientTest {
         server.enqueue(MockResponse.Builder().code(202).setHeader("Retry-After", "3").body("""{"error":"art_pending"}""").build())
         server.enqueue(MockResponse.Builder().code(404).body("""{"error":"no_art"}""").build())
         server.enqueue(MockResponse.Builder().code(500).body("boom").build())
+        server.enqueue(MockResponse.Builder().code(404).body("""{"code":"art_unavailable","message":"x","error":"art_unavailable"}""").build())
         val c = ApiClient(base(), "k")
         val image = c.art("dolphin", "GSXE69")
         assertTrue(image is ArtResult.Image && image.bytes.contentEquals(png))
         assertEquals(ArtResult.Pending, c.art("dolphin", "GSXE69"))
         assertEquals(ArtResult.None, c.art("dolphin", "GSXE69"))
         assertEquals(ArtResult.Failed, c.art("dolphin", "GSXE69"))
+        // The server couldn't reach a source: a failure to try again, not "no art".
+        assertEquals(ArtResult.Failed, c.art("dolphin", "GSXE69"))
+    }
+
+    @Test fun cancelling_an_art_load_cancels_its_request() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(200).headersDelay(5, TimeUnit.SECONDS).build())
+        val cancelled = java.util.concurrent.CountDownLatch(1)
+        val http = okhttp3.OkHttpClient.Builder().eventListener(object : okhttp3.EventListener() {
+            override fun canceled(call: okhttp3.Call) = cancelled.countDown()
+        }).build()
+        val c = ApiClient(base(), "k", http = http)
+        val job = launch(kotlinx.coroutines.Dispatchers.IO) { c.art("dolphin", "GSXE69") }
+        server.takeRequest(2, TimeUnit.SECONDS)
+        job.cancelAndJoin()
+        assertTrue("the HTTP call was cancelled with its caller", cancelled.await(2, TimeUnit.SECONDS))
     }
 
     @Test fun art_that_cannot_be_reached_is_a_failure_not_a_throw() = runBlocking {

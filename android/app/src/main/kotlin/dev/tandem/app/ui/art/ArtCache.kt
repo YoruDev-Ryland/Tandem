@@ -16,6 +16,7 @@ import java.security.MessageDigest
 import java.util.Collections
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -75,6 +76,12 @@ class ArtCache(
         val id = id(emulatorId, gameKey)
         withContext(Dispatchers.IO) { cached(emulatorId, gameKey) }?.let { return it }
         if (id in misses) return null
+        // A prefetch for this game is already asking: wait for it rather than ask (and write the file) twice.
+        synchronized(inFlight) { inFlight[id]?.takeIf { it.isActive } }?.let { return it.await() }
+        return fetch(emulatorId, gameKey, id)
+    }
+
+    private suspend fun fetch(emulatorId: String, gameKey: String, id: String): ImageBitmap? {
         var r = ask(emulatorId, gameKey)
         if (r == ArtResult.Pending) {
             delay(RETRY_MS)
@@ -94,7 +101,13 @@ class ArtCache(
             if (id in misses || synchronized(memory) { id in memory }) continue
             synchronized(inFlight) {
                 if (inFlight[id]?.isActive == true) return@synchronized
-                inFlight[id] = scope.async { try { load(e, k) } finally { synchronized(inFlight) { inFlight.remove(id) } } }
+                inFlight[id] = scope.async(start = CoroutineStart.LAZY) {
+                    try {
+                        withContext(Dispatchers.IO) { cached(e, k) } ?: if (id in misses) null else fetch(e, k, id)
+                    } finally {
+                        synchronized(inFlight) { inFlight.remove(id) }
+                    }
+                }.also { it.start() }
             }
         }
     }
@@ -113,9 +126,13 @@ class ArtCache(
         runCatching {
             dir.mkdirs()
             val f = file(id)
-            val tmp = File(dir, f.name + ".part")
+            // A name of its own, so two writers of the same cover never share (or delete) each other's file.
+            val tmp = File.createTempFile(f.name, PART, dir)
             tmp.writeBytes(bytes)
-            if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
+            if (!tmp.renameTo(f) && tmp.exists()) {
+                f.delete()
+                if (!tmp.renameTo(f)) tmp.delete()
+            }
             f.setLastModified(clock())
             evict()
         }
@@ -125,6 +142,8 @@ class ArtCache(
 
     /** Deletes the least recently used images until the folder is within [maxBytes]. */
     private fun evict() {
+        // A part file an earlier process left behind (killed while writing).
+        dir.listFiles { f -> f.isFile && f.name.endsWith(PART) && clock() - f.lastModified() > STALE_PART_MS }?.forEach { it.delete() }
         val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".img") }?.sortedBy { it.lastModified() } ?: return
         var total = files.sumOf { it.length() }
         for (f in files) {
@@ -147,6 +166,8 @@ class ArtCache(
 
     private companion object {
         const val RETRY_MS = 3000L
+        const val PART = ".part"
+        const val STALE_PART_MS = 60L * 60 * 1000
         const val MEMORY_ITEMS = 12
         const val DECODE_WIDTH = 320
     }
@@ -154,13 +175,21 @@ class ArtCache(
 
 /**
  * The shelf card's art slot: the cover of the focused game ([emulatorId], [gameKey]), shown from the cache at once when
- * it is there, else loaded; the games either side of it in [ui] are fetched in the background. A focus change cancels
- * the load (and its retry) for the game left behind.
+ * it is there, else loaded; the games either side of it in [ui] are fetched in the background. Nothing is asked for
+ * until the cursor has rested on the game for [SETTLE_MS] ([settle]), so holding the D-pad along the shelf sends no requests. A
+ * focus change cancels the load (its request and its retry) for the game left behind.
  */
 @Composable
-fun shelfArt(cache: ArtCache, ui: ShelfUi, emulatorId: String, gameKey: String): ImageBitmap? {
+fun shelfArt(
+    cache: ArtCache,
+    ui: ShelfUi,
+    emulatorId: String,
+    gameKey: String,
+    settle: suspend () -> Unit = { kotlinx.coroutines.delay(SETTLE_MS) },
+): ImageBitmap? {
     var img by remember(emulatorId, gameKey) { mutableStateOf(cache.inMemory(emulatorId, gameKey)) }
     LaunchedEffect(emulatorId, gameKey) {
+        settle()
         val spines = ui.shelves.firstOrNull { it.tab.id == emulatorId }?.spines.orEmpty()
         val i = spines.indexOfFirst { it.gameKey == gameKey }
         if (i >= 0) cache.prefetch(listOfNotNull(spines.getOrNull(i - 1), spines.getOrNull(i + 1)).map { it.emulatorId to it.gameKey })
@@ -168,3 +197,6 @@ fun shelfArt(cache: ArtCache, ui: ShelfUi, emulatorId: String, gameKey: String):
     }
     return img
 }
+
+/** How long the cursor rests on a game before its art (and its neighbours') is asked for; the web waits as long. */
+const val SETTLE_MS = 150L
