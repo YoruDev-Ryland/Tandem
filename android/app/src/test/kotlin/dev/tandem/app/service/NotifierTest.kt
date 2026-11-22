@@ -29,6 +29,22 @@ class NotifierTest {
         assertEquals(MainActivity::class.java.name, conflictTarget(app, config, null).component?.className)
     }
 
+    @Test fun statusNotificationUsesTheTandemMark() {
+        val n = Notifier(app)
+        n.ensureChannels()
+        assertEquals(dev.tandem.app.R.drawable.ic_stat_tandem, n.status("x").smallIcon.resId)
+    }
+
+    @Test fun alertNotificationsUseTheTandemMark() {
+        val n = Notifier(app)
+        n.ensureChannels()
+        n.alert("Close Eden to get the newer save.")
+        val nm = app.getSystemService(android.app.NotificationManager::class.java)
+        val posted = org.robolectric.Shadows.shadowOf(nm).allNotifications
+        assertEquals(1, posted.size)
+        assertEquals(dev.tandem.app.R.drawable.ic_stat_tandem, posted.single().smallIcon.resId)
+    }
+
     @Test fun configsUrlTrimsTheSlash() {
         assertEquals("https://t.example/configs", configsUrl("https://t.example/"))
     }

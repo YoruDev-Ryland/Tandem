@@ -42,7 +42,7 @@ class MainActivityLaunchTest {
     }).around(compose)
 
     @Test fun launchesAndShowsTheWordmark() {
-        compose.onNodeWithText("Tandem").assertIsDisplayed()
+        compose.onNodeWithText("TANDEM").assertIsDisplayed()
     }
 
     @Test fun signedOutItOpensOnSetupAndBStaysThere() {

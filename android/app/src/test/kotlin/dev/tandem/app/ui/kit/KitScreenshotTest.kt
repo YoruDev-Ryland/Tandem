@@ -79,7 +79,7 @@ private fun Sample() {
     val noop = {}
     ConsoleScaffold(
         top = {
-            BasicText("Tandem", style = EmuType.section.copy(fontSize = 16.sp, fontWeight = FontWeight.Bold, color = c.ink))
+            Wordmark()
             BumperTabs(listOf("This device", "Activity", "Conflicts", "Settings"), page, { page = it }, badge = { if (it == 2) "1" else null })
             Spacer(Modifier.weight(1f))
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
