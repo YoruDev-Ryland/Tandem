@@ -12,6 +12,8 @@
   --wait: #f0a030;
   --fault: #ff6b55;
   --glyph: #2a2a2a;
+  /* A surface that sits forward of the page: the shelf's pulled-out card. */
+  --raised: #1b1b1a;
   --diff-add: rgba(110, 170, 255, 0.1);
   --diff-add-ink: #8ec0ff;
   --diff-del: rgba(240, 160, 48, 0.1);
@@ -30,6 +32,7 @@
     --wait: #9a5c00;
     --fault: #c23824;
     --glyph: #d6d6d1;
+    --raised: #f8f7f3;
     --diff-add: rgba(0, 103, 214, 0.08);
     --diff-add-ink: #0057b8;
     --diff-del: rgba(184, 110, 0, 0.1);
@@ -48,6 +51,7 @@
   --wait: #9a5c00;
   --fault: #c23824;
   --glyph: #d6d6d1;
+  --raised: #f8f7f3;
   --diff-add: rgba(0, 103, 214, 0.08);
   --diff-add-ink: #0057b8;
   --diff-del: rgba(184, 110, 0, 0.1);
@@ -66,6 +70,7 @@
   --wait: #9a5c00;
   --fault: #c23824;
   --glyph: #d6d6d1;
+  --raised: #f8f7f3;
   --diff-add: rgba(0, 103, 214, 0.08);
   --diff-add-ink: #0057b8;
   --diff-del: rgba(184, 110, 0, 0.1);
