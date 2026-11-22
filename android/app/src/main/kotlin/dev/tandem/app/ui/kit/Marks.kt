@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -65,10 +66,15 @@ val PRESENCE_W = 52.dp
  * One device's cell in a game row: a drawn 12 dp square, single 1.5 dp stroke. Filled has the newest save, outlined an
  * older one, half filled the newest is on its way, amber outlined with "wait" it arrives when the emulator closes,
  * dashed installed with no save yet; a dash is not installed and a red "×2" two different saves. The shape carries the
- * meaning, so colour is never the only signal; [description] is what it reads as.
+ * meaning, so colour is never the only signal; [description] is what it reads as (null: it reads as nothing, for a
+ * mark inside a line that says it in words).
+ *
+ * [compact] is the shelf's form, for its status rail and card: the glyph alone in an 18 dp square, so a mark fits
+ * under a 34 dp spine. Waiting then draws its amber square with a small arrow into it (the save is coming in) in
+ * place of the word "wait", so the shape still tells it from an older copy.
  */
 @Composable
-fun PresenceMark(p: Presence, description: String, modifier: Modifier = Modifier) {
+fun PresenceMark(p: Presence, description: String?, modifier: Modifier = Modifier, compact: Boolean = false) {
     val c = LocalEmu.current
     val focused = LocalRowFocused.current
     val tone = when (p) {
@@ -81,8 +87,34 @@ fun PresenceMark(p: Presence, description: String, modifier: Modifier = Modifier
     val ink = c.tone(tone, focused)
     val word = EmuType.meta.copy(fontFamily = EmuFonts.Barlow, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = ink,
         fontFeatureSettings = "tnum")
+    val reads = Modifier.clearAndSetSemantics { if (description != null) contentDescription = description }
+    if (compact) {
+        Box(modifier.size(18.dp).then(reads), contentAlignment = Alignment.Center) {
+            when (p) {
+                Presence.Absent -> BasicText("—", style = word.copy(fontWeight = FontWeight.Normal, fontSize = 13.sp))
+                Presence.Conflict -> BasicText("×2", style = word.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                else -> Canvas(Modifier.size(12.dp)) {
+                    val sw = (if (p == Presence.Waiting) 2.dp else 1.5.dp).toPx()
+                    val inset = sw / 2
+                    val r = CornerRadius(1.dp.toPx())
+                    val side = size.width - sw
+                    val dash = if (p == Presence.Empty) PathEffect.dashPathEffect(floatArrayOf(2.5.dp.toPx(), 2.dp.toPx())) else null
+                    if (p == Presence.Newest) drawRoundRect(ink, Offset(inset, inset), Size(side, side), r)
+                    if (p == Presence.Coming) drawRect(ink, Offset(inset, size.height / 2), Size(side, size.height / 2 - inset))
+                    if (p == Presence.Waiting) {
+                        val m = sw + 1.dp.toPx()
+                        drawPath(Path().apply {
+                            moveTo(m, m); lineTo(size.width - m, m); lineTo(size.width / 2, size.height - m); close()
+                        }, ink)
+                    }
+                    drawRoundRect(ink, Offset(inset, inset), Size(side, side), r, style = Stroke(sw, pathEffect = dash))
+                }
+            }
+        }
+        return
+    }
     Row(
-        modifier.width(PRESENCE_W).height(20.dp).clearAndSetSemantics { contentDescription = description },
+        modifier.width(PRESENCE_W).height(20.dp).then(reads),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {

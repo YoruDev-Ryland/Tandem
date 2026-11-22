@@ -17,6 +17,9 @@ import okio.source
 import java.io.InputStream
 
 const val PROTOCOL_VERSION = "1"
+
+/** The largest cover the app takes (the server caps images at 2 MiB). */
+private const val MAX_ART_BYTES = 4L * 1024 * 1024
 private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
 private val OCTET = "application/octet-stream".toMediaType()
 
@@ -189,6 +192,31 @@ class ApiClient(
     override suspend fun me(): DeviceSummary = get("/v1/devices/me", DeviceSummary.serializer())
 
     override suspend fun vault(): List<VaultItemDto> = get("/v1/vault", ListSerializer(VaultItemDto.serializer()))
+
+    /**
+     * The cover, by the same path encoding as [game]. 200 is the image (at most [MAX_ART_BYTES]), 202 pending, 404 none;
+     * anything else, or no answer at all, is a failure. A revoked key is still reported through onRevoked.
+     */
+    override suspend fun art(emulatorId: String, gameKey: String): ArtResult = withContext(Dispatchers.IO) {
+        try {
+            http.newCall(req("/v1/web/art/${encodeSegment(emulatorId)}/${encodeKey(gameKey)}").get().build()).execute().use { r ->
+                when (r.code) {
+                    200 -> {
+                        val bytes = r.body.source().let { src ->
+                            if (!src.request(MAX_ART_BYTES + 1)) src.readByteArray() else null   // too big: not a cover
+                        }
+                        if (bytes == null || bytes.isEmpty()) ArtResult.Failed else ArtResult.Image(bytes)
+                    }
+                    202 -> ArtResult.Pending
+                    404 -> ArtResult.None
+                    401 -> { runCatching { check(r) }; ArtResult.Failed }
+                    else -> ArtResult.Failed
+                }
+            }
+        } catch (_: java.io.IOException) {
+            ArtResult.Failed
+        }
+    }
 }
 
 private fun query(vararg params: Pair<String, Any?>): String =

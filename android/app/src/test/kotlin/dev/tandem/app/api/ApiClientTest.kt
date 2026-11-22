@@ -156,4 +156,47 @@ class ApiClientTest {
         }
         assertTrue("cancelled by the call timeout, not the 3 s answer", System.nanoTime() - started < 2_500_000_000L)
     }
+
+    // ---- cover art: GET /v1/web/art/{emulator}/{key} ----
+
+    @Test fun slash_and_unicode_key_path() = runBlocking {
+        val key = "GBA/Pokémon - Emerald Version (USA).srm"
+        server.enqueue(MockResponse.Builder().code(404).body("""{"code":"not_found"}""").build())
+        server.enqueue(MockResponse.Builder().code(404).body("""{"error":"no_art"}""").build())
+        val c = ApiClient(base(), "k")
+        try { c.game("retro arch", key) } catch (_: ApiException) { }
+        assertEquals(ArtResult.None, c.art("retro arch", key))
+        val game = server.takeRequest().url.encodedPath
+        val art = server.takeRequest()
+        assertEquals(game.replace("/v1/web/games/", "/v1/web/art/"), art.url.encodedPath)
+        assertEquals("/v1/web/art/retro%20arch/GBA/Pok%C3%A9mon%20-%20Emerald%20Version%20(USA).srm", art.url.encodedPath)
+        assertEquals("1", art.headers["Tandem-Protocol"])
+        assertEquals("Bearer k", art.headers["Authorization"])
+    }
+
+    @Test fun art_answers_map_to_results() = runBlocking {
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 1, 2, 3)
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "image/png").body(okio.Buffer().write(png)).build())
+        server.enqueue(MockResponse.Builder().code(202).setHeader("Retry-After", "3").body("""{"error":"art_pending"}""").build())
+        server.enqueue(MockResponse.Builder().code(404).body("""{"error":"no_art"}""").build())
+        server.enqueue(MockResponse.Builder().code(500).body("boom").build())
+        val c = ApiClient(base(), "k")
+        val image = c.art("dolphin", "GSXE69")
+        assertTrue(image is ArtResult.Image && image.bytes.contentEquals(png))
+        assertEquals(ArtResult.Pending, c.art("dolphin", "GSXE69"))
+        assertEquals(ArtResult.None, c.art("dolphin", "GSXE69"))
+        assertEquals(ArtResult.Failed, c.art("dolphin", "GSXE69"))
+    }
+
+    @Test fun art_that_cannot_be_reached_is_a_failure_not_a_throw() = runBlocking {
+        val c = ApiClient("http://127.0.0.1:1", "k")
+        assertEquals(ArtResult.Failed, c.art("dolphin", "GSXE69"))
+    }
+
+    @Test fun art_for_a_revoked_key_reports_the_revoke() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(401).body(revokedBody).build())
+        var revoked = 0
+        assertEquals(ArtResult.Failed, ApiClient(base(), "k", onRevoked = { revoked++ }).art("dolphin", "GSXE69"))
+        assertEquals(1, revoked)
+    }
 }

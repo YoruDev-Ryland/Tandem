@@ -150,7 +150,7 @@ internal fun SetupFrame(
 private fun RowScope.SetupTop(status: TopStatus) {
     val c = LocalEmu.current
     val meta = EmuType.meta.copy(fontWeight = FontWeight.Medium)
-    BasicText("Tandem", style = EmuType.section.copy(fontSize = 16.sp, fontWeight = FontWeight.Bold, color = c.ink))
+    dev.tandem.app.ui.kit.Wordmark()
     BasicText("Set up this device", style = EmuType.tab.copy(color = c.ink2), maxLines = 1)
     Row(
         Modifier.weight(1f),
