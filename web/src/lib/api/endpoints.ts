@@ -28,7 +28,43 @@ export const getGame = (emu: string, key: string) =>
   api<T.GameDetail>("GET", `/v1/web/games/${enc(emu)}/${encodeKey(key)}`);
 /** Deletes the game's saves and states from the server (404 not_found when there are none). */
 export const deleteGame = (emu: string, key: string) => api<void>("DELETE", `/v1/web/games/${enc(emu)}/${encodeKey(key)}`);
-export const getConflicts = () => api<T.ConflictRow[]>("GET", "/v1/web/conflicts");
+export type ArtResult = { kind: "image"; url: string } | { kind: "pending" } | { kind: "none" };
+
+const ART_HEADERS = { "Tandem-Protocol": "1", Accept: "image/png, image/jpeg" };
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * The cover for a game's shelf card. 200 gives an object URL (the caller revokes it when focus leaves); 202 is asked
+ * once more after 3 s, then "pending"; a 404, an error or a body that isn't an image gives "none". Aborting the signal
+ * (focus moved on) gives "none" and stops the retry. The browser's HTTP cache keeps images and known misses.
+ */
+export async function fetchArt(
+  emu: string,
+  key: string,
+  opts: { signal?: AbortSignal; wait?: (ms: number) => Promise<void> } = {},
+): Promise<ArtResult> {
+  const { signal, wait = sleep } = opts;
+  const once = async (): Promise<ArtResult> => {
+    if (signal?.aborted) return { kind: "none" };
+    try {
+      const res = await fetch(`/v1/web/art/${enc(emu)}/${encodeKey(key)}`, { headers: ART_HEADERS, credentials: "same-origin", signal });
+      if (res.status === 202) return { kind: "pending" };
+      if (!res.ok || !/^image\//.test(res.headers.get("Content-Type") ?? "")) return { kind: "none" };
+      const blob = await res.blob();
+      if (signal?.aborted) return { kind: "none" };
+      return { kind: "image", url: URL.createObjectURL(blob) };
+    } catch {
+      return { kind: "none" };
+    }
+  };
+  const first = await once();
+  if (first.kind !== "pending") return first;
+  await wait(3000);
+  if (signal?.aborted) return { kind: "none" };
+  return once();
+}
+
+export const getConflicts =() => api<T.ConflictRow[]>("GET", "/v1/web/conflicts");
 export const resolveConflict = (itemId: string, req: T.ResolveConflictRequest) =>
   api<void>("POST", `/v1/conflicts/${enc(itemId)}/resolve`, req);
 export const bulkFirstSync = (deviceId: string, choice: T.FirstSyncChoice, itemIds?: string[]) =>
