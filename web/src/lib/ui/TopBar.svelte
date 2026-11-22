@@ -2,6 +2,7 @@
   import type { DeviceSummary } from "../api/types";
   import { PRODUCT_NAME } from "../brand";
   import { deviceStatus } from "../deviceStatus";
+  import Mark from "./Mark.svelte";
   import Tabs from "./Tabs.svelte";
 
   interface Props {
@@ -21,7 +22,7 @@
 </script>
 
 <header>
-  <span class="word">{PRODUCT_NAME}</span>
+  <span class="word"><Mark size={13} />{PRODUCT_NAME}</span>
   <Tabs items={tabs} {active} level={1} />
   {#if devices.length}
     <ul class="devices" aria-label="Devices">
@@ -44,6 +45,9 @@
   }
   .word {
     flex: none;
+    display: flex;
+    align-items: center;
+    gap: 9px;
     margin-right: 20px;
     font: 700 19px "Barlow Semi Condensed", sans-serif;
     letter-spacing: 0.01em;

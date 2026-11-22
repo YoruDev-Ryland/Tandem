@@ -73,6 +73,11 @@ describe.each([
     expect(contrast(colour(theme, token), colour(theme, "--bg"))).toBeGreaterThanOrEqual(4.5);
   });
 
+  // The card keeps --ink3 for marks only (3:1 for graphics); its words are --ink2 at least.
+  it.each(["--ink", "--ink2", "--wait", "--fault"])("%s on --raised (the shelf card)", (token) => {
+    expect(contrast(colour(theme, token), colour(theme, "--raised"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("--focus-ink on --focus-bg", () => {
     expect(contrast(colour(theme, "--focus-ink"), colour(theme, "--focus-bg"))).toBeGreaterThanOrEqual(4.5);
   });
