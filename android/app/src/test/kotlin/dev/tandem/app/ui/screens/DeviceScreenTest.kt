@@ -10,6 +10,7 @@ import dev.tandem.app.ui.kit.LocalNotice
 import dev.tandem.app.ui.kit.LocalReadout
 import dev.tandem.app.ui.kit.LocalStatusLine
 import dev.tandem.app.ui.kit.Presence
+import dev.tandem.app.ui.state.PresenceCell
 import dev.tandem.app.ui.kit.Readout
 import androidx.compose.ui.test.performClick
 import org.robolectric.RuntimeEnvironment
