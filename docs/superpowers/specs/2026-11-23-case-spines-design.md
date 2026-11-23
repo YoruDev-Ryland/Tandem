@@ -1,6 +1,6 @@
 # Case spines: shelf spines that look like the real game cases
 
-Status: draft for the owner's approval (2026-11-23). Builds on the shelf redesign
+Status: approved by the owner (2026-11-23). Builds on the shelf redesign
 (`docs/superpowers/specs/2026-11-22-shelf-redesign-design.md`), which this changes only where it says so.
 
 ## Intent
@@ -133,8 +133,8 @@ Today's spines are 78 px.
 - **Title:** white, Barlow Semi Condensed Bold, reading **top to bottom** (as printed on North American cases),
   below the band. It is cut with an ellipsis when it doesn't fit.
 
-  Real spines, by contrast, carry their own printed title. Fallback spines keep today's bottom-to-top direction
-  unless the owner says otherwise (open question 2).
+  Real spines, by contrast, carry their own printed title. Fallback spines also read top to bottom (owner,
+  2026-11-23).
 - **Band per system:**
 
   | System | Band colour | Name on the band | Name colour |
@@ -212,10 +212,8 @@ reduced motion and a short fade otherwise.
 - **Prefetch:** the exact prefetch window and concurrency within the limits above.
 - **Storage:** migration names and storage for `GameId`.
 
-## Open questions for the owner
+## Owner's answers (2026-11-23)
 
-1. **Titles on real spines:** some real spines' printed titles are small at the handheld's size, for example
-   Skies of Arcadia. Keep the real spine as it is, or overlay our own title when it's hard to read? The draft
-   keeps the real spine untouched.
-2. **Fallback spines** (no art): switch them to read top to bottom like the built ones, or keep today's bottom to
-   top?
+1. **Real spines stay exactly as scanned.** No title is laid over them, even when the printed one is small.
+2. **Fallback spines read top to bottom**, like built spines. Today's bottom-to-top direction goes away on the
+   shelf.
