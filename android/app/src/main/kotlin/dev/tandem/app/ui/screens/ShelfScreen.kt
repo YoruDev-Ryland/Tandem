@@ -35,6 +35,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.text.modifiers.TextAutoSizeLayoutScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -367,6 +370,25 @@ private suspend fun LazyListState.keepInView(at: Int, n: Int, viewport: Int, spi
     scrollToItem(i, x - left(i))
 }
 
+/**
+ * The card title's size: two lines from 26 sp down to 18, and a name that fits two lines at none of those takes a third
+ * line from 20 sp down to 17. Only past that is it cut with an ellipsis.
+ */
+internal object CardTitleSize : TextAutoSize {
+    val steps: List<Pair<Int, Int>> = (26 downTo 18).map { it to 2 } + (20 downTo 17).map { it to 3 }
+
+    override fun TextAutoSizeLayoutScope.getFontSize(constraints: Constraints, text: AnnotatedString): TextUnit {
+        for ((sp, lines) in steps) {
+            val l = performLayout(constraints, text, sp.sp)
+            if (l.lineCount <= lines && !l.hasVisualOverflow) return sp.sp
+        }
+        return 17.sp
+    }
+
+    override fun equals(other: Any?): Boolean = other === this
+    override fun hashCode(): Int = 0x7a11e
+}
+
 /** A game's spine: its system's colour, the system code at the top and the title reading bottom to top. */
 @Composable
 private fun SpineView(s: Spine, height: Dp, onClick: () -> Unit) {
@@ -446,9 +468,8 @@ private fun Card(s: Spine, height: Dp, cover: ImageBitmap?, onClick: () -> Unit)
                     Modifier.padding(top = 4.dp, bottom = 8.dp).testTag("card-title"),
                     style = if (card.unnamed) EmuType.mono.copy(fontSize = 17.sp, lineHeight = 20.sp, color = c.ink)
                     else EmuType.section.copy(fontWeight = FontWeight.Bold, fontSize = 26.sp, lineHeight = 1.em, color = c.ink),
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    // A long name steps down from 26 sp until it fits in two lines; only past 17 sp does it cut.
-                    autoSize = if (card.unnamed) null else TextAutoSize.StepBased(minFontSize = 17.sp, maxFontSize = 26.sp, stepSize = 1.sp),
+                    maxLines = if (card.unnamed) 2 else 3, overflow = TextOverflow.Ellipsis,
+                    autoSize = if (card.unnamed) null else CardTitleSize,
                 )
                 val status = card.tone == Tone.Wait || card.tone == Tone.Fault
                 BasicText(

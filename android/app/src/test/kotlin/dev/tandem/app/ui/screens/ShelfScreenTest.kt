@@ -198,12 +198,12 @@ class ShelfScreenTest {
         compose.onNodeWithText("0100AC20128AB000").assertExists()   // a raw key, as the name
     }
 
-    @Test fun card_title_wraps_to_two_lines_max() {
+    @Test fun card_title_wraps_to_three_lines_max() {
         val long = "The Legend of Zelda: A Link Between Worlds and Another Very Long Subtitle"
         show(shelfSample(listOf(shelfGame("eden", "k", long, Newest, Newest)), emptyList()))
         val l = layout("card-title")
-        assertEquals(2, l.lineCount)
-        assertTrue(l.isLineEllipsized(1))
+        assertEquals(3, l.lineCount)
+        assertTrue(l.isLineEllipsized(2))
         val card = bounds("card")
         val title = bounds("card-title")
         assertTrue(title.right <= card.right && title.bottom <= card.bottom)
@@ -212,7 +212,7 @@ class ShelfScreenTest {
     private fun cardTitleLineHeight(title: String): Float {
         show(shelfSample(listOf(shelfGame("dolphin", "k", title, Newest, Newest)), emptyList()))
         val l = layout("card-title")
-        assertTrue(l.lineCount <= 2)
+        assertTrue(l.lineCount <= 3)
         return l.getLineBottom(0) - l.getLineTop(0)
     }
 
@@ -228,6 +228,13 @@ class ShelfScreenTest {
     @Test fun short_card_title_keeps_26_sp() {
         val lh = cardTitleLineHeight("SSX 3")
         assertTrue("line $lh at least 26 sp", lh >= spPx(26f) - 1f)
+    }
+
+    @Test fun card_title_tries_two_lines_before_three() {
+        val steps = CardTitleSize.steps
+        assertEquals(26 to 2, steps.first())
+        assertEquals(17 to 3, steps.last())
+        assertTrue(steps.indexOfFirst { it.second == 3 } > steps.indexOfLast { it.second == 2 })
     }
 
     @Test fun notice_line_shows_more_count() {

@@ -1,16 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { fitSize } from "../src/lib/fitText";
+import { fitStep, TITLE_STEPS } from "../src/lib/fitText";
 
-describe("fitSize", () => {
-  it("keeps 26 px when the title fits", () => {
-    expect(fitSize(() => true)).toBe(26);
+describe("card title steps", () => {
+  it("runs two lines 26→18, then three lines 20→17", () => {
+    expect(TITLE_STEPS[0]).toEqual({ px: 26, lines: 2 });
+    expect(TITLE_STEPS.filter((s) => s.lines === 2).map((s) => s.px)).toEqual([26, 25, 24, 23, 22, 21, 20, 19, 18]);
+    expect(TITLE_STEPS.filter((s) => s.lines === 3).map((s) => s.px)).toEqual([20, 19, 18, 17]);
+    expect(TITLE_STEPS.findIndex((s) => s.lines === 3)).toBe(9);
   });
-  it("steps down to the first size that fits", () => {
-    expect(fitSize((px) => px <= 21)).toBe(21);
+  it("keeps 26 px on two lines when the title fits", () => {
+    expect(fitStep(() => true)).toEqual({ px: 26, lines: 2 });
   });
-  it("stops at 17 px when nothing fits", () => {
-    const tried: number[] = [];
-    expect(fitSize((px) => (tried.push(px), false))).toBe(17);
-    expect(Math.min(...tried)).toBe(18);
+  it("prefers a smaller two-line size over a third line", () => {
+    expect(fitStep((s) => s.px <= 21)).toEqual({ px: 21, lines: 2 });
+  });
+  it("takes a third line when two lines fit at no size", () => {
+    expect(fitStep((s) => s.lines === 3 && s.px <= 19)).toEqual({ px: 19, lines: 3 });
+  });
+  it("ends at 17 px on three lines when nothing fits", () => {
+    expect(fitStep(() => false)).toEqual({ px: 17, lines: 3 });
   });
 });
