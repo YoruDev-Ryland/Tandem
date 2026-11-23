@@ -36,7 +36,9 @@ public sealed class ArtStore(IOptions<ServerOptions> options, TimeProvider time,
 
     /// <summary>The store key for a kind: the game key for a cover, a separate namespace for a spine, so a game's
     /// spine and cover never share a file, a miss or an ETag.</summary>
-    public static string KeyFor(ArtKind kind, string gameKey) => kind == ArtKind.Spine ? "\u0001spine\n" + gameKey : gameKey;
+    /// <remarks>The spine namespace carries the cutter's version: when the cut changes, old cuts stop being found and
+    /// age out of the cache like any unused image.</remarks>
+    public static string KeyFor(ArtKind kind, string gameKey) => kind == ArtKind.Spine ? $"\u0001spine.v{SpineCutter.Version}\n" + gameKey : gameKey;
 
     public static string NameOf(string emulatorId, string gameKey) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(emulatorId + "\n" + gameKey)));

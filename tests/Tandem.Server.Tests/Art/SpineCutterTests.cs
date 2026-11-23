@@ -89,6 +89,14 @@ public class SpineCutterTests
     }
 
     [Fact]
+    public void Spine_cache_keys_carry_the_cutter_version_and_never_meet_covers()
+    {
+        Assert.Equal("GXBE69", ArtStore.KeyFor(ArtKind.Cover, "GXBE69"));
+        Assert.Contains($"spine.v{SpineCutter.Version}", ArtStore.KeyFor(ArtKind.Spine, "GXBE69"));
+        Assert.NotEqual(ArtStore.NameOf("dolphin", ArtStore.KeyFor(ArtKind.Cover, "GXBE69")), ArtStore.NameOf("dolphin", ArtStore.KeyFor(ArtKind.Spine, "GXBE69")));
+    }
+
+    [Fact]
     public void Rejects_images_that_are_not_a_full_wrap()
     {
         Assert.Null(SpineCutter.Cut(Scan(512, 512, 0, 0), "GC"));

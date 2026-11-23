@@ -10,6 +10,9 @@ public static class SpineCutter
 {
     public const int OutputHeight = 680;
 
+    /// <summary>Bumped whenever the cut changes, so spines cut the old way are fetched and cut again.</summary>
+    public const int Version = 2;
+
     /// <summary>An edge has to change brightness by at least this much (0–255, averaged down the scan) to be trusted.</summary>
     private const double MinEdge = 4.0;
 
