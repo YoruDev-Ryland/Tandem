@@ -240,6 +240,11 @@ describe("Games shelf", () => {
     dispatch("right");
     await waitFor(() => expect(card().querySelector("img")?.getAttribute("src")).toBe("blob:cover"));
     expect(fetchMock.mock.calls.map(([u]) => u)).toContain("/v1/web/art/eden/0100FOUR");
+    // The whole cover shows in its own shape: fitted into the slot, never cropped to the slot's case shape.
+    const img = card().querySelector("img")!;
+    expect(getComputedStyle(img).objectFit).not.toBe("cover");
+    expect(getComputedStyle(img).maxWidth).toBe("100%");
+    expect(getComputedStyle(img).maxHeight).toBe("100%");
     dispatch("right");
     await waitFor(() => expect(revoked).toHaveBeenCalledWith("blob:cover"));
   });

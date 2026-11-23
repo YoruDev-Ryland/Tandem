@@ -514,7 +514,12 @@ private fun DeviceLine(name: String, p: Presence, words: String) {
 private fun Cover(s: Spine, cover: ImageBitmap?, w: Dp, h: Dp) {
     val shape = RoundedCornerShape(2.dp)
     if (cover != null) {
-        Image(cover, contentDescription = "Cover of ${s.title}", Modifier.size(w, h).clip(shape), contentScale = ContentScale.Crop)
+        // The whole cover, in its own shape (a square GBA box, a tall DVD case), fitted into the slot and set at its top.
+        // The slot keeps its size so the title beside it doesn't move from game to game.
+        val (iw, ih) = coverFit(cover.width, cover.height, w, h)
+        Box(Modifier.size(w, h), contentAlignment = Alignment.TopCenter) {
+            Image(cover, contentDescription = "Cover of ${s.title}", Modifier.size(iw, ih).clip(shape).testTag("cover"), contentScale = ContentScale.FillBounds)
+        }
         return
     }
     Box(
@@ -528,6 +533,13 @@ private fun Cover(s: Spine, cover: ImageBitmap?, w: Dp, h: Dp) {
             maxLines = 1,
         )
     }
+}
+
+/** The size an image of [pxW]×[pxH] takes fitted whole inside [w]×[h]. */
+internal fun coverFit(pxW: Int, pxH: Int, w: Dp, h: Dp): Pair<Dp, Dp> {
+    if (pxW <= 0 || pxH <= 0) return w to h
+    val aspect = pxW.toFloat() / pxH
+    return if (aspect >= w / h) w to w / aspect else h * aspect to h
 }
 
 /**

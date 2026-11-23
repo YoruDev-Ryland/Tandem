@@ -16,7 +16,7 @@
 </script>
 
 <div class="card">
-  <div class="cover" style:--sp={spineColour(system)} style:--sp-ink={spineInk(system)}>
+  <div class="cover" class:art={!!art} style:--sp={spineColour(system)} style:--sp-ink={spineInk(system)}>
     {#if art}
       <img src={art} alt="" />
     {:else}
@@ -67,11 +67,19 @@
     align-items: center;
     justify-content: center;
   }
+  /* The whole cover, in its own shape, fitted into the slot and set at its top; the slot keeps its size. */
+  .cover.art {
+    background: none;
+    align-items: flex-start;
+    border-radius: 0;
+  }
   img {
     display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    border-radius: 2px;
   }
   .code {
     font: 700 30px/1 "Barlow Semi Condensed", sans-serif;

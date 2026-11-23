@@ -39,6 +39,7 @@ import dev.tandem.app.ui.theme.ThemeMode
 import java.io.File
 import java.time.Instant
 import java.time.ZoneOffset
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -235,6 +236,15 @@ class ShelfScreenTest {
         assertEquals(26 to 2, steps.first())
         assertEquals(17 to 3, steps.last())
         assertTrue(steps.indexOfFirst { it.second == 3 } > steps.indexOfLast { it.second == 2 })
+    }
+
+    @Test fun covers_fit_whole_in_the_slot() {
+        val w = 120.dp; val h = 168.dp
+        assertEquals(120.dp to 120.dp, coverFit(512, 512, w, h))           // a square GBA box: full width, shorter
+        assertEquals(120.dp to 168.dp, coverFit(160, 224, w, h))           // a DVD case fills the slot
+        val (tw, th) = coverFit(512, 884, w, h)                            // a tall PSP case: full height, narrower
+        assertEquals(168f, th.value, 0.01f); assertTrue(tw < w)
+        assertEquals(w to h, coverFit(0, 0, w, h))
     }
 
     @Test fun notice_line_shows_more_count() {
