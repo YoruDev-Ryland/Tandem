@@ -74,6 +74,7 @@ public static class ServerSetup
         builder.Services.AddSingleton<Art.ILibretroIndex, Art.LibretroIndex>();
         builder.Services.AddSingleton<Art.IArtSource, Art.GameTdbCoverSource>();     // sources are tried in this order
         builder.Services.AddSingleton<Art.IArtSource, Art.LibretroThumbnailSource>();
+        builder.Services.AddSingleton<Art.GameTdbSpineSource>();
         builder.Services.AddSingleton<Art.ArtFetcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Art.ArtFetcher>());
         builder.Services.AddHttpClient(Art.ArtFetcher.ClientName, c =>

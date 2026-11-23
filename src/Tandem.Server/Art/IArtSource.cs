@@ -1,8 +1,14 @@
 namespace Tandem.Server.Art;
 
 /// <summary>What the sources know about a game: its key, the name it is shown under and (RetroArch) the save's core.</summary>
+/// <summary>What is fetched for a game: its front cover, or its real case spine.</summary>
+public enum ArtKind { Cover, Spine }
+
 /// <param name="System">The system a device reported for the game, used when the key and core don't tell.</param>
-public sealed record ArtRequest(string EmulatorId, string GameKey, string? DisplayName, string? Core, string? System = null);
+/// <param name="Kind">Cover (the art sources) or Spine (a GameTDB case scan, cut).</param>
+/// <param name="GameId">The GameTDB id a device reported (DS, 3DS), for spines.</param>
+public sealed record ArtRequest(string EmulatorId, string GameKey, string? DisplayName, string? Core, string? System = null,
+    ArtKind Kind = ArtKind.Cover, string? GameId = null);
 
 /// <summary>
 /// One place cover art may come from. A source only builds addresses; the fetcher downloads them in order and keeps the

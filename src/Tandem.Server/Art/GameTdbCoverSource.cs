@@ -31,9 +31,19 @@ public sealed class GameTdbCoverSource(TitleNamesHolder titles) : IArtSource
         if (!TitleNames.IsDiscId(key)) return [];
         var id = key.Length == 6 ? key : list?.FullDiscId(key);
         if (id is null) return [];
-        var region = Region(id[3]);
-        var regions = region is "DE" or "FR" or "ES" or "IT" or "NL" or "AU" or "RU" ? new[] { region, "EN" } : [region];
+        var regions = GameTdb.Regions(id);
         return regions.Select(r => new Uri($"{BaseUrl}wii/cover/{r}/{id}.png")).ToList();
+    }
+}
+
+/// <summary>GameTDB's region folders for an id, by its 4th character as Dolphin's own cover download does; a PAL
+/// language region falls back to EN.</summary>
+internal static class GameTdb
+{
+    public static IReadOnlyList<string> Regions(string id)
+    {
+        var region = id.Length > 3 ? Region(id[3]) : "EN";
+        return region is "DE" or "FR" or "ES" or "IT" or "NL" or "AU" or "RU" ? [region, "EN"] : [region];
     }
 
     private static string Region(char c) => c switch

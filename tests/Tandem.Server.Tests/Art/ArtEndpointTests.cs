@@ -51,7 +51,7 @@ public class ArtEndpointTests
         }
     }
 
-    private static ServerFactory Factory(FakeSources sources, bool enabled = true, long? maxImageBytes = null)
+    internal static ServerFactory Factory(FakeSources sources, bool enabled = true, long? maxImageBytes = null)
     {
         var f = new ServerFactory();
         f.Settings["Tandem:EnableArt"] = enabled ? "true" : "false";
@@ -60,16 +60,16 @@ public class ArtEndpointTests
         return f;
     }
 
-    private static Task Drain(ServerFactory f) => f.Services.GetRequiredService<ArtFetcher>().WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
+    internal static Task Drain(ServerFactory f) => f.Services.GetRequiredService<ArtFetcher>().WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-    private static async Task<string?> ErrorCode(HttpResponseMessage r)
+    internal static async Task<string?> ErrorCode(HttpResponseMessage r)
     {
         using var doc = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
         return doc.RootElement.GetProperty("error").GetString();
     }
 
     /// <summary>The header as the server wrote it (the typed header reorders its parts).</summary>
-    private static string CacheControl(HttpResponseMessage r) => r.Headers.NonValidated["Cache-Control"].ToString();
+    internal static string CacheControl(HttpResponseMessage r) => r.Headers.NonValidated["Cache-Control"].ToString();
 
     private static readonly Uri SsxCover = new("https://art.gametdb.com/wii/cover/US/GXBE69.png");
 

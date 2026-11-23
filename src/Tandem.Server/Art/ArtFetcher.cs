@@ -12,8 +12,8 @@ namespace Tandem.Server.Art;
 /// the miss is recorded for an hour only, and marked transient. Any other failure (a full disk, say) is also a
 /// transient miss for an hour. Nothing runs, and nothing is fetched, with <c>ART=false</c>.
 /// </summary>
-public sealed class ArtFetcher(IEnumerable<IArtSource> sources, ArtStore store, IHttpClientFactory http, IOptions<ServerOptions> options,
-    TimeProvider time, ILogger<ArtFetcher> log) : BackgroundService
+public sealed class ArtFetcher(IEnumerable<IArtSource> sources, GameTdbSpineSource spines, ArtStore store, IHttpClientFactory http,
+    IOptions<ServerOptions> options, TimeProvider time, ILogger<ArtFetcher> log) : BackgroundService
 {
     public const string ClientName = "art";
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
@@ -46,7 +46,7 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, ArtStore store, 
     public bool Enqueue(ArtRequest request)
     {
         if (!options.Value.EnableArt) return false;
-        var name = ArtStore.NameOf(request.EmulatorId, request.GameKey);
+        var name = NameOf(request);
         if (!_pending.TryAdd(name, 0)) return true;
         lock (_idleGate)
         {
@@ -62,6 +62,9 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, ArtStore store, 
     {
         lock (_idleGate) return _idle.Task;
     }
+
+    /// <summary>The store name a request's result lives under (covers and spines apart).</summary>
+    private static string NameOf(ArtRequest r) => ArtStore.NameOf(r.EmulatorId, ArtStore.KeyFor(r.Kind, r.GameKey));
 
     private void Done(string name)
     {
@@ -85,15 +88,20 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, ArtStore store, 
             {
                 // Not a source saying no (for example a full disk): ask again in an hour, not on every request.
                 log.LogWarning(e, "Cover fetch for {Emulator} failed", request.EmulatorId);
-                try { store.RecordMiss(request.EmulatorId, request.GameKey, time.GetUtcNow() + RetryAfterFailure, transient: true); }
+                try { store.RecordMiss(request.EmulatorId, ArtStore.KeyFor(request.Kind, request.GameKey), time.GetUtcNow() + RetryAfterFailure, transient: true); }
                 catch (Exception again) { log.LogDebug(again, "Couldn't record the failed cover fetch"); }
             }
-            finally { Done(ArtStore.NameOf(request.EmulatorId, request.GameKey)); }
+            finally { Done(NameOf(request)); }
         }
     }
 
     private async Task FetchAsync(ArtRequest request, CancellationToken stop)
     {
+        if (request.Kind == ArtKind.Spine)
+        {
+            await FetchSpineAsync(request, stop);
+            return;
+        }
         var o = options.Value;
         var unreachable = false;
         foreach (var source in sources)
@@ -117,6 +125,33 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, ArtStore store, 
         }
         var wait = unreachable ? RetryAfterFailure : TimeSpan.FromDays(Math.Max(1, o.ArtMissDays));
         store.RecordMiss(request.EmulatorId, request.GameKey, time.GetUtcNow() + wait, transient: unreachable);
+    }
+
+    /// <summary>
+    /// A real spine: download the GameTDB case scans in order and keep the first that <see cref="SpineCutter"/> can cut.
+    /// A scan that can't be cut is a normal miss; an unreachable source a transient one.
+    /// </summary>
+    private async Task FetchSpineAsync(ArtRequest request, CancellationToken stop)
+    {
+        var o = options.Value;
+        var key = ArtStore.KeyFor(ArtKind.Spine, request.GameKey);
+        var system = ArtSystems.Resolve(request.EmulatorId, request.GameKey, request.Core, request.System) ?? "GC";
+        var unreachable = false;
+        foreach (var uri in spines.Candidates(request))
+        {
+            var (image, failed) = await DownloadAsync(uri, o.ArtMaxImageBytes, stop);
+            unreachable |= failed;
+            if (image is null) continue;
+            if (SpineCutter.Cut(image.Value.Bytes, system) is not { } png)
+            {
+                log.LogDebug("Case scan at {Host} could not be cut", uri.Host);
+                continue;
+            }
+            store.Save(request.EmulatorId, key, png, ".png");
+            return;
+        }
+        var wait = unreachable ? RetryAfterFailure : TimeSpan.FromDays(Math.Max(1, o.ArtMissDays));
+        store.RecordMiss(request.EmulatorId, key, time.GetUtcNow() + wait, transient: unreachable);
     }
 
     /// <summary>The image at [uri], or null; Failed is true when the source could not be reached rather than said no.</summary>

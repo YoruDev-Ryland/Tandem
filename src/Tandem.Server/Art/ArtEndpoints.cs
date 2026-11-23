@@ -23,8 +23,9 @@ public static class ArtEndpoints
     {
         // gameKey may contain '/', so it is a catch-all; an encoded slash stays literal and is turned back, as for
         // /v1/web/games/{emulatorId}/{*gameKey}.
-        app.MapGroup("/v1/web").RequireAuthorization()
-            .MapGet("/art/{emulatorId}/{*gameKey}", GetAsync);
+        var g = app.MapGroup("/v1/web").RequireAuthorization();
+        g.MapGet("/art/{emulatorId}/{*gameKey}", GetAsync);
+        g.MapGet("/spine/{emulatorId}/{*gameKey}", GetSpineAsync);
         return app;
     }
 
@@ -72,6 +73,50 @@ public static class ArtEndpoints
         fetcher.Enqueue(new ArtRequest(emulatorId, key, display, core, installs.Select(r => r.System).FirstOrDefault(x => x is not null)));
         http.Response.Headers.RetryAfter = "3";
         return Error(http, StatusCodes.Status202Accepted, "art_pending", "Cover art is being fetched.", "no-store");
+    }
+
+    /// <summary>
+    /// <c>GET /v1/web/spine/{emulatorId}/{*gameKey}</c>: the game's real case spine, cut from a GameTDB scan. The same
+    /// contract as /art, except 202 is spine_pending and a game without a spine (or with art off) is 404 no_spine.
+    /// </summary>
+    private static async Task<IResult> GetSpineAsync(HttpContext http, TandemDbContext db, ArtStore store, ArtFetcher fetcher,
+        IOptions<ServerOptions> options, TimeProvider time, string emulatorId, string gameKey, CancellationToken ct)
+    {
+        var key = gameKey.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase);
+        var userId = http.User.UserId();
+        var hasSave = await db.SaveItems.AsNoTracking().AnyAsync(i => i.UserId == userId && i.EmulatorId == emulatorId && i.GameKey == key, ct);
+        var installs = await (from r in db.InstallRecords.AsNoTracking()
+                              join d in db.Devices.AsNoTracking() on r.DeviceId equals d.Id
+                              where d.UserId == userId && d.RevokedUtc == null && r.EmulatorId == emulatorId && r.GameKey == key
+                              orderby r.SeenUtc descending
+                              select new { r.System, r.GameId }).ToListAsync(ct);
+        if (!hasSave && installs.Count == 0) return Error(http, StatusCodes.Status404NotFound, "not_found", "No such game.", "no-store");
+
+        var reported = installs.Select(r => r.System).FirstOrDefault(s => s is not null);
+        var gameId = installs.Select(r => r.GameId).FirstOrDefault(s => s is not null);
+        var system = ArtSystems.Resolve(emulatorId, key, null, reported);
+        if (!SpineEligibility.Has(emulatorId, key, system, gameId, options.Value.EnableArt))
+            return Error(http, StatusCodes.Status404NotFound, "no_spine", "This game has no case spine.", MissCache);
+
+        switch (store.TryGet(emulatorId, ArtStore.KeyFor(ArtKind.Spine, key)))
+        {
+            case ArtLookup.Image image:
+                byte[] bytes;
+                try { bytes = await File.ReadAllBytesAsync(image.Path, ct); }
+                catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { break; }
+                http.Response.Headers.CacheControl = ImageCache;
+                return Results.Bytes(bytes, image.ContentType, entityTag: new EntityTagHeaderValue(image.ETag));
+            case ArtLookup.Miss miss:
+                var seconds = (long)Math.Ceiling(Math.Clamp((miss.Until - time.GetUtcNow()).TotalSeconds, 1, MissCacheSeconds));
+                var cache = $"private, max-age={seconds}";
+                return miss.Transient
+                    ? Error(http, StatusCodes.Status404NotFound, "art_unavailable", "The cover art sources could not be reached; try again later.", cache)
+                    : Error(http, StatusCodes.Status404NotFound, "no_spine", "No case spine was found for this game.", cache);
+        }
+
+        fetcher.Enqueue(new ArtRequest(emulatorId, key, null, null, reported, ArtKind.Spine, gameId));
+        http.Response.Headers.RetryAfter = "3";
+        return Error(http, StatusCodes.Status202Accepted, "spine_pending", "The case spine is being fetched.", "no-store");
     }
 
     /// <summary>The usual error body (code, message), plus "error" with the same code, as the art contract names it.</summary>
