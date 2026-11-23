@@ -35,7 +35,9 @@ public sealed record DeviceStatusRequest(string Platform, string AppVersion, boo
     IReadOnlyList<EmulatorStatus> Emulators, IReadOnlyDictionary<string, string> Roots, string[]? RunningEmulators = null);
 /// <param name="System">The game's system as the device can tell it (RetroArch: from the playlist or the ROM's extension),
 /// as a system label (GBA, SNES, …). Null when it can't tell; unknown labels are dropped.</param>
-public sealed record InstalledGame(string GameKey, string? DisplayName, string? Crc32, string? System = null);
+/// <param name="GameId">The game's GameTDB id when the device can read it (DS game code, 3DS product code: 4
+/// alphanumerics). Anything else is dropped.</param>
+public sealed record InstalledGame(string GameKey, string? DisplayName, string? Crc32, string? System = null, string? GameId = null);
 public sealed record InstallsRequest(IReadOnlyList<InstalledGame> Games);
 public sealed record InstallsResponse(int Added, int Removed);
 

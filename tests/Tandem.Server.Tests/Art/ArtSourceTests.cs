@@ -167,6 +167,19 @@ public class ArtSourceTests
     }
 
     [Fact]
+    public void Spine_eligibility_follows_system_and_id()
+    {
+        Assert.True(SpineEligibility.Has("dolphin", "RMCE", "WII", null, true));
+        Assert.True(SpineEligibility.Has("dolphin", "GXBE69", "GC", null, true));
+        Assert.False(SpineEligibility.Has("dolphin", "GXBE69", "GC", null, false));
+        Assert.False(SpineEligibility.Has("retroarch", "retroarch/x", "GBA", "AAAA", true));
+        Assert.True(SpineEligibility.Has("melonds", "nds/x", "DS", "CPUE", true));
+        Assert.False(SpineEligibility.Has("melonds", "nds/x", "DS", null, true));
+        Assert.Equal("CPUE", SpineEligibility.NormalizeGameId(" cpue "));
+        Assert.Null(SpineEligibility.NormalizeGameId("CTR-P-EKJE"));
+    }
+
+    [Fact]
     public async Task Libretro_uses_a_reported_system_when_there_is_no_core()
     {
         var uris = await new LibretroThumbnailSource(new FakeIndex())

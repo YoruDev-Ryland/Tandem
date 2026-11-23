@@ -415,6 +415,9 @@ namespace Tandem.Server.Data.Migrations.Postgres
                     b.Property<string>("DisplayName")
                         .HasColumnType("text");
 
+                    b.Property<string>("GameId")
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset>("SeenUtc")
                         .HasColumnType("timestamp with time zone");
 

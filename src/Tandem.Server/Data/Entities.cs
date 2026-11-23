@@ -63,6 +63,8 @@ public class InstallRecord
     public string? Crc32 { get; set; }
     /// <summary>The system the device reported for the game (a known label), or null.</summary>
     public string? System { get; set; }
+    /// <summary>The GameTDB id the device reported (4 alphanumerics), or null.</summary>
+    public string? GameId { get; set; }
     public DateTimeOffset SeenUtc { get; set; }
 }
 
