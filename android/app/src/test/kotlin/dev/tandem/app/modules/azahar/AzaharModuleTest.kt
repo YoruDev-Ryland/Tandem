@@ -87,11 +87,35 @@ class AzaharModuleTest {
         assertThrows(ModuleException::class.java) { m().targetDirFor(fs, det(), ItemKind.State, "000400000017E100", "../1", "") }
     }
 
-    private fun ncch(pid: Long): ByteArray {
+    private fun ncch(pid: Long, product: String? = null): ByteArray {
         val b = ByteBuffer.allocate(0x200).order(ByteOrder.LITTLE_ENDIAN)
         b.put(0x100, 'N'.code.toByte()); b.put(0x101, 'C'.code.toByte()); b.put(0x102, 'C'.code.toByte()); b.put(0x103, 'H'.code.toByte())
         b.putLong(0x118, pid)
+        product?.toByteArray(Charsets.US_ASCII)?.forEachIndexed { i, c -> b.put(0x150 + i, c) }
         return b.array()
+    }
+
+    @Test fun product_code_from_ncch_and_ncsd() {
+        layout()
+        assertEquals("EKJE", AzaharModule.productCode(ncch(0x0004000000055D00L, "CTR-P-EKJE").inputStream()))
+        val ncsd = ByteBuffer.allocate(0x4200).order(ByteOrder.LITTLE_ENDIAN)
+        "NCSD".toByteArray().forEachIndexed { i, c -> ncsd.put(0x100 + i, c) }
+        ncsd.putInt(0x120, 0x20); ncsd.putInt(0x124, 0x100)
+        ncch(0x0004000000055D00L, "CTR-P-EKJE").copyInto(ncsd.array(), 0x4000)
+        assertEquals("EKJE", AzaharModule.productCode(ncsd.array().inputStream()))
+        assertNull(AzaharModule.productCode(ncch(1L, "CTR-P-EK").inputStream()))
+        assertNull(AzaharModule.productCode(ncch(1L, "HELLO-WORLD").inputStream()))
+        assertNull(AzaharModule.productCode(ByteArray(10).inputStream()))
+
+        put("${internal()}/Games/3ds/X.3ds", ncsd.array())
+        put("${internal()}/Games/3ds/Plain.cxi", ncch(0x0004000000000042L))
+        put("${user()}/$pair/title/00040000/001b5000/content/00000000.app", ncch(0x00040000001B5000L, "CTR-P-A2AA"))
+        put("${user()}/$pair/title/00040000/0017e200/content/0000.app")
+        val ids = m().installedGames(fs, det(), none).associate { it.gameKey to it.gameId }
+        assertEquals("EKJE", ids["0004000000055D00"])
+        assertNull(ids["0004000000000042"])
+        assertEquals("A2AA", ids["00040000001B5000"])        // an installed title: read from its content .app
+        assertNull(ids["000400000017E200"])                  // content that isn't an NCCH
     }
 
     @Test fun ncsd_program_id() {

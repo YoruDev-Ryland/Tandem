@@ -30,6 +30,20 @@ class MelonDsModuleTest {
         assertEquals(listOf("Final Fantasy - The 4 Heroes of Light (US).sav"), i.files)
     }
 
+    @Test fun installed_games_carry_the_rom_game_code() {
+        fun rom(code: String): ByteArray = ByteArray(0x200).also { b -> code.toByteArray(Charsets.ISO_8859_1).copyInto(b, 0x0C) }
+        File("${internal()}/Games/nds").mkdirs()
+        File("${internal()}/Games/nds/Pokemon - Platinum Version (US).nds").writeBytes(rom("CPUE"))
+        File("${internal()}/Games/nds/Odd.nds").writeBytes(rom("cp\u0000E"))
+        File("${internal()}/Games/nds/Tiny.nds").writeBytes(ByteArray(6))
+        val ids = m().installedGames(fs, det(), none).associate { it.gameKey to it.gameId }
+        assertEquals("CPUE", ids["nds/Pokemon - Platinum Version (US)"])
+        assertNull(ids["nds/Odd"])
+        assertTrue("nds/Tiny" in ids)
+        assertNull(ids["nds/Tiny"])
+        assertEquals("CPUE", MelonDsModule.gameCode(rom("CPUE").inputStream()))
+    }
+
     @Test fun orphan_sav_is_item_but_not_installed() {
         put("${internal()}/Games/nds/Orphan.sav")
         put("${internal()}/Games/nds/Real.nds")

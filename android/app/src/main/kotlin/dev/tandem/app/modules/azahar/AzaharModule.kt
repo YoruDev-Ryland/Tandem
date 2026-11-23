@@ -104,8 +104,8 @@ class AzaharModule(
         listOfNotNull(titleRoot(fs, d)?.let { "$it/$appHigh" }, "${d.dataRoot}/states")
 
     override fun installedGames(fs: Fs, d: Detected, settings: DeviceSettings): List<InstalledGame> {
-        val found = sortedSetOf<String>()
-        for ((low, dir) in titleDirs(fs, d)) if (fs.exists("$dir/content")) found += key(low)
+        val found = sortedMapOf<String, String?>()
+        for ((low, dir) in titleDirs(fs, d)) if (fs.exists("$dir/content")) found[key(low)] = contentProductCode(fs, "$dir/content")
         // TODO: parse .cia (TMD title id). A .cia counts as installed only if its title dir exists, which the
         // loop above already covers.
         val dirs = LinkedHashSet<String>()
@@ -114,13 +114,19 @@ class AzaharModule(
         for (dir in dirs) for (e in try { fs.list(dir) } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { emptyList() }) {
             try {
                 if (e.isDir || name(e.path).substringAfterLast('.', "").lowercase() !in romExts) continue
-                val pid = fs.openRead(e.path).use { programId(it) } ?: continue
-                val hex = "%016X".format(pid)
-                if (hex.startsWith(appHigh)) found += hex
+                val head = fs.openRead(e.path).use { ncchHeader(it) } ?: continue
+                val hex = "%016X".format(programIdOf(head))
+                if (hex.startsWith(appHigh)) found[hex] = found[hex] ?: productCodeOf(head)
             } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { continue }
         }
-        return found.map { InstalledGame(it) }
+        return found.map { (k, id) -> InstalledGame(k, gameId = id) }
     }
+
+    /** The product code from an installed title's first content file (its NCCH header is never encrypted), or null. */
+    private fun contentProductCode(fs: Fs, content: String): String? = try {
+        fs.list(content).filter { !it.isDir && it.path.endsWith(".app", ignoreCase = true) }.minByOrNull { it.path }
+            ?.let { app -> fs.openRead(app.path).use { productCode(it) } }
+    } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { null }
 
     override fun configBundle(fs: Fs, d: Detected): ConfigBundleFiles {
         val out = sortedMapOf<String, String>()
@@ -162,20 +168,30 @@ class AzaharModule(
          * NCSD: magic "NCSD" at 0x100, first partition offset in 0x200-byte media units is the u32 at 0x120
          * (normally 0x20, i.e. 0x4000). Verified against azahar ncch_container.cpp.
          */
-        fun programId(input: InputStream): Long? {
+        fun programId(input: InputStream): Long? = ncchHeader(input)?.let { programIdOf(it) }
+
+        /** The GameTDB id: the last 4 characters of the NCCH product code ("CTR-P-EKJE" → EKJE), or null. */
+        fun productCode(input: InputStream): String? = ncchHeader(input)?.let { productCodeOf(it) }
+
+        private fun programIdOf(h: ByteArray): Long = ByteBuffer.wrap(h).order(ByteOrder.LITTLE_ENDIAN).getLong(0x118)
+
+        private val productRe = Regex("^(?:CTR|KTR)-[A-Z]-([A-Z0-9]{4})$")
+        private fun productCodeOf(h: ByteArray): String? =
+            productRe.matchEntire(String(h, 0x150, 16, Charsets.ISO_8859_1).trimEnd('\u0000', ' '))?.groupValues?.get(1)
+
+        /** The first NCCH header: the file's own (a .cxi or .app), or an NCSD image's first partition's (.3ds, .cci). */
+        private fun ncchHeader(input: InputStream): ByteArray? {
             val head = input.readNBytes(0x200)
             if (head.size < 0x200) return null
-            val b = ByteBuffer.wrap(head).order(ByteOrder.LITTLE_ENDIAN)
             return when (String(head, 0x100, 4, Charsets.ISO_8859_1)) {
-                "NCCH" -> b.getLong(0x118)
+                "NCCH" -> head
                 "NCSD" -> {
-                    val off = (b.getInt(0x120).toLong() and 0xFFFFFFFFL) * 0x200
+                    val off = (ByteBuffer.wrap(head).order(ByteOrder.LITTLE_ENDIAN).getInt(0x120).toLong() and 0xFFFFFFFFL) * 0x200
                     if (off < 0x200) return null
                     var skip = off - 0x200
                     while (skip > 0) { val n = input.skip(skip); if (n <= 0) return null; skip -= n }
                     val h = input.readNBytes(0x200)
-                    if (h.size < 0x200 || String(h, 0x100, 4, Charsets.ISO_8859_1) != "NCCH") return null
-                    ByteBuffer.wrap(h).order(ByteOrder.LITTLE_ENDIAN).getLong(0x118)
+                    if (h.size < 0x200 || String(h, 0x100, 4, Charsets.ISO_8859_1) != "NCCH") null else h
                 }
                 else -> null
             }

@@ -1,5 +1,6 @@
 package dev.tandem.app.modules.melonds
 
+import java.io.InputStream
 import dev.tandem.app.fs.FsUnavailableException
 import dev.tandem.app.fs.Fs
 import dev.tandem.app.model.InstalledGame
@@ -85,12 +86,14 @@ class MelonDsModule(
         romDirs(d) + "${d.dataRoot}/saves" + "${d.dataRoot}/savestates"
 
     override fun installedGames(fs: Fs, d: Detected, settings: DeviceSettings): List<InstalledGame> {
-        val found = sortedMapOf<String, String>()
+        val found = sortedMapOf<String, Pair<String, String?>>()
         for (dir in romDirs(d)) for (n in romFiles(fs, dir)) {
             val base = n.substringBeforeLast('.')
-            found.putIfAbsent(keyPrefix + base, base)
+            if (keyPrefix + base in found) continue
+            val code = try { fs.openRead("$dir/$n").use { gameCode(it) } } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { null }
+            found[keyPrefix + base] = base to code
         }
-        return found.map { (k, v) -> InstalledGame(k, v) }
+        return found.map { (k, v) -> InstalledGame(k, v.first, gameId = v.second) }
     }
 
     override fun configBundle(fs: Fs, d: Detected): ConfigBundleFiles {
@@ -112,5 +115,15 @@ class MelonDsModule(
             if (romFiles(fs, dir).any { it.substringBeforeLast('.').equals(base, ignoreCase = true) }) return dir
         }
         throw ModuleException("melonDS ROM not installed for '$gameKey'")
+    }
+
+    companion object {
+        /** The DS header's 4-character game code (offset 0x0C), the GameTDB id; null unless it is 4 of A-Z, 0-9. */
+        fun gameCode(input: InputStream): String? {
+            val h = input.readNBytes(0x10)
+            if (h.size < 0x10) return null
+            val code = String(h, 0x0C, 4, Charsets.ISO_8859_1)
+            return code.takeIf { c -> c.all { it in 'A'..'Z' || it in '0'..'9' } }
+        }
     }
 }
