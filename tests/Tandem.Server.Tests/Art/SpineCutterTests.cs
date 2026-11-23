@@ -1,43 +1,39 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 using Tandem.Server.Art;
 
 namespace Tandem.Server.Tests.Art;
 
 public class SpineCutterTests
 {
-    private static readonly Rgb24 Grey = new(128, 128, 128);
-    private static readonly Rgb24 Red = new(0xC0, 0, 0);
+    private static readonly SKColor Grey = new(128, 128, 128);
+    private static readonly SKColor Red = new(0xC0, 0, 0);
 
     /// <summary>A generated "case scan": grey back and front with a red spine strip at [from, to).</summary>
-    internal static byte[] Scan(int width, int height, int from, int to, Rgb24? spine = null, Rgb24? rest = null)
+    internal static byte[] Scan(int width, int height, int from, int to, SKColor? spine = null, SKColor? rest = null,
+        SKEncodedImageFormat format = SKEncodedImageFormat.Png)
     {
-        using var img = new Image<Rgb24>(width, height, rest ?? Grey);
-        img.ProcessPixelRows(rows =>
+        using var bmp = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using (var canvas = new SKCanvas(bmp))
         {
-            for (var y = 0; y < rows.Height; y++)
-            {
-                var row = rows.GetRowSpan(y);
-                for (var x = from; x < to; x++) row[x] = spine ?? Red;
-            }
-        });
-        using var ms = new MemoryStream();
-        img.Save(ms, new PngEncoder());
-        return ms.ToArray();
+            canvas.Clear(rest ?? Grey);
+            if (to > from) canvas.DrawRect(SKRect.Create(from, 0, to - from, height), new SKPaint { Color = spine ?? Red, IsAntialias = false });
+        }
+        using var image = SKImage.FromBitmap(bmp);
+        using var data = image.Encode(format, 95);
+        return data.ToArray();
     }
 
-    private static Image<Rgb24> Decode(byte[] png) => Image.Load<Rgb24>(png);
+    internal static SKBitmap Decode(byte[] png) => SKBitmap.Decode(png);
 
-    private static void AllNear(Image<Rgb24> img, Rgb24 want, int tolerance = 8)
+    private static void AllNear(SKBitmap img, SKColor want, int tolerance = 8)
     {
-        img.ProcessPixelRows(rows =>
-        {
-            for (var y = 0; y < rows.Height; y++)
-                foreach (var p in rows.GetRowSpan(y))
-                    Assert.True(Math.Abs(p.R - want.R) <= tolerance && Math.Abs(p.G - want.G) <= tolerance && Math.Abs(p.B - want.B) <= tolerance,
-                        $"pixel {p} at row {y} is not near {want}");
-        });
+        for (var y = 0; y < img.Height; y++)
+            for (var x = 0; x < img.Width; x++)
+            {
+                var p = img.GetPixel(x, y);
+                Assert.True(Math.Abs(p.Red - want.Red) <= tolerance && Math.Abs(p.Green - want.Green) <= tolerance && Math.Abs(p.Blue - want.Blue) <= tolerance,
+                    $"pixel {p} at ({x},{y}) is not near {want}");
+            }
     }
 
     [Fact]
@@ -64,8 +60,8 @@ public class SpineCutterTests
     public void Falls_back_to_the_expected_strip_without_edges()
     {
         // One flat colour with a 1-level step at x 500: no edge strong enough to trust.
-        var flat = new Rgb24(90, 100, 110);
-        var png = SpineCutter.Cut(Scan(1024, 680, 500, 1024, new Rgb24(91, 100, 110), flat), "GC");
+        var flat = new SKColor(90, 100, 110);
+        var png = SpineCutter.Cut(Scan(1024, 680, 500, 1024, new SKColor(91, 100, 110), flat), "GC");
         Assert.NotNull(png);
         using var img = Decode(png!);
         Assert.Equal((50, 680), (img.Width, img.Height));

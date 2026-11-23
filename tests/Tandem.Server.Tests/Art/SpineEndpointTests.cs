@@ -1,8 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 using Tandem.Protocol;
 using Tandem.Server.Art;
 using Tandem.Server.Tests.Infrastructure;
@@ -24,13 +22,7 @@ public class SpineEndpointTests
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
     }
 
-    private static byte[] JpegScan()
-    {
-        using var img = Image.Load<Rgb24>(SpineCutterTests.Scan(1616, 680, 766, 836));
-        using var ms = new MemoryStream();
-        img.Save(ms, new JpegEncoder { Quality = 95 });
-        return ms.ToArray();
-    }
+    private static byte[] JpegScan() => SpineCutterTests.Scan(1616, 680, 766, 836, format: SKEncodedImageFormat.Jpeg);
 
     [Fact]
     public async Task Real_spine_is_pending_then_a_cut_image()
@@ -53,7 +45,7 @@ public class SpineEndpointTests
         Assert.Equal(HttpStatusCode.OK, second.StatusCode);
         Assert.Equal("image/png", second.Content.Headers.ContentType!.MediaType);
         Assert.Equal("private, max-age=604800", CacheControl(second));
-        using (var img = Image.Load<Rgb24>(await second.Content.ReadAsByteArrayAsync()))
+        using (var img = SpineCutterTests.Decode(await second.Content.ReadAsByteArrayAsync()))
             Assert.Equal((50, 680), (img.Width, img.Height));
 
         // The cover is its own fetch and its own file.
@@ -79,7 +71,7 @@ public class SpineEndpointTests
         var r = await device.GetAsync(url);
 
         Assert.Equal(HttpStatusCode.OK, r.StatusCode);
-        using var img = Image.Load<Rgb24>(await r.Content.ReadAsByteArrayAsync());
+        using var img = SpineCutterTests.Decode(await r.Content.ReadAsByteArrayAsync());
         Assert.Equal((68, 680), (img.Width, img.Height));
     }
 
