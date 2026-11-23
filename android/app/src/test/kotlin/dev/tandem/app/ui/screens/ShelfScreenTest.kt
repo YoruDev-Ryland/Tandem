@@ -39,6 +39,7 @@ import dev.tandem.app.ui.theme.ThemeMode
 import java.io.File
 import java.time.Instant
 import java.time.ZoneOffset
+import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -206,6 +207,27 @@ class ShelfScreenTest {
         val card = bounds("card")
         val title = bounds("card-title")
         assertTrue(title.right <= card.right && title.bottom <= card.bottom)
+    }
+
+    private fun cardTitleLineHeight(title: String): Float {
+        show(shelfSample(listOf(shelfGame("dolphin", "k", title, Newest, Newest)), emptyList()))
+        val l = layout("card-title")
+        assertTrue(l.lineCount <= 2)
+        return l.getLineBottom(0) - l.getLineTop(0)
+    }
+
+    private fun spPx(sp: Float): Float = with(compose.density) { sp.sp.toPx() }
+
+    // The layout result reports the style as passed, not the stepped size; with a 1 em line height the line shows the size.
+    @Test fun long_card_title_steps_down_to_fit() {
+        val lh = cardTitleLineHeight("Xenoblade Chronicles: Definitive Edition")
+        assertTrue("line $lh under 26 sp", lh < spPx(26f) - 1f)
+        assertTrue("line $lh not under 17 sp", lh >= spPx(17f) - 1f)
+    }
+
+    @Test fun short_card_title_keeps_26_sp() {
+        val lh = cardTitleLineHeight("SSX 3")
+        assertTrue("line $lh at least 26 sp", lh >= spPx(26f) - 1f)
     }
 
     @Test fun notice_line_shows_more_count() {

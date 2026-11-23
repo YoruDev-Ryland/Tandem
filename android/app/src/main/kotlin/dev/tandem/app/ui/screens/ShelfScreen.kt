@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -444,8 +445,10 @@ private fun Card(s: Spine, height: Dp, cover: ImageBitmap?, onClick: () -> Unit)
                     card.title,
                     Modifier.padding(top = 4.dp, bottom = 8.dp).testTag("card-title"),
                     style = if (card.unnamed) EmuType.mono.copy(fontSize = 17.sp, lineHeight = 20.sp, color = c.ink)
-                    else EmuType.section.copy(fontWeight = FontWeight.Bold, fontSize = 26.sp, lineHeight = 26.sp, color = c.ink),
+                    else EmuType.section.copy(fontWeight = FontWeight.Bold, fontSize = 26.sp, lineHeight = 1.em, color = c.ink),
                     maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    // A long name steps down from 26 sp until it fits in two lines; only past 17 sp does it cut.
+                    autoSize = if (card.unnamed) null else TextAutoSize.StepBased(minFontSize = 17.sp, maxFontSize = 26.sp, stepSize = 1.sp),
                 )
                 val status = card.tone == Tone.Wait || card.tone == Tone.Fault
                 BasicText(

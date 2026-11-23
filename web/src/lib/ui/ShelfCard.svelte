@@ -3,6 +3,7 @@
   import { presenceText } from "../deviceStates";
   import type { CardCopy } from "../shelf";
   import { spineColour, spineInk } from "../spines";
+  import { fitText } from "../fitText";
   import { bareKey } from "../systems";
   import PresenceMark from "./PresenceMark.svelte";
 
@@ -25,7 +26,7 @@
   <div class="text">
     <div class="kicker">{copy.kicker}</div>
     {#if game.displayName}
-      <div class="title" title={game.displayName}>{game.displayName}</div>
+      <div class="title" title={game.displayName} use:fitText={game.displayName}>{game.displayName}</div>
     {:else}
       <div class="title unknown" title={`${id} · unknown title`}><span class="id">{id}</span><span class="what">unknown title</span></div>
     {/if}
