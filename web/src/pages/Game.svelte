@@ -267,7 +267,7 @@
         <h1 class="mono-title">{title}<small>unknown title</small></h1>
       {/if}
       <p class="sub">
-        <span class="tag"><SystemTag emulatorId={emu} gameKey={key} core={saveCore} /></span>
+        <span class="tag"><SystemTag emulatorId={emu} gameKey={key} core={saveCore} system={row.system} /></span>
         <span class="emu">{emulatorName(emu)}</span>
         <span class="devices">
           {#each deviceLine(row) as c, i (i)}

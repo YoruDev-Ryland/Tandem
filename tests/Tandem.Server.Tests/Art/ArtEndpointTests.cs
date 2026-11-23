@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -285,6 +286,48 @@ public class ArtEndpointTests
         Assert.Equal(png, await r.Content.ReadAsByteArrayAsync());
         // An encoded slash (%2F, as the app's encodeSegment sends it) names the same game.
         Assert.Equal(HttpStatusCode.OK, (await device.GetAsync("/v1/web/art/retroarch/" + Uri.EscapeDataString(key))).StatusCode);
+    }
+
+    [Fact]
+    public async Task An_installed_game_without_a_save_gets_art_by_its_reported_system()
+    {
+        var png = FakePng();
+        var listing = """{ "tree": [ { "path": "Golden Sun (USA, Europe).png", "mode": "100644", "type": "blob", "size": 900 } ] }""";
+        var cover = LibretroThumbnailSource.FileUri("Nintendo_-_Game_Boy_Advance", "Golden Sun (USA, Europe).png");
+        var sources = new FakeSources(u =>
+            u == LibretroIndex.ListingUri("Nintendo_-_Game_Boy_Advance") ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(listing) }
+            : u == cover ? FakeSources.Image(png)
+            : FakeSources.NotFound());
+        using var f = Factory(sources);
+        var (device, _) = await f.Register(Email);
+        await device.PutAsJsonAsync("/v1/devices/me/installs/retroarch",
+            new Tandem.Protocol.InstallsRequest([new Tandem.Protocol.InstalledGame("retroarch/Golden Sun", "Golden Sun", null, "GBA")]));
+
+        const string url = "/v1/web/art/retroarch/retroarch/Golden%20Sun";
+        Assert.Equal(HttpStatusCode.Accepted, (await device.GetAsync(url)).StatusCode);
+        await Drain(f);
+        var r = await device.GetAsync(url);
+
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        Assert.Equal(png, await r.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Another_users_installed_game_is_not_found()
+    {
+        var sources = new FakeSources(_ => FakeSources.Image(FakePng()));
+        using var f = Factory(sources);
+        f.Settings["Tandem:AllowRegistration"] = "true";
+        var (owner, _) = await f.Register(Email);
+        await owner.PutAsJsonAsync("/v1/devices/me/installs/retroarch",
+            new Tandem.Protocol.InstallsRequest([new Tandem.Protocol.InstalledGame("retroarch/Golden Sun", "Golden Sun", null, "GBA")]));
+        var (other, _) = await f.Register("other@example.com");
+
+        var r = await other.GetAsync("/v1/web/art/retroarch/retroarch/Golden%20Sun");
+
+        Assert.Equal(HttpStatusCode.NotFound, r.StatusCode);
+        Assert.Equal("not_found", await ErrorCode(r));
+        Assert.Equal(0, sources.Calls);
     }
 
     /// <summary>JavaScript's encodeURIComponent: like EscapeDataString, but leaves !'()* alone.</summary>

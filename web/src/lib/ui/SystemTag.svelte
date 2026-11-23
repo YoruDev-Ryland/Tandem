@@ -2,8 +2,8 @@
   import { systemLabel } from "../systems";
 
   /** The system mark: a fixed-width label, like the end label on a cartridge shelf. */
-  let { emulatorId, gameKey, core = null }: { emulatorId: string; gameKey: string; core?: string | null } = $props();
-  const label = $derived(systemLabel(emulatorId, gameKey, core));
+  let { emulatorId, gameKey, core = null, system = null }: { emulatorId: string; gameKey: string; core?: string | null; system?: string | null } = $props();
+  const label = $derived(systemLabel(emulatorId, gameKey, core, system));
 </script>
 
 {#if label}

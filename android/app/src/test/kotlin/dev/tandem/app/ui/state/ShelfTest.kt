@@ -166,6 +166,13 @@ class ShelfTest {
         assertEquals("GBA", spine.system)
     }
 
+    @Test fun the_servers_system_names_a_coreless_retroarch_game() {
+        val r = row("retroarch/Golden Sun", "Golden Sun", emu = "retroarch").copy(system = "GBA")
+        assertEquals("GBA", spineOf(r, HERE, "RetroArch", railRows(listOf(r), HERE), core = null).system)
+        val none = row("retroarch/Golden Sun", "Golden Sun", emu = "retroarch")
+        assertEquals(null, spineOf(none, HERE, "RetroArch", railRows(listOf(none), HERE), core = null).system)
+    }
+
     @Test fun cursor_remembers_per_emulator() {
         val ui = shelfUi(emulators, Loaded(listOf(row("a", "Alpha"), row("s", "SSX 3"), row("z", "Zelda"), row("p", "Pokémon", emu = "melonds")), Instant.EPOCH),
             emptyList(), HERE, signedIn = true)

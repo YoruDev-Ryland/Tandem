@@ -409,6 +409,9 @@ namespace Tandem.Server.Data.Migrations.Sqlite
                     b.Property<long>("SeenUtc")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("System")
+                        .HasColumnType("TEXT");
+
                     b.HasKey("DeviceId", "EmulatorId", "GameKey");
 
                     b.ToTable("InstallRecords");

@@ -119,8 +119,12 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         return listOf(dirs.saves, dirs.states)
     }
 
-    /** [core] is the entry's core_path, [coreName] its core_name; DETECT entries take the playlist's defaults. */
-    private class PlaylistEntry(val path: String, val label: String?, val core: String?, val coreName: String? = null)
+    /**
+     * [core] is the entry's core_path, [coreName] its core_name; DETECT entries take the playlist's defaults. [system]
+     * is the game's system label, from the entry's db_name, the playlist's own name, the core name or the file's
+     * extension, in that order.
+     */
+    private class PlaylistEntry(val path: String, val label: String?, val core: String?, val coreName: String? = null, val system: String? = null)
 
     private fun playlists(fs: Fs, d: Detected): List<PlaylistEntry> {
         val dir = dirs(fs, d)?.playlists ?: return emptyList()
@@ -139,7 +143,9 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
                         val o = it as? JsonObject ?: continue
                         val path = str(o, "path") ?: continue
                         val coreName = str(o, "core_name")?.takeIf { n -> n.isNotEmpty() && n != "DETECT" } ?: defaultName
-                        out += PlaylistEntry(path, str(o, "label"), str(o, "core_path"), coreName)
+                        val system = RetroArchSystems.fromDb(str(o, "db_name")) ?: RetroArchSystems.fromDb(name(e.path))
+                            ?: RetroArchSystems.fromCoreName(coreName) ?: RetroArchSystems.fromExtension(contentName(path))
+                        out += PlaylistEntry(path, str(o, "label"), str(o, "core_path"), coreName, system)
                     }
                 } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { /* malformed playlist: skip */ }
             }
@@ -147,28 +153,35 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         return out
     }
 
-    private fun contentBase(path: String): String {
+    /** The content's file name: inside an archive, the entry after '#'. */
+    private fun contentName(path: String): String {
         val sep = archiveSep.findAll(path).lastOrNull()
         val inner = if (sep != null) path.substring(sep.range.last + 1) else path
-        return name(inner.replace('\\', '/')).substringBeforeLast('.')
+        return name(inner.replace('\\', '/'))
     }
+
+    private fun contentBase(path: String): String = contentName(path).substringBeforeLast('.')
 
     override fun installedGames(fs: Fs, d: Detected, settings: DeviceSettings): List<InstalledGame> {
         val found = LinkedHashMap<String, String?>()
+        val systems = HashMap<String, String>()
         for (p in playlists(fs, d)) {
             val b = contentBase(p.path)
             if (b.isEmpty()) continue
             val k = keyPrefix + b
             if (found[k] == null) found[k] = p.label?.ifEmpty { null }
+            if (p.system != null) systems.putIfAbsent(k, p.system)
         }
         for (dir in settings.romDirs.map { Paths.canonical(it) }) for (f in fs.walk(dir)) {
             if (f.isDir) continue
             val n = name(f.path)
             if (n.substringAfterLast('.', "").lowercase() !in romExts) continue
             val b = n.substringBeforeLast('.')
-            if (b.isNotEmpty() && (keyPrefix + b) !in found) found[keyPrefix + b] = null
+            if (b.isEmpty()) continue
+            if ((keyPrefix + b) !in found) found[keyPrefix + b] = null
+            RetroArchSystems.fromExtension(n)?.let { systems.putIfAbsent(keyPrefix + b, it) }
         }
-        return found.map { (k, v) -> InstalledGame(k, v) }.sortedBy { it.gameKey }
+        return found.map { (k, v) -> InstalledGame(k, v, system = systems[k]) }.sortedBy { it.gameKey }
     }
 
     override fun cores(fs: Fs, d: Detected): List<String> =

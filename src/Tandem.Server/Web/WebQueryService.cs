@@ -1,3 +1,4 @@
+using Tandem.Server.Art;
 using System.Text.Json;
 using Tandem.Protocol;
 using Tandem.Server.Data;
@@ -109,9 +110,11 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
         var devices = states.For(emulatorId, items, installs, heads, reference, newest?.DeviceId);
         // A save item's core lives on its versions (only states key the item by core).
         var saveCore = saveItem?.HeadVersionId is Guid sh && heads.TryGetValue(sh, out var saveHead) && saveHead.Core != "" ? saveHead.Core : null;
+        var reported = installs.OrderByDescending(r => r.SeenUtc).Select(r => r.System).FirstOrDefault(s => s is not null);
         return new GameRow(emulatorId, gameKey, display, installs.Select(r => r.DeviceId).Distinct().ToList(),
             saveItem?.Id, newest?.DeviceId, newest?.ReceivedUtc, items.Count(i => i.Kind == ItemKind.State), items.Any(i => i.OpenConflict),
-            devices, states.DeviceName(newest?.DeviceId), saveCore, saveItem?.HeadVersionId);
+            devices, states.DeviceName(newest?.DeviceId), saveCore, saveItem?.HeadVersionId,
+            ArtSystems.Resolve(emulatorId, gameKey, saveCore, reported));
     }
 
     public async Task<GameDetail> GameAsync(Guid userId, string emulatorId, string gameKey, CancellationToken ct)

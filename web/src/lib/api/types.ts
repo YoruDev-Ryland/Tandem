@@ -202,6 +202,8 @@ export interface GameRow {
   core: string | null;
   /** The head version of the game's save item (what Y downloads), or null. */
   headVersionId: Guid | null;
+  /** The game's system label as the server settled it (GBA, GC, …); absent on older servers. */
+  system?: string | null;
 }
 export interface VersionSummary {
   id: Guid;

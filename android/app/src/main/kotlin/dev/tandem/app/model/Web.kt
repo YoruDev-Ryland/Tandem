@@ -27,6 +27,8 @@ import kotlinx.serialization.Serializable
     val devices: List<GameDeviceState> = emptyList(),
     // added by the web-UI server work; absent on older servers
     val newestOnDeviceName: String? = null,
+    /** The game's system label as the server settled it (GBA, GC, …); absent on older servers. */
+    val system: String? = null,
 )
 
 @Serializable data class VersionSummary(

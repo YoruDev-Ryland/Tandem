@@ -20,6 +20,11 @@ describe("systemLabel", () => {
     expect(systemLabel("ppsspp", "x")).toBe("PSP");
     expect(systemLabel("vita3k", "x")).toBe("VITA");
   });
+  it("takes the server's system first, so a coreless RetroArch game still has one", () => {
+    expect(systemLabel("retroarch", "retroarch/Golden Sun", null, "GBA")).toBe("GBA");
+    expect(systemLabel("retroarch", "retroarch/Golden Sun", null, null)).toBeNull();
+    expect(systemLabel("retroarch", "retroarch/Golden Sun")).toBeNull();
+  });
   it("derives multi-system labels from the key's first segment", () => {
     expect(systemLabel("retroarch", "gba/Emerald")).toBe("GBA");
     expect(systemLabel("retroarch", "gbc/Crystal")).toBe("GBC");

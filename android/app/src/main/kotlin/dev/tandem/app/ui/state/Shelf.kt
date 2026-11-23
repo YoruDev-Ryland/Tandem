@@ -228,7 +228,7 @@ fun spineOf(
         gameKey = row.gameKey,
         title = row.displayName ?: bareKey(row.emulatorId, row.gameKey),
         unnamed = row.displayName == null,
-        system = systemLabel(row.emulatorId, row.gameKey, core),
+        system = row.system ?: systemLabel(row.emulatorId, row.gameKey, core),
         marks = rail.map { d -> presenceOf(row, d.deviceId).let { PresenceCell(it, presenceText(it, d.name, emulatorName)) } },
         card = ShelfCard("", "", false, "", Tone.Ink2, emptyList()),
     )

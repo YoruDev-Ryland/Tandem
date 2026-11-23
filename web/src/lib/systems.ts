@@ -62,7 +62,9 @@ function retroarchSystem(gameKey: string, core?: string | null): string | null {
  * The short system name for a game's system mark: SWITCH, 3DS, GBA, GC, WII. Null when it can't be told (a RetroArch
  * save whose core isn't known): the mark then shows a dash, never the emulator's name.
  */
-export function systemLabel(emulatorId: string, gameKey: string, core?: string | null): string | null {
+export function systemLabel(emulatorId: string, gameKey: string, core?: string | null, system?: string | null): string | null {
+  // The server's answer (which also knows what a device reported) wins over what the key and core say here.
+  if (system) return system;
   const fixed = BY_EMULATOR[emulatorId];
   if (fixed) return fixed;
   if (emulatorId === "dolphin") return dolphinSystem(gameKey);

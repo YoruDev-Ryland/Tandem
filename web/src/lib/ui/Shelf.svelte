@@ -23,7 +23,7 @@
 
   let scroller: HTMLDivElement;
 
-  const sys = (g: GameRow) => systemLabel(g.emulatorId, g.gameKey, g.core);
+  const sys = (g: GameRow) => systemLabel(g.emulatorId, g.gameKey, g.core, g.system);
   const keyOf = (g: GameRow) => g.emulatorId + "/" + g.gameKey;
 
   function px(name: string): number {

@@ -87,7 +87,7 @@ function lineWords(p: Presence, g: GameRow, deviceId: string, emulatorName: stri
  * names (repeated names numbered); every device gets a line, also those beyond the rail's three rows.
  */
 export function cardCopy(g: GameRow, emulatorName: string, all: GameRow[] = [g], now: number = Date.now()): CardCopy {
-  const sys = systemName(systemLabel(g.emulatorId, g.gameKey, g.core));
+  const sys = systemName(systemLabel(g.emulatorId, g.gameKey, g.core, g.system));
   const kicker = sys ? `${sys} · ${emulatorName}` : emulatorName;
 
   const columns: MatrixColumn[] = matrixColumns(all.includes(g) ? all : [...all, g]);

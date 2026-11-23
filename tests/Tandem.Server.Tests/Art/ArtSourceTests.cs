@@ -156,6 +156,25 @@ public class ArtSourceTests
     }
 
     [Fact]
+    public void A_reported_system_fills_in_only_where_the_key_and_core_say_nothing()
+    {
+        Assert.Equal("GBA", ArtSystems.Resolve("retroarch", "retroarch/Golden Sun", null, "gba"));
+        Assert.Equal("GBA", ArtSystems.Resolve("retroarch", "retroarch/x", "mgba", "SNES"));   // the save's core wins
+        Assert.Equal("SWITCH", ArtSystems.Resolve("eden", "0100AAAA", null, "GBA"));           // so does the emulator
+        Assert.Null(ArtSystems.Resolve("retroarch", "retroarch/x", null, "Nintendo - Game Boy Advance"));
+        Assert.Null(ArtSystems.Normalize(null));
+        Assert.Equal("SNES", ArtSystems.Normalize(" snes "));
+    }
+
+    [Fact]
+    public async Task Libretro_uses_a_reported_system_when_there_is_no_core()
+    {
+        var uris = await new LibretroThumbnailSource(new FakeIndex())
+            .CandidatesAsync(new ArtRequest("retroarch", "retroarch/Pokemon - Emerald Version", "Pokemon - Emerald Version", null, "GBA"), default);
+        Assert.Contains("Nintendo_-_Game_Boy_Advance", uris.Single().ToString());
+    }
+
+    [Fact]
     public async Task The_libretro_listing_is_cached_and_drops_symlinks_and_big_files()
     {
         var data = Directory.CreateTempSubdirectory("tandem-art-").FullName;

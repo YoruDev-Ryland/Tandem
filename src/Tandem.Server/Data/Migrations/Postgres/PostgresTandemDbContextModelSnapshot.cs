@@ -418,6 +418,9 @@ namespace Tandem.Server.Data.Migrations.Postgres
                     b.Property<DateTimeOffset>("SeenUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("System")
+                        .HasColumnType("text");
+
                     b.HasKey("DeviceId", "EmulatorId", "GameKey");
 
                     b.ToTable("InstallRecords");

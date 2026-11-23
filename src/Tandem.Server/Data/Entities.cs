@@ -61,6 +61,8 @@ public class InstallRecord
     public string GameKey { get; set; } = "";
     public string? DisplayName { get; set; }
     public string? Crc32 { get; set; }
+    /// <summary>The system the device reported for the game (a known label), or null.</summary>
+    public string? System { get; set; }
     public DateTimeOffset SeenUtc { get; set; }
 }
 

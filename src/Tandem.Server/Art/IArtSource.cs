@@ -1,7 +1,8 @@
 namespace Tandem.Server.Art;
 
 /// <summary>What the sources know about a game: its key, the name it is shown under and (RetroArch) the save's core.</summary>
-public sealed record ArtRequest(string EmulatorId, string GameKey, string? DisplayName, string? Core);
+/// <param name="System">The system a device reported for the game, used when the key and core don't tell.</param>
+public sealed record ArtRequest(string EmulatorId, string GameKey, string? DisplayName, string? Core, string? System = null);
 
 /// <summary>
 /// One place cover art may come from. A source only builds addresses; the fetcher downloads them in order and keeps the
@@ -48,6 +49,26 @@ public static class ArtSystems
         (new(@"^ppsspp"), "PSP"),
         (new(@"^dolphin"), "GC"),
     ];
+
+    /// <summary>Every label <see cref="Label"/> can give: what a device may report as a game's system.</summary>
+    public static readonly IReadOnlySet<string> Known = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "SWITCH", "3DS", "DS", "PSP", "VITA", "GBA", "GBC", "GB", "NES", "SNES", "N64", "GC", "WII", "MD", "PSX",
+    };
+
+    /// <summary>A device-reported system as a known label (case-insensitive), or null.</summary>
+    public static string? Normalize(string? reported)
+    {
+        var s = reported?.Trim().ToUpperInvariant();
+        return s is not null && Known.Contains(s) ? s : null;
+    }
+
+    /// <summary>
+    /// The game's system: <see cref="Label"/>, or else the system a device reported with the install. What the key,
+    /// the game id and the save's core say wins over a device's report.
+    /// </summary>
+    public static string? Resolve(string emulatorId, string gameKey, string? core, string? reported) =>
+        Label(emulatorId, gameKey, core) ?? Normalize(reported);
 
     /// <summary>SWITCH, 3DS, DS, GBA, GC, WII, …; null when it cannot be told.</summary>
     public static string? Label(string emulatorId, string gameKey, string? core)

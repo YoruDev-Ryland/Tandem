@@ -489,6 +489,31 @@ public class WebApiTests
     }
 
     [Fact]
+    public async Task A_games_system_comes_from_its_core_else_from_what_the_device_reported()
+    {
+        using var f = NewFactory();
+        var (odin, _) = await f.Register(Email, deviceName: "Odin");
+        var web = await f.WebLogin(Email);
+        await odin.PutAsJsonAsync("/v1/devices/me/installs/retroarch", new InstallsRequest([
+            new InstalledGame("retroarch/Golden Sun", "Golden Sun", null, "gba"),
+            new InstalledGame("retroarch/Emerald", null, null, "SNES"),
+            new InstalledGame("retroarch/Odd", null, null, "Nintendo - Game Boy Advance"),
+            new InstalledGame("retroarch/Plain", null, null),
+        ]));
+        await Save(odin, "a", null, "retroarch/Emerald", emulator: "retroarch", core: "mGBA");
+        await Save(odin, "a", null, "GXBE69", emulator: "dolphin");
+
+        var games = await Get<GameRow[]>(web, "/v1/web/games");
+        string? Sys(string key) => games.Single(g => g.GameKey == key).System;
+
+        Assert.Equal("GBA", Sys("retroarch/Golden Sun"));
+        Assert.Equal("GBA", Sys("retroarch/Emerald"));      // the save's core wins over the report
+        Assert.Null(Sys("retroarch/Odd"));                  // an unknown label is dropped
+        Assert.Null(Sys("retroarch/Plain"));
+        Assert.Equal("GC", Sys("GXBE69"));
+    }
+
+    [Fact]
     public async Task Setup_checklist_lists_missing_emulators_cores_and_folders()
     {
         using var f = NewFactory();

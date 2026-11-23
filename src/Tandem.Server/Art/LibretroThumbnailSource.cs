@@ -52,7 +52,7 @@ public sealed partial class LibretroThumbnailSource(ILibretroIndex index) : IArt
 
     public async Task<IReadOnlyList<Uri>> CandidatesAsync(ArtRequest request, CancellationToken ct)
     {
-        var system = ArtSystems.Label(request.EmulatorId, request.GameKey, request.Core);
+        var system = ArtSystems.Resolve(request.EmulatorId, request.GameKey, request.Core, request.System);
         if (system is null || !Repositories.TryGetValue(system, out var repos)) return [];
         var names = Names(request);
         if (names.Count == 0) return [];

@@ -33,7 +33,9 @@ public sealed record EmulatorStatus(string EmulatorId, string Package, string Ve
 /// report. Null (older clients) means none.</param>
 public sealed record DeviceStatusRequest(string Platform, string AppVersion, bool ShizukuOk,
     IReadOnlyList<EmulatorStatus> Emulators, IReadOnlyDictionary<string, string> Roots, string[]? RunningEmulators = null);
-public sealed record InstalledGame(string GameKey, string? DisplayName, string? Crc32);
+/// <param name="System">The game's system as the device can tell it (RetroArch: from the playlist or the ROM's extension),
+/// as a system label (GBA, SNES, …). Null when it can't tell; unknown labels are dropped.</param>
+public sealed record InstalledGame(string GameKey, string? DisplayName, string? Crc32, string? System = null);
 public sealed record InstallsRequest(IReadOnlyList<InstalledGame> Games);
 public sealed record InstallsResponse(int Added, int Removed);
 
