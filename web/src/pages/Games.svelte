@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { fetchArt, getGames } from "../lib/api/endpoints";
+  import { getGames } from "../lib/api/endpoints";
   import { gamePath } from "../lib/api/paths";
   import { resource } from "../lib/api/resource.svelte";
   import { EMULATOR_IDS, type GameRow } from "../lib/api/types";
@@ -8,7 +8,8 @@
   import { emulatorName } from "../lib/emulators";
   import { router } from "../lib/router.svelte";
   import { cardCopy, cursorIndex, railRows, shelfOrder, type ShelfMemory } from "../lib/shelf";
-  import { bareKey } from "../lib/systems";
+  import { artId, createSpineArt, type ArtWant } from "../lib/spineArt.svelte";
+  import { bareKey, systemLabel } from "../lib/systems";
   import Empty from "../lib/ui/Empty.svelte";
   import ErrorLine from "../lib/ui/ErrorLine.svelte";
   import Field from "../lib/ui/Field.svelte";
@@ -114,31 +115,36 @@
     }),
   );
 
-  // Art for the focused game only, a moment after the cursor settles. Leaving the game aborts its fetch (and its one
-  // retry) and frees the image.
-  const focusId = $derived(focused ? `${focused.emulatorId}\n${focused.gameKey}` : null);
-  let art = $state<{ id: string; url: string } | null>(null);
-  $effect(() => {
-    const id = focusId;
-    if (!id) return;
-    const [emu, key] = id.split("\n") as [string, string];
-    const stop = new AbortController();
-    let url: string | null = null;
-    const t = setTimeout(async () => {
-      const r = await fetchArt(emu, key, { signal: stop.signal });
-      if (r.kind !== "image") return;
-      if (stop.signal.aborted) return URL.revokeObjectURL(r.url);
-      url = r.url;
-      art = { id, url };
-    }, 150);
-    return () => {
-      clearTimeout(t);
-      stop.abort();
-      if (url) URL.revokeObjectURL(url);
-      art = null;
-    };
+  // Spines and covers for the shelf around the cursor (WINDOW spines either side, which covers the view and a dozen
+  // beyond), a moment after the cursor settles. The focused game's cover is always wanted, for its card; a Switch spine
+  // needs nothing; a game with a real spine wants that, and its cover only once the server says it has no spine.
+  // Images outside the window are freed; leaving the page frees the rest.
+  const spineArt = createSpineArt();
+  $effect(() => () => spineArt.destroy());
+  const WINDOW = 30;
+  const wants = $derived.by(() => {
+    const out: ArtWant[] = [];
+    if (focused) out.push({ emu: focused.emulatorId, key: focused.gameKey, kind: "cover" });
+    const from = Math.max(0, index - WINDOW);
+    const to = Math.min(shelf.length - 1, index + WINDOW);
+    for (let i = from; i <= to; i++) {
+      const g = shelf[i]!;
+      if (systemLabel(g.emulatorId, g.gameKey, g.core, g.system) === "SWITCH") continue;
+      if (g.spine && !spineArt.missing(g.emulatorId, g.gameKey, "spine")) out.push({ emu: g.emulatorId, key: g.gameKey, kind: "spine" });
+      else out.push({ emu: g.emulatorId, key: g.gameKey, kind: "cover" });
+    }
+    return out;
   });
-  const artUrl = $derived(art && art.id === focusId ? art.url : null);
+  $effect(() => {
+    const w = wants;
+    const t = setTimeout(() => {
+      spineArt.release(new Set(w.map((x) => artId(x.emu, x.key, x.kind))));
+      spineArt.want(w);
+    }, 150);
+    return () => clearTimeout(t);
+  });
+  const artUrl = $derived(focused ? spineArt.url(focused.emulatorId, focused.gameKey, "cover") : null);
+  const images = (g: GameRow) => ({ spine: spineArt.url(g.emulatorId, g.gameKey, "spine"), cover: spineArt.url(g.emulatorId, g.gameKey, "cover") });
 </script>
 
 <div class="page">
@@ -168,7 +174,7 @@
         </p>
       {/if}
       {#if focused && copy}
-        <Shelf games={shelf} {index} rows={rail} {copy} art={artUrl} onSelect={select} onOpen={open} />
+        <Shelf games={shelf} {index} rows={rail} {copy} art={artUrl} {images} onSelect={select} onOpen={open} />
       {:else}
         <div class="pad"><Empty text={q ? `No games in ${emulatorName(emulator)} match.` : `No games for ${emulatorName(emulator)} yet.`} /></div>
       {/if}

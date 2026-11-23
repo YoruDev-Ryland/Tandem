@@ -204,6 +204,8 @@ export interface GameRow {
   headVersionId: Guid | null;
   /** The game's system label as the server settled it (GBA, GC, …); absent on older servers. */
   system?: string | null;
+  /** True when the server can give a real case spine at /v1/web/spine. */
+  spine?: boolean;
 }
 export interface VersionSummary {
   id: Guid;

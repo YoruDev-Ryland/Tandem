@@ -22,7 +22,10 @@ const noArt = () => new Response(JSON.stringify({ error: "no_art" }), { status: 
 
 let rows: GameRow[] = games;
 let art: (url: string) => Response | Promise<Response> = () => noArt();
-const fetchMock = vi.fn(async (url: string) => (url.startsWith("/v1/web/art/") ? art(url) : json(rows)));
+let spineArt: (url: string) => Response | Promise<Response> = () => noArt();
+const fetchMock = vi.fn(async (url: string) =>
+  url.startsWith("/v1/web/art/") ? art(url) : url.startsWith("/v1/web/spine/") ? spineArt(url) : json(rows));
+const png = () => new Response(new Uint8Array([137, 80, 78, 71]), { status: 200, headers: { "Content-Type": "image/png" } });
 
 /** The focused game's card. */
 const card = () => document.querySelector<HTMLElement>('[aria-current="true"]')!;
@@ -35,6 +38,7 @@ describe("Games shelf", () => {
     router.go("/games");
     rows = games;
     art = () => noArt();
+    spineArt = () => noArt();
     fetchMock.mockClear();
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", fetchMock);
@@ -55,8 +59,8 @@ describe("Games shelf", () => {
     expect(cardTitle()).toBe("Pokémon Brilliant Diamond");
     expect(spines().map((s) => s.textContent?.trim().replace(/\s+/g, " "))).toEqual([
       expect.stringContaining("Pokémon Brilliant Diamond"),
-      "SWITCH Four Devices",
-      "SWITCH Pokémon Sword",
+      "NINTENDO SWITCH Four Devices",
+      "NINTENDO SWITCH Pokémon Sword",
     ]);
   });
 
@@ -245,8 +249,96 @@ describe("Games shelf", () => {
     expect(getComputedStyle(img).objectFit).not.toBe("cover");
     expect(getComputedStyle(img).maxWidth).toBe("100%");
     expect(getComputedStyle(img).maxHeight).toBe("100%");
-    dispatch("right");
+    // The cover stays while its spine is in view; leaving the page frees it.
+    cleanup();
     await waitFor(() => expect(revoked).toHaveBeenCalledWith("blob:cover"));
+  });
+
+  const spineW = (li: HTMLElement) => li.style.getPropertyValue("--spine-w");
+  const ratioOf = (li: HTMLElement) => /\*\s*([0-9.]+)\)/.exec(spineW(li))?.[1];
+  const railCols = () => [...document.querySelectorAll<HTMLElement>(".rail > .col")];
+
+  it("with no art every spine is a fallback at its case width", async () => {
+    rows = [
+      game({ emulatorId: "dolphin", gameKey: "GAAE01", displayName: "Aaa" }),
+      game({ emulatorId: "dolphin", gameKey: "GBBE01", displayName: "Bbb" }),
+      game({ emulatorId: "dolphin", gameKey: "RCCE", displayName: "Ccc" }),
+    ];
+    render(Games);
+    await screen.findByText("Bbb");
+    const items = spines();
+    expect(items.map(ratioOf)).toEqual(["0.074", "0.074", "0.074"]);
+    expect(items.slice(1).every((li) => li.querySelector(".spine.fallback"))).toBe(true);
+    expect(railCols()).toHaveLength(items.length);
+    expect(railCols().map((c) => c.style.getPropertyValue("--spine-w"))).toEqual(items.map(spineW));
+  });
+
+  it("mixed systems give per-spine widths and aligned rail columns", async () => {
+    rows = [
+      game({ emulatorId: "retroarch", gameKey: "gba/A", displayName: "A", system: "GBA" }),
+      game({ emulatorId: "retroarch", gameKey: "snes/B", displayName: "B", system: "SNES" }),
+      game({ emulatorId: "retroarch", gameKey: "retroarch/C", displayName: "C" }),
+    ];
+    render(Games);
+    await screen.findByText("B");
+    expect(spines().map(ratioOf)).toEqual(["0.1", "0.1", "0.1"]);
+    expect(railCols().map((c) => c.style.getPropertyValue("--spine-w"))).toEqual(spines().map(spineW));
+    dispatch("right");
+    await waitFor(() => expect(cardTitle()).toBe("B"));
+  });
+
+  it("a built spine shows its band and a top-to-bottom title", async () => {
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:gba", revokeObjectURL: () => {} }));
+    rows = [
+      game({ emulatorId: "retroarch", gameKey: "gba/A", displayName: "Aaa", system: "GBA" }),
+      game({ emulatorId: "retroarch", gameKey: "gba/B", displayName: "Golden Sun", system: "GBA" }),
+    ];
+    art = () => png();
+    render(Games);
+    await screen.findByText("Golden Sun");
+    const li = spines()[1]!;
+    await waitFor(() => expect(li.querySelector(".spine.built")).toBeTruthy());
+    expect(li.querySelector(".band")!.textContent).toBe("GAME BOY ADVANCE");
+    const slice = li.querySelector<HTMLElement>(".art")!;
+    expect(slice.style.backgroundImage).toBe('url("blob:gba")');
+    expect(getComputedStyle(slice).backgroundPosition).toBe("50% 0px");
+    const title = li.querySelector<HTMLElement>(".spine > span")!;
+    expect(getComputedStyle(title).writingMode).toBe("vertical-rl");
+    expect(getComputedStyle(title).transform).toBe("none");
+  });
+
+  it("a real spine replaces the fallback when it arrives", async () => {
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:real", revokeObjectURL: () => {} }));
+    rows = [
+      game({ emulatorId: "dolphin", gameKey: "GAAE01", displayName: "Aaa" }),
+      game({ emulatorId: "dolphin", gameKey: "GXBE69", displayName: "SSX 3", spine: true }),
+    ];
+    spineArt = () => png();
+    render(Games);
+    await screen.findByText("SSX 3");
+    const li = spines()[1]!;
+    await waitFor(() => expect(li.querySelector(".spine.real")).toBeTruthy());
+    expect(li.querySelector("img")!.getAttribute("src")).toBe("blob:real");
+    expect(li.querySelector(".band")).toBeNull();
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).not.toContain("/v1/web/art/dolphin/GXBE69");
+  });
+
+  it("switch is plain red", async () => {
+    render(Games);
+    await screen.findByText("Pokémon Sword");
+    const sword = spines().find((li) => li.textContent?.includes("Pokémon Sword"))!;
+    const face = sword.querySelector<HTMLElement>(".spine.plain")!;
+    expect(getComputedStyle(face).backgroundColor).toBe("rgb(230, 0, 18)");
+    await new Promise((r) => setTimeout(r, 250));
+    expect(fetchMock.mock.calls.map(([u]) => String(u)).filter((u) => u.includes("0100ABF008968000"))).toEqual([]);
+  });
+
+  it("cuts a long title inside a narrow spine", async () => {
+    rows = [game({ emulatorId: "dolphin", gameKey: "GAAE01", displayName: "Aaa" }), game({ emulatorId: "dolphin", gameKey: "GLLE01", displayName: "L".repeat(90) })];
+    render(Games);
+    await screen.findByText("L".repeat(90));
+    const cs = getComputedStyle(spines()[1]!.querySelector<HTMLElement>(".spine > span")!);
+    expect([cs.overflow, cs.textOverflow, cs.whiteSpace]).toEqual(["hidden", "ellipsis", "nowrap"]);
   });
 
   it("says when there are no games at all", async () => {

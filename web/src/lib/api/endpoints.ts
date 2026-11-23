@@ -41,13 +41,14 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export async function fetchArt(
   emu: string,
   key: string,
-  opts: { signal?: AbortSignal; wait?: (ms: number) => Promise<void> } = {},
+  opts: { signal?: AbortSignal; wait?: (ms: number) => Promise<void>; kind?: "cover" | "spine" } = {},
 ): Promise<ArtResult> {
-  const { signal, wait = sleep } = opts;
+  const { signal, wait = sleep, kind = "cover" } = opts;
+  const path = kind === "spine" ? "spine" : "art";
   const once = async (): Promise<ArtResult> => {
     if (signal?.aborted) return { kind: "none" };
     try {
-      const res = await fetch(`/v1/web/art/${enc(emu)}/${encodeKey(key)}`, { headers: ART_HEADERS, credentials: "same-origin", signal });
+      const res = await fetch(`/v1/web/${path}/${enc(emu)}/${encodeKey(key)}`, { headers: ART_HEADERS, credentials: "same-origin", signal });
       if (res.status === 202) return { kind: "pending" };
       if (!res.ok || !/^image\//.test(res.headers.get("Content-Type") ?? "")) return { kind: "none" };
       const blob = await res.blob();

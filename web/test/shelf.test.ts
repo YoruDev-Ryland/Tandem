@@ -1,3 +1,4 @@
+import { spineBand, spineKind, spineRatio } from "../src/lib/spines";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cardCopy, cursorIndex, railLabel, railLabels, railRows, shelfOrder, systemName } from "../src/lib/shelf";
 import { SPINES, spineColour, spineInk, spineKey } from "../src/lib/spines";
@@ -274,5 +275,28 @@ describe("fetchArt", () => {
     const p = fetchArt("dolphin", "GSXE69", { wait: async () => c.abort(), signal: c.signal });
     expect(await p).toEqual({ kind: "none" });
     expect(f).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("case spines", () => {
+  it("spine kind rules", () => {
+    expect(spineKind("SWITCH", false, false, true)).toBe("plain");
+    expect(spineKind("GC", true, true, true)).toBe("real");
+    expect(spineKind("GC", true, false, true)).toBe("built");
+    expect(spineKind("GBA", false, false, true)).toBe("built");
+    expect(spineKind("GBA", false, false, false)).toBe("fallback");
+    expect(spineKind(null, false, false, false)).toBe("fallback");
+  });
+  it("ratios and bands follow the table", () => {
+    expect(spineRatio("GC")).toBe(0.074);
+    expect(spineRatio("WII")).toBe(0.074);
+    expect(spineRatio("3DS")).toBe(0.1);
+    expect(spineRatio("SWITCH")).toBe(0.065);
+    expect(spineRatio("PSP")).toBe(0.078);
+    expect(spineRatio(null)).toBe(0.1);
+    expect(spineBand("GBA")).toEqual({ colour: "#F4F2EA", name: "GAME BOY ADVANCE", ink: "#2A2925", height: 0.27 });
+    expect(spineBand("SWITCH")?.height).toBe(0.2);
+    expect(spineBand("PSX")?.name).toBe("PLAYSTATION");
+    expect(spineBand(null)).toBeNull();
   });
 });

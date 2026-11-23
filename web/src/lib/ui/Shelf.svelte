@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { GameRow } from "../api/types";
   import type { CardCopy, RailRow } from "../shelf";
-  import { spineColour, spineInk } from "../spines";
+  import { spineBand, spineColour, spineInk, spineKind, spineRatio } from "../spines";
   import { bareKey, systemLabel } from "../systems";
   import ShelfCard from "./ShelfCard.svelte";
   import StatusRail from "./StatusRail.svelte";
@@ -16,10 +16,17 @@
     rows: RailRow[];
     copy: CardCopy;
     art: string | null;
+    /** A game's real spine and cover, as far as they have loaded. */
+    images?: (g: GameRow) => { spine: string | null; cover: string | null };
     onSelect: (i: number) => void;
     onOpen: (i: number) => void;
   }
-  let { games, index, rows, copy, art, onSelect, onOpen }: Props = $props();
+  let { games, index, rows, copy, art, images = () => ({ spine: null, cover: null }), onSelect, onOpen }: Props = $props();
+
+  /** A spine's width: its case's ratio of the spine's height (the shelf less 30 px). */
+  const widthOf = (g: GameRow) => `calc((var(--shelf-h) - 30px) * ${spineRatio(sys(g))})`;
+  const widths = $derived(games.map(widthOf));
+  let gamesEl: HTMLUListElement;
 
   let scroller: HTMLDivElement;
 
@@ -36,13 +43,19 @@
     const i = index;
     void games.length;
     if (!scroller || scroller.clientWidth === 0) return;
-    const pitch = px("--spine-w") + px("--spine-gap");
-    const left = i * pitch;
+    // Spine widths follow their cases; work them out from the spine height (the shelf's, less 30 px).
+    const gap = px("--spine-gap");
+    const spineH = (gamesEl?.clientHeight ?? 0) - 30;
+    const w = (j: number) => Math.max(0, spineH) * spineRatio(sys(games[j]!));
+    let left = 0;
+    for (let j = 0; j < i; j++) left += w(j) + gap;
     const right = left + px("--card-w");
+    const before = i > 0 ? w(i - 1) + gap : 0;
+    const after = i < games.length - 1 ? w(i + 1) + gap : 0;
     const view = scroller.clientWidth;
     let x = scroller.scrollLeft;
-    if (right + pitch - x > view) x = right + pitch - view;
-    if (left - pitch < x) x = left - pitch;
+    if (right + after - x > view) x = right + after - view;
+    if (left - before < x) x = left - before;
     scroller.scrollLeft = Math.max(0, x);
   });
 
@@ -72,11 +85,14 @@
   </ol>
   <div class="scroller" bind:this={scroller}>
     <div class="track">
-      <ul class="games" aria-label="Games">
+      <ul class="games" aria-label="Games" bind:this={gamesEl}>
         {#each games as g, i (keyOf(g))}
           {@const s = sys(g)}
           {@const on = i === index}
-          <li class="item" class:on style:--sp={spineColour(s)} style:--sp-ink={spineInk(s)}>
+          {@const im = images(g)}
+          {@const kind = spineKind(s, !!g.spine, !!im.spine, !!im.cover)}
+          {@const band = kind === "real" ? null : spineBand(s)}
+          <li class="item" class:on style:--sp={spineColour(s)} style:--sp-ink={spineInk(s)} style:--spine-w={widths[i]}>
             <button
               type="button"
               class="hit"
@@ -87,21 +103,30 @@
               {#if on}
                 <ShelfCard game={g} {copy} system={s} {art} />
               {:else}
-                <span class="spine">
-                  <i class="sy">{s ?? "—"}</i>
-                  {#if g.displayName}
-                    <span class="title">{g.displayName}</span>
-                  {:else}
-                    <span class="title key">{bareKey(g.emulatorId, g.gameKey)}</span>
-                  {/if}
-                </span>
+                {#if kind === "real"}
+                  <span class="spine real"><img src={im.spine} alt="" /></span>
+                {:else}
+                  <span class="spine {kind}" style:--title-top={band ? (band.height < 0.25 ? "23%" : "30%") : "6%"}>
+                    {#if kind === "built"}
+                      <i class="art" style:background-image={`url("${im.cover}")`}></i><i class="dim"></i>
+                    {/if}
+                    {#if band}
+                      <b class="band" class:short={band.height < 0.25} style:background={band.colour} style:color={band.ink} style:height={`${band.height * 100}%`}><em>{band.name}</em></b>
+                    {/if}
+                    {#if g.displayName}
+                      <span class="title">{g.displayName}</span>
+                    {:else}
+                      <span class="title key">{bareKey(g.emulatorId, g.gameKey)}</span>
+                    {/if}
+                  </span>
+                {/if}
               {/if}
             </button>
           </li>
         {/each}
       </ul>
       <div class="edge"></div>
-      <StatusRail {games} {rows} {index} />
+      <StatusRail {games} {rows} {index} {widths} />
     </div>
   </div>
 </div>
@@ -171,6 +196,7 @@
   .item {
     flex: none;
     width: var(--spine-w);
+    min-width: 12px;
     height: calc(var(--shelf-h) - 30px);
   }
   .item.on {
@@ -204,40 +230,81 @@
     outline-offset: 2px;
   }
 
+  /* A spine: the real case spine as scanned; Switch's plain red; built from the middle of the cover under a flat dark
+     layer; or the system's colour. Built, plain and fallback spines carry the console band and a title reading top to
+     bottom. Sizes follow the spine's height (container units). */
   .spine {
     position: relative;
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
+    display: block;
     width: 100%;
     height: 100%;
-    padding: 26px 0 10px;
+    container-type: size;
+    overflow: hidden;
+    color: var(--sp-ink);
   }
-  .sy {
+  .spine.real img {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .spine.plain {
+    background: #e60012;
+    color: #fff;
+  }
+  .spine.built {
+    color: #fff;
+  }
+  .art,
+  .dim {
     position: absolute;
-    top: 7px;
+    inset: 0;
+  }
+  .art {
+    background-size: auto 100%;
+    background-position: 50% 0;
+    background-repeat: no-repeat;
+  }
+  .dim {
+    background: rgba(0, 0, 0, 0.42);
+  }
+  .band {
+    position: absolute;
+    top: 0;
     left: 0;
     right: 0;
-    text-align: center;
-    font: 700 9px/1 "Barlow Semi Condensed", sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .band em {
+    writing-mode: vertical-rl;
+    font: 700 2.2cqh/1 "Barlow Semi Condensed", sans-serif;
     font-style: normal;
     letter-spacing: 0.06em;
-    color: color-mix(in srgb, var(--sp-ink) 72%, var(--sp));
-    overflow: hidden;
     white-space: nowrap;
   }
-  /* The name reads bottom to top, cut with an ellipsis inside the spine. */
+  .band.short em {
+    font-size: 1.8cqh;
+  }
+  /* The name reads top to bottom, as on a printed case, cut with an ellipsis inside the spine. */
   .title {
+    position: absolute;
+    top: var(--title-top);
+    bottom: 3%;
+    left: 0;
+    right: 0;
+    margin: 0 auto;
+    width: fit-content;
     writing-mode: vertical-rl;
-    transform: rotate(180deg);
     max-height: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font: 700 14px/1 "Barlow Semi Condensed", sans-serif;
+    font: 700 5cqh/1 "Barlow Semi Condensed", sans-serif;
   }
   .title.key {
-    font: 400 12px/1 "JetBrains Mono", ui-monospace, monospace;
+    font: 400 4.2cqh/1 "JetBrains Mono", ui-monospace, monospace;
   }
 
   .edge {

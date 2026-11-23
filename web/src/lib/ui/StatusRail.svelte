@@ -8,12 +8,12 @@
    * The status rail under the shelf edge: one row of presence marks per device, each mark directly under its game. A
    * column is as wide as the spine (or the pulled-out card) above it, so the two scroll together.
    */
-  let { games, rows, index }: { games: GameRow[]; rows: RailRow[]; index: number } = $props();
+  let { games, rows, index, widths = [] }: { games: GameRow[]; rows: RailRow[]; index: number; widths?: string[] } = $props();
 </script>
 
 <div class="rail" role="presentation">
   {#each games as g, i (g.emulatorId + "/" + g.gameKey)}
-    <div class="col" class:wide={i === index}>
+    <div class="col" class:wide={i === index} style:--spine-w={widths[i]}>
       {#each rows as r (r.deviceId)}
         {@const p = presence(g, r.deviceId)}
         <PresenceMark {p} label={`${g.displayName ?? g.gameKey}: ${presenceText(p, r.name, g.emulatorId)}`} />
@@ -31,6 +31,7 @@
   .col {
     flex: none;
     width: var(--spine-w);
+    min-width: 12px;
     display: flex;
     flex-direction: column;
     align-items: center;
