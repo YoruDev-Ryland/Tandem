@@ -127,3 +127,33 @@ export function cursorIndex(memory: ShelfMemory | undefined, keys: string[]): nu
   }
   return 0;
 }
+
+/**
+ * The spines whose images to fetch: those in view ([first]..[last]) and [around] either side, nearest the cursor
+ * ([index], always included) first, so what is on screen beside the card fills in before what is off it.
+ */
+export function windowOrder(index: number, first: number, last: number, n: number, around = 12): number[] {
+  if (n === 0) return [];
+  const from = Math.max(0, Math.min(first, index) - around);
+  const to = Math.min(n - 1, Math.max(last, index) + around);
+  const out: number[] = [];
+  for (let i = from; i <= to; i++) out.push(i);
+  return out.sort((a, b) => Math.abs(a - index) - Math.abs(b - index) || a - b);
+}
+
+/**
+ * The first and last spine in view, from the spines' widths (px), the gap, the card's width (at [index]) and the
+ * shelf's scroll. [0, -1] for an empty shelf.
+ */
+export function visibleRange(widths: number[], gap: number, card: number, index: number, scrollLeft: number, clientWidth: number): [number, number] {
+  let first = -1;
+  let last = -1;
+  let left = 0;
+  for (let i = 0; i < widths.length; i++) {
+    const w = i === index ? card : widths[i]!;
+    if (first < 0 && left + w > scrollLeft) first = i;
+    if (left < scrollLeft + clientWidth) last = i;
+    left += w + gap;
+  }
+  return first < 0 ? [0, -1] : [first, last];
+}

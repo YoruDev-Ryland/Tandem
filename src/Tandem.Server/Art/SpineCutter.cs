@@ -35,12 +35,14 @@ public static class SpineCutter
         right -= trim;
         if (right - left < 4) return null;
 
-        // Scale the strip to cover the output box, keeping its aspect, then take the middle.
+        // The whole height always: scale the strip to the output height; a strip that comes out wider than the output
+        // loses its sides evenly, a narrower one (the trim makes it a few px narrower) is stretched to the output width.
         var outW = OutputWidth(system);
         float cropW = right - left, cropH = img.Height;
-        var scale = Math.Max(outW / cropW, OutputHeight / cropH);
-        float srcW = outW / scale, srcH = OutputHeight / scale;
-        var src = SKRect.Create(left + (cropW - srcW) / 2, (cropH - srcH) / 2, srcW, srcH);
+        var scaledW = cropW * OutputHeight / cropH;
+        var src = scaledW > outW
+            ? SKRect.Create(left + (cropW - outW * cropH / OutputHeight) / 2, 0, outW * cropH / OutputHeight, cropH)
+            : SKRect.Create(left, 0, cropW, cropH);
 
         using var surface = SKSurface.Create(new SKImageInfo(outW, OutputHeight, SKColorType.Rgba8888, SKAlphaType.Opaque));
         using (var image = SKImage.FromBitmap(img))

@@ -8,7 +8,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import android.util.LruCache
 import dev.tandem.app.api.ArtResult
 import dev.tandem.app.ui.state.ShelfUi
 import dev.tandem.app.ui.state.Spine
@@ -42,6 +44,8 @@ class ArtCache(
     private val api: suspend (emulatorId: String, gameKey: String) -> ArtResult,
     private val spineApi: suspend (emulatorId: String, gameKey: String) -> ArtResult = { _, _ -> ArtResult.None },
     private val maxBytes: Long = 50L * 1024 * 1024,
+    /** Decoded images kept in memory, by their bitmaps' size: covers are up to ~2 MB decoded, spines ~0.1 MB. */
+    private val memoryBytes: Int = 32 * 1024 * 1024,
     private val clock: () -> Long = System::currentTimeMillis,
     private val delay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -50,9 +54,10 @@ class ArtCache(
     private val inFlight = HashMap<String, Deferred<ImageBitmap?>>()
     /** At most [MAX_REQUESTS] requests to the server at once, however many spines want art. */
     private val requests = Semaphore(MAX_REQUESTS)
-    /** The last few covers, decoded, so going back and forth along the shelf doesn't read and decode again. */
-    private val memory = object : LinkedHashMap<String, ImageBitmap>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?) = size > MEMORY_ITEMS
+    /** Recent images, decoded, so going back and forth along the shelf doesn't read and decode again; at most
+     *  [memoryBytes] of bitmaps, the least recently used going first. */
+    private val memory = object : LruCache<String, ImageBitmap>(memoryBytes) {
+        override fun sizeOf(key: String, value: ImageBitmap): Int = value.asAndroidBitmap().allocationByteCount
     }
 
     // A cover keeps the id it always had (so covers already on disk still count); a spine has its own.
@@ -66,42 +71,59 @@ class ArtCache(
 
     /** The cover if it is decoded in memory already: cheap enough to call while composing. */
     fun inMemory(emulatorId: String, gameKey: String, kind: ArtKind = ArtKind.Cover): ImageBitmap? =
-        synchronized(memory) { memory[id(emulatorId, gameKey, kind)] }
+        memory.get(id(emulatorId, gameKey, kind))
 
     /** The cover if it is in memory or on disk, without asking the server. */
     fun cached(emulatorId: String, gameKey: String, kind: ArtKind = ArtKind.Cover): ImageBitmap? {
         val id = id(emulatorId, gameKey, kind)
-        synchronized(memory) { memory[id] }?.let { return it }
+        memory.get(id)?.let { return it }
         val f = file(id)
         if (!f.isFile) return null
         val img = decode(f.readBytes()) ?: run { f.delete(); return null }
         f.setLastModified(clock())
-        synchronized(memory) { memory[id] = img }
+        memory.put(id, img)
         return img
     }
 
     /**
-     * The cover: from memory or disk, else from the server unless it said this session that there is none. A pending
-     * answer waits 3 s and asks once more; pending again gives up until the game is focused again. Never throws
+     * The image: from memory or disk, else from the server unless it said this session that there is none. A pending
+     * answer is asked again every 3 s, up to 10 asks; still pending gives up until it is wanted again. Never throws
      * (but is cancelled with its caller: a focus change drops the retry).
      */
     suspend fun load(emulatorId: String, gameKey: String, kind: ArtKind = ArtKind.Cover): ImageBitmap? {
         val id = id(emulatorId, gameKey, kind)
         withContext(Dispatchers.IO) { cached(emulatorId, gameKey, kind) }?.let { return it }
         if (id in misses) return null
-        // A prefetch for this game is already asking: wait for it rather than ask (and write the file) twice.
-        synchronized(inFlight) { inFlight[id]?.takeIf { it.isActive } }?.let { return it.await() }
-        return fetch(emulatorId, gameKey, kind, id)
+        // Someone is already asking for this (a prefetch, or another load): wait for it rather than ask twice. Else
+        // say we are asking, so a prefetch that comes along joins us. The asking runs in the caller's coroutine, so
+        // the caller leaving cancels it.
+        val mine = kotlinx.coroutines.CompletableDeferred<ImageBitmap?>()
+        val theirs = synchronized(inFlight) {
+            inFlight[id]?.takeIf { it.isActive } ?: run { inFlight[id] = mine; null }
+        }
+        if (theirs != null) return theirs.await()
+        try {
+            return fetch(emulatorId, gameKey, kind, id).also { mine.complete(it) }
+        } catch (e: Throwable) {
+            mine.cancel()
+            throw e
+        } finally {
+            synchronized(inFlight) { if (inFlight[id] === mine) inFlight.remove(id) }
+        }
     }
 
     /** Whether the server said this session that there is nothing of [kind] for the game. */
     fun isMiss(emulatorId: String, gameKey: String, kind: ArtKind = ArtKind.Cover): Boolean = id(emulatorId, gameKey, kind) in misses
 
     private suspend fun fetch(emulatorId: String, gameKey: String, kind: ArtKind, id: String): ImageBitmap? {
+        // The server fetches one image at a time; a shelf's worth can take a while. Ask again every few seconds
+        // while it says pending, up to MAX_ASKS times.
         var r = ask(emulatorId, gameKey, kind)
-        if (r == ArtResult.Pending) {
+        var asks = 1
+        while (r == ArtResult.Pending && asks < MAX_ASKS) {
             delay(RETRY_MS)
             r = ask(emulatorId, gameKey, kind)
+            asks++
         }
         return when (r) {
             is ArtResult.Image -> withContext(Dispatchers.IO) { store(id, r.bytes) } ?: run { misses += id; null }
@@ -114,7 +136,7 @@ class ArtCache(
     fun prefetch(keys: List<Triple<String, String, ArtKind>>) {
         for ((e, k, kind) in keys) {
             val id = id(e, k, kind)
-            if (id in misses || synchronized(memory) { id in memory }) continue
+            if (id in misses || memory.get(id) != null) continue
             synchronized(inFlight) {
                 if (inFlight[id]?.isActive == true) return@synchronized
                 inFlight[id] = scope.async(start = CoroutineStart.LAZY) {
@@ -152,7 +174,7 @@ class ArtCache(
             f.setLastModified(clock())
             evict()
         }
-        synchronized(memory) { memory[id] = img }
+        memory.put(id, img)
         return img
     }
 
@@ -182,9 +204,9 @@ class ArtCache(
 
     private companion object {
         const val RETRY_MS = 3000L
+        const val MAX_ASKS = 10
         const val PART = ".part"
         const val STALE_PART_MS = 60L * 60 * 1000
-        const val MEMORY_ITEMS = 80
         const val MAX_REQUESTS = 4
         const val DECODE_WIDTH = 320
     }
@@ -229,8 +251,10 @@ fun spineImages(cache: ArtCache, s: Spine): SpineImages {
     var cover by remember(s.emulatorId, s.gameKey) { mutableStateOf(cache.inMemory(s.emulatorId, s.gameKey)) }
     LaunchedEffect(s.emulatorId, s.gameKey, s.hasSpine) {
         if (s.hasSpine && spine == null) spine = cache.load(s.emulatorId, s.gameKey, ArtKind.Spine)
-        // A game with a real spine needs its cover only when the server has no spine for it after all.
-        if (spine == null && cover == null) cover = cache.load(s.emulatorId, s.gameKey)
+        // A game with a real spine needs its cover only once the server said it has no spine after all (not while
+        // the spine is still pending).
+        val coverWanted = !s.hasSpine || (spine == null && cache.isMiss(s.emulatorId, s.gameKey, ArtKind.Spine))
+        if (coverWanted && cover == null) cover = cache.load(s.emulatorId, s.gameKey)
     }
     return SpineImages(spine, cover)
 }

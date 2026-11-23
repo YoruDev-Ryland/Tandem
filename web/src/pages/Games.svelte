@@ -7,7 +7,7 @@
   import { onAction } from "../lib/input/actions";
   import { emulatorName } from "../lib/emulators";
   import { router } from "../lib/router.svelte";
-  import { cardCopy, cursorIndex, railRows, shelfOrder, type ShelfMemory } from "../lib/shelf";
+  import { cardCopy, cursorIndex, railRows, shelfOrder, windowOrder, type ShelfMemory } from "../lib/shelf";
   import { artId, createSpineArt, type ArtWant } from "../lib/spineArt.svelte";
   import { bareKey, systemLabel } from "../lib/systems";
   import Empty from "../lib/ui/Empty.svelte";
@@ -115,23 +115,23 @@
     }),
   );
 
-  // Spines and covers for the shelf around the cursor (WINDOW spines either side, which covers the view and a dozen
-  // beyond), a moment after the cursor settles. The focused game's cover is always wanted, for its card; a Switch spine
-  // needs nothing; a game with a real spine wants that, and its cover only once the server says it has no spine.
-  // Images outside the window are freed; leaving the page frees the rest.
+  // Spines and covers for the shelf: those in view and a dozen either side, nearest the cursor first, a moment after
+  // the cursor settles. The focused game's cover is always wanted first, for its card; a Switch spine needs nothing; a
+  // game with a real spine wants that, and its cover only once the server says it has no spine. Images outside the
+  // window are freed; leaving the page frees the rest. Until the shelf has said what is in view (no layout yet), the
+  // view is taken as 18 spines either side of the cursor.
   const spineArt = createSpineArt();
   $effect(() => () => spineArt.destroy());
-  const WINDOW = 30;
+  let view = $state<[number, number] | null>(null);
   const wants = $derived.by(() => {
     const out: ArtWant[] = [];
     if (focused) out.push({ emu: focused.emulatorId, key: focused.gameKey, kind: "cover" });
-    const from = Math.max(0, index - WINDOW);
-    const to = Math.min(shelf.length - 1, index + WINDOW);
-    for (let i = from; i <= to; i++) {
+    const [first, last] = view ?? [index - 18, index + 18];
+    for (const i of windowOrder(index, first, last, shelf.length)) {
       const g = shelf[i]!;
       if (systemLabel(g.emulatorId, g.gameKey, g.core, g.system) === "SWITCH") continue;
       if (g.spine && !spineArt.missing(g.emulatorId, g.gameKey, "spine")) out.push({ emu: g.emulatorId, key: g.gameKey, kind: "spine" });
-      else out.push({ emu: g.emulatorId, key: g.gameKey, kind: "cover" });
+      else if (g !== focused) out.push({ emu: g.emulatorId, key: g.gameKey, kind: "cover" });
     }
     return out;
   });
@@ -174,7 +174,7 @@
         </p>
       {/if}
       {#if focused && copy}
-        <Shelf games={shelf} {index} rows={rail} {copy} art={artUrl} {images} onSelect={select} onOpen={open} />
+        <Shelf games={shelf} {index} rows={rail} {copy} art={artUrl} {images} onSelect={select} onOpen={open} onView={(f, l) => { if (!view || view[0] !== f || view[1] !== l) view = [f, l]; }} />
       {:else}
         <div class="pad"><Empty text={q ? `No games in ${emulatorName(emulator)} match.` : `No games for ${emulatorName(emulator)} yet.`} /></div>
       {/if}

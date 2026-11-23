@@ -13,12 +13,16 @@ export const artId = (emu: string, key: string, kind: ArtKind) => `${kind}:${emu
 
 /**
  * The shelf's images: real spines and covers as blob URLs, fetched at most [limit] at a time, each asked for once per
- * page visit ("none" is remembered, a pending or failed answer is not). [release] frees every URL not in its keep set.
+ * page visit ("none" is remembered). A pending answer is asked again after [retryMs] while the image is still wanted,
+ * up to MAX_ASKS times (the server fetches one image at a time, so a shelf's worth takes a while); a failed one is
+ * asked again when next wanted. [release] frees every URL not in its keep set.
  */
-export function createSpineArt(fetcher: Fetcher = fetchArt, limit = 4) {
+export function createSpineArt(fetcher: Fetcher = fetchArt, limit = 4, retryMs = 3000) {
   const urls = $state<Record<string, string>>({});
   const missing = $state<Record<string, true>>({});
   const asked = new Set<string>();
+  const asks = new Map<string, number>();
+  const MAX_ASKS = 10;
   const queue: ArtWant[] = [];
   const stop = new AbortController();
   let running = 0;
@@ -34,7 +38,18 @@ export function createSpineArt(fetcher: Fetcher = fetchArt, limit = 4) {
             if (stop.signal.aborted || !asked.has(id)) URL.revokeObjectURL(r.url);
             else urls[id] = r.url;
           } else if (r.kind === "none") missing[id] = true;
-          else asked.delete(id); // pending or failed: ask again next time it's wanted
+          else {
+            // Pending: ask again in a while, as long as it is still wanted (release takes it out of asked).
+            const n = (asks.get(id) ?? 0) + 1;
+            asks.set(id, n);
+            if (n < MAX_ASKS && !stop.signal.aborted)
+              setTimeout(() => {
+                if (!asked.has(id) || stop.signal.aborted) return;
+                queue.push(w);
+                pump();
+              }, retryMs);
+            else asked.delete(id);
+          }
         })
         .catch(() => asked.delete(id))
         .finally(() => {
@@ -70,6 +85,9 @@ export function createSpineArt(fetcher: Fetcher = fetchArt, limit = 4) {
         delete urls[id];
         asked.delete(id);
       }
+      // Anything else not kept (asked, pending a retry, or in flight) is forgotten: a retry stops, and a late answer
+      // is freed when it lands.
+      for (const id of [...asked]) if (!keep.has(id)) asked.delete(id);
       for (let i = queue.length - 1; i >= 0; i--) {
         const w = queue[i]!;
         const id = artId(w.emu, w.key, w.kind);

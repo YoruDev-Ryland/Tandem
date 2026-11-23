@@ -69,6 +69,26 @@ public class SpineCutterTests
     }
 
     [Fact]
+    public void Keeps_the_whole_height_of_the_spine()
+    {
+        // A GC scan whose spine has a green top row and a blue bottom row: both must survive the cut.
+        var bytes = Scan(1024, 680, 487, 537);
+        using var bmp = SKBitmap.Decode(bytes);
+        using (var c = new SKCanvas(bmp))
+        {
+            c.DrawRect(SKRect.Create(487, 0, 50, 12), new SKPaint { Color = new SKColor(0, 200, 0) });
+            c.DrawRect(SKRect.Create(487, 668, 50, 12), new SKPaint { Color = new SKColor(0, 0, 200) });
+        }
+        using var img = SKImage.FromBitmap(bmp);
+        using var data = img.Encode(SKEncodedImageFormat.Png, 100);
+        using var cut = Decode(SpineCutter.Cut(data.ToArray(), "GC")!);
+        var top = cut.GetPixel(25, 2);
+        var bottom = cut.GetPixel(25, cut.Height - 3);
+        Assert.True(top.Green > 150 && top.Red < 60, $"top row is {top}");
+        Assert.True(bottom.Blue > 150 && bottom.Red < 60, $"bottom row is {bottom}");
+    }
+
+    [Fact]
     public void Rejects_images_that_are_not_a_full_wrap()
     {
         Assert.Null(SpineCutter.Cut(Scan(512, 512, 0, 0), "GC"));

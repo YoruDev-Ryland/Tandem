@@ -71,14 +71,58 @@ class ArtCacheTest {
         assertEquals(listOf(3000L), delays)
     }
 
-    @Test fun pending_twice_gives_null_and_is_not_a_session_miss() = runBlocking {
-        answer(ArtResult.Pending, ArtResult.Pending)
+    @Test fun pending_is_asked_again_until_it_resolves() = runBlocking {
+        answer(ArtResult.Pending, ArtResult.Pending, ArtResult.Pending, ArtResult.Pending, ArtResult.Image(png()))
+        assertNotNull(cache().load("dolphin", "GSXE69"))
+        assertEquals(5, calls.size)
+        assertEquals(List(4) { 3000L }, delays)
+    }
+
+    @Test fun pending_ten_times_gives_null_and_is_not_a_session_miss() = runBlocking {
         val c = cache()
+        answer(*Array(10) { ArtResult.Pending })
         assertNull(c.load("dolphin", "GSXE69"))
-        assertEquals(2, calls.size)
+        assertEquals(10, calls.size)
         answer(ArtResult.Image(png()))
-        assertNotNull(c.load("dolphin", "GSXE69"))   // focused again: asked again
-        assertEquals(3, calls.size)
+        assertNotNull(c.load("dolphin", "GSXE69"))   // wanted again: asked again
+        assertEquals(11, calls.size)
+    }
+
+    @Test fun a_prefetch_joins_a_running_load() = runBlocking {
+        val asked = java.util.concurrent.atomic.AtomicInteger()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val c = ArtCache(dir, api = { _, _ -> asked.incrementAndGet(); gate.await(); ArtResult.Image(png()) }, clock = { now }, delay = {})
+        val loading = async(kotlinx.coroutines.Dispatchers.IO) { c.load("dolphin", "GSXE69") }
+        kotlinx.coroutines.withTimeout(5000) { while (asked.get() == 0) kotlinx.coroutines.delay(5) }
+        c.prefetch(listOf(Triple("dolphin", "GSXE69", ArtKind.Cover)))
+        kotlinx.coroutines.delay(100)
+        gate.complete(Unit)
+        assertNotNull(loading.await())
+        assertEquals(1, asked.get())
+    }
+
+    @Test fun memory_is_bounded_by_bytes() = runBlocking {
+        // 20×20 ARGB images are 1600 bytes each; room for three.
+        val c = ArtCache(dir, api = { _, _ -> ArtResult.Image(png(20, 20)) }, clock = { now }, delay = {}, memoryBytes = 3 * 1600)
+        for (i in 1..5) c.load("retroarch", "g$i")
+        assertNull(c.inMemory("retroarch", "g1"))
+        assertNull(c.inMemory("retroarch", "g2"))
+        assertNotNull(c.inMemory("retroarch", "g5"))
+        assertNotNull(c.inMemory("retroarch", "g3"))
+    }
+
+    @Test fun a_real_spine_game_loads_its_cover_only_after_no_spine() {
+        val spineAsks = mutableListOf<String>()
+        val c = ArtCache(dir, api = { _, k -> calls += "dolphin" to k; ArtResult.Image(png()) },
+            spineApi = { _, k -> spineAsks += k; if (k == "PENDING") ArtResult.Pending else ArtResult.None }, clock = { now }, delay = {})
+        fun spine(key: String) = dev.tandem.app.ui.state.Spine("dolphin", key, key, false, "GC", emptyList(),
+            dev.tandem.app.ui.state.ShelfCard("", "", false, "", dev.tandem.app.ui.kit.Tone.Ink2, emptyList()), hasSpine = true)
+        var pending: dev.tandem.app.ui.screens.SpineImages? = null
+        var none: dev.tandem.app.ui.screens.SpineImages? = null
+        compose.setContent { pending = spineImages(c, spine("PENDING")); none = spineImages(c, spine("NOSPINE")) }
+        settle { none?.cover != null && spineAsks.count { it == "PENDING" } >= 10 }
+        assertNull(pending?.cover)                                 // still pending: no cover fetched for it
+        assertEquals(listOf("dolphin" to "NOSPINE"), calls)        // no spine: the cover, once
     }
 
     @Test fun none_is_a_session_miss_not_on_disk() = runBlocking {

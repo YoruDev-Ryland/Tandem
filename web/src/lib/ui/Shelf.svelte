@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { GameRow } from "../api/types";
-  import type { CardCopy, RailRow } from "../shelf";
+  import { visibleRange, type CardCopy, type RailRow } from "../shelf";
   import { spineBand, spineColour, spineInk, spineKind, spineRatio } from "../spines";
   import { bareKey, systemLabel } from "../systems";
   import ShelfCard from "./ShelfCard.svelte";
@@ -20,8 +20,10 @@
     images?: (g: GameRow) => { spine: string | null; cover: string | null };
     onSelect: (i: number) => void;
     onOpen: (i: number) => void;
+    /** Told which spines are in view (first, last) whenever that changes. */
+    onView?: (first: number, last: number) => void;
   }
-  let { games, index, rows, copy, art, images = () => ({ spine: null, cover: null }), onSelect, onOpen }: Props = $props();
+  let { games, index, rows, copy, art, images = () => ({ spine: null, cover: null }), onSelect, onOpen, onView }: Props = $props();
 
   /** A spine's width: its case's ratio of the spine's height (the shelf less 30 px). */
   const widthOf = (g: GameRow) => `calc((var(--shelf-h) - 30px) * ${spineRatio(sys(g))})`;
@@ -45,8 +47,7 @@
     if (!scroller || scroller.clientWidth === 0) return;
     // Spine widths follow their cases; work them out from the spine height (the shelf's, less 30 px).
     const gap = px("--spine-gap");
-    const spineH = (gamesEl?.clientHeight ?? 0) - 30;
-    const w = (j: number) => Math.max(0, spineH) * spineRatio(sys(games[j]!));
+    const w = (j: number) => spineWidthPx(j);
     let left = 0;
     for (let j = 0; j < i; j++) left += w(j) + gap;
     const right = left + px("--card-w");
@@ -57,6 +58,34 @@
     if (right + after - x > view) x = right + after - view;
     if (left - before < x) x = left - before;
     scroller.scrollLeft = Math.max(0, x);
+    reportView();
+  });
+
+  /** A spine's width in px as laid out: its case ratio of the spine height, at least 12 px (the CSS floor). */
+  function spineWidthPx(j: number): number {
+    const spineH = Math.max(0, (gamesEl?.clientHeight ?? 0) - 30);
+    return Math.max(12, spineH * spineRatio(sys(games[j]!)));
+  }
+
+  function reportView() {
+    if (!onView || !scroller || scroller.clientWidth === 0) return;
+    const [first, last] = visibleRange(games.map((_, j) => spineWidthPx(j)), px("--spine-gap"), px("--card-w"), index, scroller.scrollLeft, scroller.clientWidth);
+    onView(first, last);
+  }
+
+  // Scrolling by hand (wheel, trackpad, scrollbar) changes what is in view too.
+  $effect(() => {
+    const el = scroller;
+    let raf = 0;
+    const scrolled = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(reportView);
+    };
+    el.addEventListener("scroll", scrolled, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", scrolled);
+      cancelAnimationFrame(raf);
+    };
   });
 
   // A mouse wheel scrolls the shelf sideways; a trackpad's own sideways swipe already does.

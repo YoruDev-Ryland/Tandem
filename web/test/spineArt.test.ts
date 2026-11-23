@@ -59,4 +59,23 @@ describe("spine art", () => {
     await flush();
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+
+  it("asks a pending image again until it comes, while it is wanted", async () => {
+    let n = 0;
+    const fetcher = vi.fn(async (): Promise<ArtResult> => (++n < 3 ? { kind: "pending" } : { kind: "image", url: "blob:late" }));
+    const art = createSpineArt(fetcher, 4, 0);
+    art.want([{ emu: "e", key: "a", kind: "spine" }]);
+    await vi.waitFor(() => expect(art.url("e", "a", "spine")).toBe("blob:late"));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops asking for a pending image once it is no longer wanted", async () => {
+    const fetcher = vi.fn(async (): Promise<ArtResult> => ({ kind: "pending" }));
+    const art = createSpineArt(fetcher, 4, 5);
+    art.want([{ emu: "e", key: "a", kind: "spine" }]);
+    await flush();
+    art.release(new Set());
+    await new Promise((r) => setTimeout(r, 40));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
 });

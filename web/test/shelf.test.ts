@@ -1,4 +1,5 @@
 import { spineBand, spineKind, spineRatio } from "../src/lib/spines";
+import { visibleRange, windowOrder } from "../src/lib/shelf";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cardCopy, cursorIndex, railLabel, railLabels, railRows, shelfOrder, systemName } from "../src/lib/shelf";
 import { SPINES, spineColour, spineInk, spineKey } from "../src/lib/spines";
@@ -298,5 +299,21 @@ describe("case spines", () => {
     expect(spineBand("SWITCH")?.height).toBe(0.2);
     expect(spineBand("PSX")?.name).toBe("PLAYSTATION");
     expect(spineBand(null)).toBeNull();
+  });
+});
+
+describe("spine window", () => {
+  it("orders the visible spines and a dozen either side by distance from the cursor", () => {
+    expect(windowOrder(5, 4, 7, 20, 1)).toEqual([5, 4, 6, 3, 7, 8]);
+    expect(windowOrder(0, 0, 2, 3, 12)).toEqual([0, 1, 2]);
+    expect(windowOrder(9, 0, 9, 10, 12)).toEqual([9, 8, 7, 6, 5, 4, 3, 2, 1, 0]);
+  });
+  it("finds the spines in view from the widths and the scroll", () => {
+    // Spines 10 px wide, 5 px apart; the card (index 2) is 100 px.
+    const widths = [10, 10, 10, 10, 10, 10, 10, 10];
+    expect(visibleRange(widths, 5, 100, 2, 0, 60)).toEqual([0, 2]);
+    expect(visibleRange(widths, 5, 100, 2, 120, 40)).toEqual([2, 4]);
+    expect(visibleRange(widths, 5, 100, 2, 0, 10_000)).toEqual([0, 7]);
+    expect(visibleRange([], 5, 100, 0, 0, 100)).toEqual([0, -1]);
   });
 });
