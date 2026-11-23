@@ -3,7 +3,7 @@
   import { downloadUrl, gamePath } from "../lib/api/paths";
   import { resource } from "../lib/api/resource.svelte";
   import type { ConfigOverview, GameRow, SyncGroupList } from "../lib/api/types";
-  import { attentionItems, configConflictRefs, heroLine } from "../lib/attention";
+  import { attentionItems, configConflictRefs } from "../lib/attention";
   import { differing, matrixColumns } from "../lib/deviceStates";
   import { onAction } from "../lib/input/actions";
   import { router } from "../lib/router.svelte";
@@ -62,8 +62,6 @@
   const columns = $derived(matrixColumns(all));
 
   const items = $derived(attentionItems(home.data, all, configConflictRefs(configs?.overview, configs?.groups), now));
-  const hero = $derived(heroLine(items));
-  const listed = $derived(items.filter((i) => i !== hero.item));
 
   const synced = $derived.by(() => {
     const seen = (home.data?.devices ?? [])
@@ -120,25 +118,15 @@
 
 <div class="page">
 <section>
+  <h1>Home</h1>
   {#if games.error && !games.data}
-    <h1 class="hero">Home</h1>
     <ErrorLine error={games.error} />
   {:else if !loaded}
-    <h1 class="hero ink3" aria-busy="true">— — —</h1>
+    <p class="ink3" aria-busy="true">Loading…</p>
   {:else}
-    <h1 class="hero {hero.tone}">{hero.text}</h1>
-    {#if hero.sub || hero.item?.href}
-      <p class="hero-sub">
-        {#if hero.sub}<span>{hero.sub}</span>{/if}
-        {#if hero.item?.href}
-          <a class="act {hero.tone}" href={hero.item.href} onclick={(e) => go(e, hero.item!.href!)}>{hero.item.action ?? "Open"}<Arrow /></a>
-        {/if}
-      </p>
-    {/if}
-
-    {#if listed.length > 0}
+    {#if items.length > 0}
       <ul class="attention" aria-label="Needs attention">
-        {#each listed as it (it.key)}
+        {#each items as it (it.key)}
           <li class={it.tone}>
             {#if it.href}
               <a href={it.href} onclick={(e) => go(e, it.href!)}><span class="text">{it.text}</span><span class="act">{it.action ?? "Open"}<Arrow /></span></a>
@@ -206,30 +194,14 @@
     flex: 1;
     padding: 16px var(--gutter) 32px;
   }
-  .hero {
-    max-width: 34ch;
-    margin: 0;
-    font: 600 46px/1.05 "Barlow Semi Condensed", sans-serif;
+  h1 {
+    margin: 0 0 18px;
+    font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
     letter-spacing: -0.02em;
     color: var(--ink);
   }
-  .hero.fault {
-    color: var(--fault);
-  }
-  .hero.wait {
-    color: var(--wait);
-  }
-  .hero.ink3 {
+  .ink3 {
     color: var(--ink3);
-  }
-  .hero-sub {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 6px 18px;
-    margin: 12px 0 0;
-    color: var(--ink2);
-    font-size: 17px;
   }
   .act {
     display: inline-flex;
@@ -240,20 +212,13 @@
     text-decoration: none;
     color: var(--ink);
   }
-  a.act.fault {
-    color: var(--fault);
-  }
-  a.act.wait {
-    color: var(--wait);
-  }
-  a:hover .act,
-  a.act:hover {
+  a:hover .act {
     text-decoration: underline;
     text-underline-offset: 3px;
   }
   .attention {
     list-style: none;
-    margin: 28px 0 0;
+    margin: 0;
     padding: 0;
     max-width: 960px;
   }
@@ -343,8 +308,8 @@
     text-underline-offset: 3px;
   }
   @media (max-width: 640px) {
-    .hero {
-      font-size: 34px;
+    h1 {
+      font-size: 36px;
     }
     .attention a {
       flex-wrap: wrap;

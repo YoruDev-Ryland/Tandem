@@ -39,4 +39,15 @@ describe("AppTopBar waiting state", () => {
     emit("saves");
     await vi.waitFor(() => expect(screen.getByText("Eden open").classList.contains("wait")).toBe(false));
   });
+
+  it("marks Games in --wait while a save waits, and clears it when nothing does", async () => {
+    router.go("/devices");
+    render(AppTopBar);
+    const games = await screen.findByRole("link", { name: /^Games/ });
+    await vi.waitFor(() => expect(games.querySelector("[data-testid=tab-mark]")?.classList.contains("wait")).toBe(true));
+    expect(games.textContent).toContain("1");
+    rows = [idleRow];
+    emit("saves");
+    await vi.waitFor(() => expect(screen.getByRole("link", { name: "Games" }).querySelector("[data-testid=tab-mark]")).toBeNull());
+  });
 });

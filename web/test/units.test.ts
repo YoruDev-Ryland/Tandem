@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decodeConfig, NotText } from "../src/lib/configText";
-import { attentionItems, heroLine, quietFor } from "../src/lib/attention";
+import { attentionItems, quietFor, tabMarks } from "../src/lib/attention";
 import { deviceSaveCounts, matrixColumns, presence } from "../src/lib/deviceStates";
 import { dev, game, home, noHead, ODIN, THOR, waiting } from "./fixtures/home";
 
@@ -45,19 +45,23 @@ describe("attention", () => {
     expect(quietFor(new Date(now - 30 * 3_600_000).toISOString(), now)).toBe("30 hours");
     expect(quietFor(null, now)).toBe("");
   });
-  it("is calm with nothing to say, and the quiet backup note does not break the calm", () => {
-    const h = home(0, { openConflicts: 0, backupNotConfigured: true });
-    const items = attentionItems(h, [], [], now);
-    expect(items.map((i) => i.tone)).toEqual(["quiet"]);
-    expect(heroLine(items)).toEqual({ text: "Everything is where it should be.", tone: "ink" });
+  it("marks nothing when nothing stands", () => {
+    expect(tabMarks(attentionItems(home(0, { openConflicts: 0 }), [], [], now))).toEqual({});
   });
-  it("splits a single item's two sentences into the hero and the line under it", () => {
-    const h = home(0, { openConflicts: 0, shizukuOffDevices: [THOR] });
-    const hero = heroLine(attentionItems(h, [], [], now));
-    expect(hero.text).toBe("Shizuku is off on Thor.");
-    expect(hero.sub).toBe("Nothing syncs there until it is back on.");
-    expect(hero.tone).toBe("fault");
-    expect(hero.item?.href).toBe(`/devices/${THOR}`);
+  it("marks the tab where each item gets dealt with", () => {
+    const h = home(1, { openConflicts: 0, shizukuOffDevices: [THOR], silentDevices: [ODIN], failedDeliveries24h: 2, diskLow: true, backupNotConfigured: true, configConflicts: 1 });
+    const marks = tabMarks(attentionItems(h, [waiting], [], now));
+    expect(marks["/devices"]).toEqual({ tone: "fault", count: 2 });
+    expect(marks["/games"]).toEqual({ tone: "fault", count: 2 });
+    expect(marks["/configs"]).toEqual({ tone: "fault", count: 1 });
+    expect(marks["/activity"]).toEqual({ tone: "fault", count: 1 });
+    expect(marks["/settings"]).toEqual({ tone: "fault", count: 2 });
+    expect(marks["/"]).toBeUndefined();
+  });
+  it("colours a tab's mark by its most urgent item", () => {
+    expect(tabMarks(attentionItems(home(0, { openConflicts: 0 }), [waiting], [], now))["/games"]).toEqual({ tone: "wait", count: 1 });
+    expect(tabMarks(attentionItems(home(0, { openConflicts: 0, backupNotConfigured: true }), [], [], now))["/settings"]).toEqual({ tone: "quiet", count: 1 });
+    expect(tabMarks(attentionItems(home(0, { openConflicts: 0, silentDevices: [THOR] }), [], [], now))["/devices"]).toEqual({ tone: "ink", count: 1 });
   });
   it("names failed deliveries and links to Activity", () => {
     const items = attentionItems(home(0, { openConflicts: 0, failedDeliveries24h: 3 }), [], [], now);

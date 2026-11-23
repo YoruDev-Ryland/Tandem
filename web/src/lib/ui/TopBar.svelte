@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { DeviceSummary } from "../api/types";
+  import type { TabMark } from "../attention";
   import { PRODUCT_NAME } from "../brand";
   import { deviceStatus } from "../deviceStatus";
   import Mark from "./Mark.svelte";
@@ -11,8 +12,10 @@
     devices: DeviceSummary[];
     /** Devices that have a game waiting for an emulator to close; their "open" state shows in --wait. */
     waitingDeviceIds?: string[];
+    /** Marks on the page tabs where something needs the user. */
+    marks?: Record<string, TabMark>;
   }
-  let { tabs, active, devices, waitingDeviceIds = [] }: Props = $props();
+  let { tabs, active, devices, waitingDeviceIds = [], marks = {} }: Props = $props();
 
   let now = $state(Date.now());
   $effect(() => {
@@ -23,7 +26,7 @@
 
 <header>
   <span class="word"><Mark size={13} />{PRODUCT_NAME}</span>
-  <Tabs items={tabs} {active} level={1} />
+  <Tabs items={tabs} {active} level={1} {marks} />
   {#if devices.length}
     <ul class="devices" aria-label="Devices">
       {#each devices as d (d.id)}

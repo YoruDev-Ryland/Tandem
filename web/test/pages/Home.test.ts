@@ -34,59 +34,51 @@ describe("Home", () => {
   beforeEach(() => router.go("/"));
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-  it("says everything is where it should be when nothing needs the user", async () => {
+  it("is titled Home and lists nothing when nothing needs the user", async () => {
     serve([notInstalled, longName]);
     render(Home);
     await screen.findByText("Pokémon Emerald");
-    expect(heading().textContent).toBe("Everything is where it should be.");
-    expect(heading().classList.contains("fault")).toBe(false);
+    expect(heading().textContent).toBe("Home");
+    expect(screen.queryByText(/Everything is where it should be/)).toBeNull();
     expect(screen.queryByRole("list", { name: "Needs attention" })).toBeNull();
   });
 
-  it("leads with a single problem in fault and links straight to it", async () => {
+  it("lists a single problem in fault and links straight to it", async () => {
     serve([conflict, notInstalled]);
     render(Home);
     await screen.findByText("Pokémon Emerald");
-    expect(heading().textContent).toBe("Pokémon Brilliant Diamond has two different saves.");
-    expect(heading().classList.contains("fault")).toBe(true);
-    const link = screen.getByRole("link", { name: /Choose/ });
-    expect(link.getAttribute("href")).toBe(gamePath(conflict.emulatorId, conflict.gameKey) + "/conflict");
+    expect(heading().textContent).toBe("Home");
+    const list = within(await screen.findByRole("list", { name: "Needs attention" }));
+    const line = list.getByText("Pokémon Brilliant Diamond has two different saves.");
+    expect(line.closest("li")!.classList.contains("fault")).toBe(true);
+    expect(line.closest("a")!.getAttribute("href")).toBe(gamePath(conflict.emulatorId, conflict.gameKey) + "/conflict");
   });
 
-  it("counts several problems and lists each with its way out", async () => {
+  it("lists every problem with its way out, waits after problems", async () => {
     serve([conflict, waiting], 2, { diskLow: true });
     render(Home);
     await screen.findByText("Pokémon Sword");
-    expect(heading().textContent).toBe("3 things need you.");
     const list = within(await screen.findByRole("list", { name: "Needs attention" }));
     expect(list.getByText(/almost out of disk space/)).toBeTruthy();
     expect(list.getByText("2 saves need a first-sync review.").closest("a")!.getAttribute("href")).toBe("/conflicts");
-    // The wait is listed in amber below the problems.
     const wait = list.getByText("Pokémon Sword reaches Thor when Eden closes.");
     expect(wait.closest("li")!.classList.contains("wait")).toBe(true);
+    const tones = list.getAllByRole("listitem").map((li) => li.className.split(" ").find((c) => ["fault", "wait", "ink", "quiet"].includes(c)));
+    expect(tones.indexOf("wait")).toBeGreaterThan(tones.lastIndexOf("fault"));
   });
 
   it("links a config conflict to its page, found through the config overview", async () => {
     serve([notInstalled], 0, { configConflicts: 1 });
     render(Home);
-    await screen.findByRole("heading", { name: "Eden config for Handhelds has two versions." });
-    const link = screen.getByRole("link", { name: /Choose/ });
-    expect(link.getAttribute("href")).toBe("/configs/eden/conflict/bundle-1");
-  });
-
-  it("shows a waiting save in amber when it is the only thing going on", async () => {
-    serve([waiting]);
-    render(Home);
-    await screen.findByText("Pokémon Sword");
-    expect(heading().textContent).toBe("Pokémon Sword reaches Thor when Eden closes.");
-    expect(heading().classList.contains("wait")).toBe(true);
+    const line = await screen.findByText("Eden config for Handhelds has two versions. Changes stop until you choose.");
+    expect(line.closest("a")!.getAttribute("href")).toBe("/configs/eden/conflict/bundle-1");
   });
 
   it("names a device that has gone quiet, and keeps 'backups not set up' as a quiet line", async () => {
     serve([notInstalled], 0, { silentDevices: [THOR], backupNotConfigured: true });
     render(Home);
     await screen.findByText("Pokémon Emerald");
-    expect(heading().textContent).toMatch(/^Thor hasn't checked in for \d+ (hour|hours)\.$/);
+    expect(screen.getByText(/^Thor hasn't checked in for \d+ (hour|hours)\.$/)).toBeTruthy();
     const backup = screen.getByText("Backups of this server aren't set up yet.");
     expect(backup.closest("li")!.classList.contains("quiet")).toBe(true);
     expect(backup.closest("a")!.getAttribute("href")).toBe("/settings?s=backup");
