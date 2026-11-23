@@ -1,5 +1,10 @@
 package dev.tandem.app.ui.screens
 
+import dev.tandem.app.ui.state.Spine
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import android.view.KeyEvent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
@@ -64,11 +69,15 @@ class ShelfScreenTest {
 
     private val cues = mutableListOf<Cue>()
 
-    private fun show(ui: ShelfUi, actions: DeviceActions = DeviceActions(), status: TopStatus = status(), fix: (() -> Unit)? = {}) {
+    private fun show(
+        ui: ShelfUi, actions: DeviceActions = DeviceActions(), status: TopStatus = status(), fix: (() -> Unit)? = {},
+        spineArt: (Spine) -> SpineImages = { SpineImages() },
+    ) {
         compose.setContent {
             EmuTheme(ThemeMode.Dark) {
                 CompositionLocalProvider(LocalCuePlayer provides CuePlayer { cues += it }) {
-                    ShelfScreen(ui, top = { TopBar(listOf("Library", "Activity", "Conflicts", "Settings"), 0, {}, status, fix) }, actions = actions)
+                    ShelfScreen(ui, top = { TopBar(listOf("Library", "Activity", "Conflicts", "Settings"), 0, {}, status, fix) }, actions = actions,
+                        spineArt = { s -> spineArt(s) })
                 }
             }
         }
@@ -245,6 +254,67 @@ class ShelfScreenTest {
         val (tw, th) = coverFit(512, 884, w, h)                            // a tall PSP case: full height, narrower
         assertEquals(168f, th.value, 0.01f); assertTrue(tw < w)
         assertEquals(w to h, coverFit(0, 0, w, h))
+    }
+
+    private fun assertRatio(key: String, ratio: Float) {
+        val b = bounds("spine:$key")
+        assertEquals("width of $key", b.height * ratio, b.width, 1.5f)
+        val r = bounds("rail:$key")
+        assertEquals("rail left of $key", b.left, r.left, 1f)
+        assertEquals("rail width of $key", b.width, r.width, 1f)
+    }
+
+    @Test fun fallback_shelf_keeps_widths_and_rail() {
+        show(shelfSample())
+        // Dolphin: the cursor is on Medal of Honor: Rising Sun; the rest are spines.
+        for (k in listOf("GPVE01", "RMGE", "SOUE")) assertRatio(k, 0.074f)
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        for (k in listOf("snes/Chrono Trigger", "gb/Tetris", "md/Sonic the Hedgehog 2")) assertRatio(k, 0.10f)
+    }
+
+    @Test fun long_title_ellipsizes_inside_a_narrow_spine() {
+        val long = "A".repeat(20) + " Very Long GameCube Title That Cannot Possibly Fit On A Spine"
+        show(shelfSample(listOf(shelfGame("dolphin", "GAAE01", "Aaa First", Newest, Newest), shelfGame("dolphin", "GZZE01", long, Newest, Newest)), emptyList()))
+        assertTrue(layout("spine-title:GZZE01").isLineEllipsized(0))
+        val t = bounds("spine-title:GZZE01"); val s = bounds("spine:GZZE01")
+        assertTrue("title $t inside $s", t.left >= s.left - 1 && t.right <= s.right + 1 && t.top >= s.top - 1 && t.bottom <= s.bottom + 1)
+    }
+
+    @Test fun mixed_widths_align_rail_and_cursor() {
+        val mystery = shelfGame("retroarch", "retroarch/Mystery", "Zz Mystery", Newest, Newest)
+        show(shelfSample(dolphinGames + retroarchGames + mystery))
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        // The conflict comes first, so the cursor starts on it.
+        assertEquals("Final Fantasy IV Advance", cardTitle())
+        assertRatio("retroarch/Mystery", 0.10f)
+        assertRatio("snes/Chrono Trigger", 0.10f)
+        compose.key(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertEquals("Castlevania - Aria of Sorrow", cardTitle())   // one spine on
+        assertRatio("gba/Final Fantasy IV Advance", 0.10f)
+    }
+
+    @Test fun built_spine_reads_top_to_bottom_under_its_band() {
+        val cover = android.graphics.Bitmap.createBitmap(40, 56, android.graphics.Bitmap.Config.ARGB_8888)
+            .apply { eraseColor(android.graphics.Color.rgb(30, 160, 60)) }.asImageBitmap()
+        show(shelfSample(), spineArt = { s -> if (s.gameKey == "gb/Tetris") SpineImages(cover = cover) else SpineImages() })
+        compose.key(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onNodeWithTag("spine-band:gb/Tetris", useUnmergedTree = true).assertExists()
+        compose.onNode(hasText("GAME BOY") and hasTestTag("spine-band-name:gb/Tetris"), useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("spine-cover:gb/Tetris", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("spine-title-ttb:gb/Tetris", useUnmergedTree = true).assertExists()
+    }
+
+    @Test fun switch_is_plain_red_even_with_art() {
+        val cover = android.graphics.Bitmap.createBitmap(40, 56, android.graphics.Bitmap.Config.ARGB_8888)
+            .apply { eraseColor(android.graphics.Color.rgb(30, 160, 60)) }.asImageBitmap()
+        val eden = listOf(shelfGame("eden", "0100AAAA", "Aaa Game", Newest, Newest), shelfGame("eden", "0100BBBB", "Bbb Game", Newest, Newest))
+        show(shelfSample(eden, emptyList()), spineArt = { SpineImages(cover = cover) })
+        compose.onNodeWithTag("spine-cover:0100BBBB", useUnmergedTree = true).assertDoesNotExist()
+        val img = compose.onNodeWithTag("spine:0100BBBB", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+        val p = img.getPixel(2, img.height - 3)
+        assertEquals(0xE6.toFloat(), android.graphics.Color.red(p).toFloat(), 2f)
+        assertEquals(0x00.toFloat(), android.graphics.Color.green(p).toFloat(), 2f)
+        assertEquals(0x12.toFloat(), android.graphics.Color.blue(p).toFloat(), 2f)
     }
 
     @Test fun notice_line_shows_more_count() {

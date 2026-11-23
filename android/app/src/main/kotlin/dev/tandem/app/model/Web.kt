@@ -29,6 +29,8 @@ import kotlinx.serialization.Serializable
     val newestOnDeviceName: String? = null,
     /** The game's system label as the server settled it (GBA, GC, …); absent on older servers. */
     val system: String? = null,
+    /** True when the server can give a real case spine for the game at /v1/web/spine. */
+    val spine: Boolean = false,
 )
 
 @Serializable data class VersionSummary(

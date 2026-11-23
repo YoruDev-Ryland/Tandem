@@ -1,5 +1,10 @@
 package dev.tandem.app.ui.screens
 
+import dev.tandem.app.ui.theme.spineKind
+import dev.tandem.app.ui.theme.SpineKind
+import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
@@ -102,9 +107,9 @@ import dev.tandem.app.ui.theme.EmuType
 import dev.tandem.app.ui.theme.LocalEmu
 import dev.tandem.app.ui.theme.Spines
 
-/** A spine's width, the gap between spines and the pulled-out card's width (spec: 34, 5 and 262 dp). */
-internal val SPINE_W = 34.dp
+/** The gap between spines and the pulled-out card's width (spec: 5 and 262 dp). A spine's width is its case's ratio. */
 internal val SPINE_GAP = 5.dp
+private const val PREFETCH_AROUND = 12   // spines either side of the view whose art is fetched ahead
 internal val CARD_W = 262.dp
 
 private val EDGE = 6.dp            // the shelf edge, in ink
@@ -137,6 +142,8 @@ fun ShelfScreen(
     actions: DeviceActions,
     art: @Composable (emulatorId: String, gameKey: String) -> ImageBitmap? = { _, _ -> null },
     artNow: (emulatorId: String, gameKey: String) -> ImageBitmap? = { _, _ -> null },
+    spineArt: @Composable (Spine) -> SpineImages = { SpineImages() },
+    prefetch: (spines: List<Spine>, first: Int, last: Int) -> Unit = { _, _, _ -> },
 ) {
     // -1: the user hasn't chosen yet, so the shelf follows the model's pick (the first emulator with games).
     var chosen by rememberSaveable { mutableIntStateOf(-1) }
@@ -207,7 +214,7 @@ fun ShelfScreen(
                     !ui.signedIn -> EmptyLine("Sign in to see your games.")
                     shelf == null -> {}
                     spines.isNotEmpty() -> Shelf(
-                        ui.rail, shelf, spines, at, art, artNow,
+                        ui.rail, shelf, spines, at, art, artNow, spineArt, prefetch,
                         onSpine = { i -> cues?.cue(Cue.Move); moveTo(i) },
                         onCard = open,
                     )
@@ -292,6 +299,8 @@ private fun Shelf(
     at: Int,
     art: @Composable (String, String) -> ImageBitmap?,
     artNow: (String, String) -> ImageBitmap?,
+    spineArt: @Composable (Spine) -> SpineImages,
+    prefetch: (List<Spine>, Int, Int) -> Unit,
     onSpine: (Int) -> Unit,
     onCard: () -> Unit,
 ) {
@@ -313,29 +322,44 @@ private fun Shelf(
             Box(Modifier.offset(y = shelfH).fillMaxWidth().height(EDGE).background(c.shelfEdge))
             val state = rememberLazyListState()
             val viewport = with(LocalDensity.current) { viewportW.roundToPx() }
-            val px = with(LocalDensity.current) { Triple(SPINE_W.roundToPx(), SPINE_GAP.roundToPx(), CARD_W.roundToPx()) }
-            LaunchedEffect(shelf.tab.id, at, spines.size, viewport) { state.keepInView(at, spines.size, viewport, px.first, px.second, px.third) }
+            val spineH = shelfH - SPINE_TOP
+            // Each spine is as wide as its console's case is, for this height.
+            val widths = spines.map { spineH * Spines.ratio(it.system) }
+            val density = LocalDensity.current
+            val widthsPx = with(density) { widths.map { it.roundToPx() } }
+            val px = with(density) { SPINE_GAP.roundToPx() to CARD_W.roundToPx() }
+            LaunchedEffect(shelf.tab.id, at, spines.size, viewport, widthsPx) { state.keepInView(at, viewport, widthsPx, px.first, px.second) }
+            // Art for what is in view and a dozen either side, a moment after the shelf settles.
+            val first by remember { derivedStateOf { state.firstVisibleItemIndex } }
+            val shown by remember { derivedStateOf { state.layoutInfo.visibleItemsInfo.size } }
+            LaunchedEffect(shelf.tab.id, first, shown, spines) {
+                kotlinx.coroutines.delay(dev.tandem.app.ui.art.SETTLE_MS)
+                prefetch(spines, (first - PREFETCH_AROUND).coerceAtLeast(0), (first + shown + PREFETCH_AROUND).coerceAtMost(spines.size - 1))
+            }
             LazyRow(Modifier.fillMaxSize().testTag("shelf"), state = state, horizontalArrangement = Arrangement.spacedBy(SPINE_GAP)) {
                 itemsIndexed(spines, key = { _, s -> s.gameKey }) { i, s ->
                     val isCursor = i == at
+                    val spineW = widths[i]
                     val w by animateDpAsState(
-                        if (isCursor) CARD_W else SPINE_W,
+                        if (isCursor) CARD_W else spineW,
                         if (motion) tween(120, easing = LinearOutSlowInEasing) else snap(),
                         label = "width",
                     )
                     Column(Modifier.width(w)) {
                         Box(Modifier.height(shelfH).fillMaxWidth().clipToBounds(), contentAlignment = Alignment.BottomStart) {
                             // The new card grows out of its spine; the old one folds back into its spine.
-                            if (isCursor || w > SPINE_W + 1.dp) {
+                            if (isCursor || w > spineW + 1.dp) {
                                 Card(s, shelfH, if (isCursor) art(s.emulatorId, s.gameKey) else artNow(s.emulatorId, s.gameKey), onCard)
                             } else {
-                                SpineView(s, shelfH - SPINE_TOP) { onSpine(i) }
+                                SpineView(s, spineW, spineH, spineArt(s), motion) { onSpine(i) }
                             }
                         }
                         Spacer(Modifier.height(EDGE + RAIL_GAP))
-                        for (m in s.marks) {
-                            Box(Modifier.fillMaxWidth().height(RAIL_ROW), contentAlignment = Alignment.Center) {
-                                PresenceMark(m.presence, m.description, compact = true)
+                        Column(Modifier.fillMaxWidth().testTag("rail:${s.gameKey}")) {
+                            for (m in s.marks) {
+                                Box(Modifier.fillMaxWidth().height(RAIL_ROW), contentAlignment = Alignment.Center) {
+                                    PresenceMark(m.presence, m.description, compact = true)
+                                }
                             }
                         }
                     }
@@ -347,13 +371,14 @@ private fun Shelf(
 
 /**
  * Scrolls the least that shows the card at [at] whole with a spine either side where there is room. It jumps; it never
- * animates. Positions are worked out for the settled layout (spines [spine] px wide, [gap] apart, the card [card]).
+ * animates. Positions are worked out for the settled layout: spine i is [spines][i] px wide, [gap] apart, the card [card].
  */
-private suspend fun LazyListState.keepInView(at: Int, n: Int, viewport: Int, spine: Int, gap: Int, card: Int) {
+private suspend fun LazyListState.keepInView(at: Int, viewport: Int, spines: List<Int>, gap: Int, card: Int) {
+    val n = spines.size
     if (n == 0 || viewport <= 0) return
-    val pitch = spine + gap
-    fun left(i: Int): Int = if (i <= at) i * pitch else at * pitch + card + gap + (i - at - 1) * pitch
-    fun width(i: Int): Int = if (i == at) card else spine
+    fun width(i: Int): Int = if (i == at) card else spines[i]
+    val lefts = IntArray(n).also { l -> for (i in 1 until n) l[i] = l[i - 1] + width(i - 1) + gap }
+    fun left(i: Int): Int = lefts[i]
     val total = left(n - 1) + width(n - 1)
     val first = firstVisibleItemIndex.coerceIn(0, n - 1)
     var x = left(first) + firstVisibleItemScrollOffset
@@ -389,46 +414,90 @@ internal object CardTitleSize : TextAutoSize {
     override fun hashCode(): Int = 0x7a11e
 }
 
-/** A game's spine: its system's colour, the system code at the top and the title reading bottom to top. */
+/** The images a spine draws from: its real case spine, and its front cover. Either may be missing. */
+data class SpineImages(val spine: ImageBitmap? = null, val cover: ImageBitmap? = null)
+
+/**
+ * A game's spine, [width] × [height], drawn by [spineKind]: the real case spine as scanned; Switch's plain red; built
+ * from the middle of the cover under a flat dark layer; or the system's colour. Built, plain and fallback spines carry
+ * the console band at the top and the title reading top to bottom.
+ */
 @Composable
-private fun SpineView(s: Spine, height: Dp, onClick: () -> Unit) {
-    val fill = Spines.colour(s.system)
-    val ink = Spines.ink(s.system)
+private fun SpineView(s: Spine, width: Dp, height: Dp, images: SpineImages, motion: Boolean, onClick: () -> Unit) {
+    val kind = spineKind(s.system, s.hasSpine, images.spine != null, images.cover != null)
     Box(
         Modifier
             .testTag("spine:${s.gameKey}")
-            .width(SPINE_W)
+            .width(width)
             .height(height)
-            .background(fill, RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+            .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp))
             .noKeyFocus()
             .clickable(interactionSource = null, indication = null, role = Role.Button, onClick = onClick),
     ) {
-        BasicText(
-            s.system ?: "", Modifier.align(Alignment.TopCenter).padding(top = 7.dp).clearAndSetSemantics {},
-            style = spineCode.copy(color = ink.copy(alpha = 0.72f)), maxLines = 1, overflow = TextOverflow.Clip,
-        )
-        // The title reads bottom to top, from 10 dp above the shelf up to under the system code, cut with an ellipsis.
-        BasicText(
-            s.title,
-            Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 10.dp)
-                .vertical(maxLength = height - 10.dp - 24.dp)
-                .testTag("spine-title:${s.gameKey}"),
-            style = (if (s.unnamed) spineKey else spineTitle).copy(color = ink),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Crossfade(kind, animationSpec = if (motion) tween(120) else snap(), label = "spine") { k ->
+            when (k) {
+                SpineKind.Real -> Image(
+                    images.spine!!, contentDescription = null, contentScale = ContentScale.FillBounds,
+                    modifier = Modifier.fillMaxSize().testTag("spine-real:${s.gameKey}"),
+                )
+                SpineKind.Plain -> SpineFace(s, height, Spines.SWITCH_RED, Color.White, band = Spines.band("SWITCH"))
+                SpineKind.Built -> Box(Modifier.fillMaxSize()) {
+                    // The middle of the front cover: scaled to the spine's height, centred, clipped.
+                    Image(
+                        images.cover!!, contentDescription = null, contentScale = ContentScale.Crop, alignment = Alignment.Center,
+                        modifier = Modifier.fillMaxSize().testTag("spine-cover:${s.gameKey}"),
+                    )
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.42f)))
+                    SpineFace(s, height, Color.Transparent, Color.White, band = Spines.band(s.system))
+                }
+                SpineKind.Fallback -> SpineFace(s, height, Spines.colour(s.system), Spines.ink(s.system), band = Spines.band(s.system))
+            }
+        }
     }
 }
 
-/** Lays the content out on its side, reading bottom to top, at most [maxLength] long. */
-private fun Modifier.vertical(maxLength: Dp): Modifier = this
+/** A spine's band (when the system has one) and its title, reading top to bottom, over [fill]. */
+@Composable
+private fun SpineFace(s: Spine, height: Dp, fill: Color, ink: Color, band: dev.tandem.app.ui.theme.Band?) {
+    val d = LocalDensity.current
+    Box(Modifier.fillMaxSize().background(fill)) {
+        if (band != null) {
+            Box(
+                Modifier.fillMaxWidth().height(height * band.heightFraction).background(band.colour).testTag("spine-band:${s.gameKey}"),
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText(
+                    band.name,
+                    Modifier.verticalTopToBottom(maxLength = height * band.heightFraction - 6.dp).testTag("spine-band-name:${s.gameKey}"),
+                    style = spineCode.copy(color = band.ink, fontSize = with(d) { (height * if (band.heightFraction < 0.25f) 0.018f else 0.022f).toSp() }),
+                    maxLines = 1, overflow = TextOverflow.Clip,
+                )
+            }
+        }
+        val top = height * when {
+            band == null -> 0.06f
+            band.heightFraction < 0.25f -> 0.23f
+            else -> 0.30f
+        }
+        Box(Modifier.align(Alignment.TopCenter).padding(top = top).testTag("spine-title-ttb:${s.gameKey}")) {
+            BasicText(
+                s.title,
+                Modifier.verticalTopToBottom(maxLength = height * 0.97f - top).testTag("spine-title:${s.gameKey}"),
+                style = (if (s.unnamed) spineKey else spineTitle).copy(color = ink, fontSize = with(d) { (height * 0.05f).toSp() }),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Lays the content out on its side, reading top to bottom (turned 90° clockwise), at most [maxLength] long. */
+private fun Modifier.verticalTopToBottom(maxLength: Dp): Modifier = this
     .layout { m, constraints ->
         val p = m.measure(Constraints(maxWidth = maxLength.roundToPx().coerceAtLeast(0), maxHeight = constraints.maxWidth))
         layout(p.height, p.width) { p.place((p.height - p.width) / 2, (p.width - p.height) / 2) }
     }
-    .rotate(-90f)
+    .rotate(90f)
 
 /**
  * The pulled-out card: the cover (or, without art, the system's code on its colour), the kicker, the title, this

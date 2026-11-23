@@ -1,5 +1,9 @@
 package dev.tandem.app.ui.state
 
+import dev.tandem.app.ui.theme.spineKind
+import dev.tandem.app.ui.theme.Spines
+import dev.tandem.app.ui.theme.SpineKind
+import androidx.compose.ui.graphics.Color
 import dev.tandem.app.model.DeviceGameState
 import dev.tandem.app.model.GameDeviceState
 import dev.tandem.app.model.GameRow
@@ -171,6 +175,31 @@ class ShelfTest {
         assertEquals("GBA", spineOf(r, HERE, "RetroArch", railRows(listOf(r), HERE), core = null).system)
         val none = row("retroarch/Golden Sun", "Golden Sun", emu = "retroarch")
         assertEquals(null, spineOf(none, HERE, "RetroArch", railRows(listOf(none), HERE), core = null).system)
+    }
+
+    @Test fun spine_kind_rules() {
+        assertEquals(SpineKind.Plain, spineKind("SWITCH", hasSpine = false, spineImage = false, cover = true))
+        assertEquals(SpineKind.Real, spineKind("GC", hasSpine = true, spineImage = true, cover = true))
+        assertEquals(SpineKind.Built, spineKind("GC", hasSpine = true, spineImage = false, cover = true))
+        assertEquals(SpineKind.Built, spineKind("GBA", hasSpine = false, spineImage = false, cover = true))
+        assertEquals(SpineKind.Fallback, spineKind("GBA", hasSpine = false, spineImage = false, cover = false))
+        assertEquals(SpineKind.Fallback, spineKind(null, hasSpine = false, spineImage = false, cover = false))
+    }
+
+    @Test fun ratios_and_bands_follow_the_table() {
+        assertEquals(0.074f, Spines.ratio("GC"))
+        assertEquals(0.074f, Spines.ratio("WII"))
+        assertEquals(0.10f, Spines.ratio("3DS"))
+        assertEquals(0.065f, Spines.ratio("SWITCH"))
+        assertEquals(0.078f, Spines.ratio("PSP"))
+        assertEquals(0.10f, Spines.ratio(null))
+        val gba = Spines.band("GBA")!!
+        assertEquals("GAME BOY ADVANCE", gba.name)
+        assertEquals(Color(0xFFF4F2EA), gba.colour)
+        assertEquals(0.27f, gba.heightFraction)
+        assertEquals(0.20f, Spines.band("SWITCH")!!.heightFraction)
+        assertEquals("PLAYSTATION", Spines.band("PSX")!!.name)
+        assertEquals(null, Spines.band(null))
     }
 
     @Test fun cursor_remembers_per_emulator() {

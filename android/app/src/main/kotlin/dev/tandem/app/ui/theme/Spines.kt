@@ -50,4 +50,55 @@ object Spines {
 
     /** Whether the spine is a light one (dark text): its system code is drawn in a muted dark, not a muted light. */
     fun isLight(system: String?): Boolean = entry(system).second != LIGHT_TEXT
+
+    /** A spine's width as a fraction of its height: the real case's proportions (fan-made style for cartridges). */
+    fun ratio(system: String?): Float = when (system?.uppercase()) {
+        "GC", "WII" -> 0.074f
+        "SWITCH" -> 0.065f
+        "PSP" -> 0.078f
+        else -> 0.10f
+    }
+
+    /** The Switch case's red: a Switch spine is this all over. */
+    val SWITCH_RED = Color(0xFFE60012)
+
+    private val CREAM = Color(0xFFF4F2EA)
+    private val INK = Color(0xFF2A2925)
+    private val BLACK = Color(0xFF1B1A17)
+
+    private val bands: Map<String, Band> = mapOf(
+        "GBA" to Band(CREAM, "GAME BOY ADVANCE", INK),
+        "GBC" to Band(CREAM, "GAME BOY COLOR", INK),
+        "GB" to Band(CREAM, "GAME BOY", INK),
+        "NES" to Band(BLACK, "NES", CREAM),
+        "SNES" to Band(Color(0xFF8E8C92), "SUPER NINTENDO", CREAM),
+        "N64" to Band(BLACK, "NINTENDO 64", CREAM),
+        "MD" to Band(BLACK, "GENESIS", CREAM),
+        "PSX" to Band(BLACK, "PLAYSTATION", CREAM),
+        "PSP" to Band(Color(0xFF141414), "PSP", CREAM),
+        "VITA" to Band(Color(0xFF2D4A6B), "PS VITA", CREAM),
+        "GC" to Band(BLACK, "GAMECUBE", CREAM),
+        "WII" to Band(Color(0xFFE4E2DA), "Wii", INK),
+        "DS" to Band(CREAM, "NINTENDO DS", INK),
+        "3DS" to Band(CREAM, "NINTENDO 3DS", INK),
+        "SWITCH" to Band(SWITCH_RED, "NINTENDO SWITCH", Color.White, 0.20f),
+    )
+
+    /** The console band at the top of a built or fallback spine; null for an unknown system. */
+    fun band(system: String?): Band? = system?.uppercase()?.let { bands[if (it == "PS1") "PSX" else it] }
+
+}
+
+/** The console band: its colour, the console's name set on it, the name's colour, and its share of the spine's height. */
+data class Band(val colour: Color, val name: String, val ink: Color, val heightFraction: Float = 0.27f)
+
+/** How a spine is drawn: the real case spine, Switch's plain red, built from the cover, or the system colour. */
+enum class SpineKind { Real, Plain, Built, Fallback }
+
+/** The first that applies: SWITCH is Plain; a real spine image is Real; a cover is Built; else Fallback. */
+fun spineKind(system: String?, hasSpine: Boolean, spineImage: Boolean, cover: Boolean): SpineKind = when {
+    system?.uppercase() == "SWITCH" -> SpineKind.Plain
+    hasSpine && spineImage -> SpineKind.Real
+    cover -> SpineKind.Built
+    else -> SpineKind.Fallback
 }

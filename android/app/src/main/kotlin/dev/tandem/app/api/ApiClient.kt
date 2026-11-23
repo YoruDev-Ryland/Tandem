@@ -202,8 +202,13 @@ class ApiClient(
      * 404 art_unavailable (the server couldn't reach a source), anything else, or no answer at all, is a failure. A
      * revoked key is still reported through onRevoked. Cancelling the caller cancels the request.
      */
-    override suspend fun art(emulatorId: String, gameKey: String): ArtResult {
-        val call = http.newCall(req("/v1/web/art/${encodeSegment(emulatorId)}/${encodeKey(gameKey)}").get().build())
+    override suspend fun art(emulatorId: String, gameKey: String): ArtResult = image("art", emulatorId, gameKey)
+
+    /** The real case spine: as [art], at /v1/web/spine (404 no_spine is none). */
+    override suspend fun spine(emulatorId: String, gameKey: String): ArtResult = image("spine", emulatorId, gameKey)
+
+    private suspend fun image(kind: String, emulatorId: String, gameKey: String): ArtResult {
+        val call = http.newCall(req("/v1/web/$kind/${encodeSegment(emulatorId)}/${encodeKey(gameKey)}").get().build())
         return suspendCancellableCoroutine { cont ->
             cont.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {

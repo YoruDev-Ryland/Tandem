@@ -63,7 +63,9 @@ import dev.tandem.app.ui.screens.ConflictsActions
 import dev.tandem.app.ui.screens.ConflictsScreen
 import dev.tandem.app.ui.screens.DeviceActions
 import dev.tandem.app.ui.screens.ShelfScreen
+import dev.tandem.app.ui.art.prefetchSpines
 import dev.tandem.app.ui.art.shelfArt
+import dev.tandem.app.ui.art.spineImages
 import dev.tandem.app.ui.screens.SettingsScreen
 import dev.tandem.app.ui.screens.actions
 import dev.tandem.app.ui.screens.gameUrl
@@ -260,7 +262,9 @@ private fun TandemRoot(vm: AppViewModel, activity: MainActivity) {
                 back = { activity.onBackPressedDispatcher.onBackPressed() },
             ),
             art = { emu, key -> shelfArt(vm.art, device, emu, key) },
-            artNow = vm.art::inMemory,
+            artNow = { emu, key -> vm.art.inMemory(emu, key) },
+            spineArt = { s -> spineImages(vm.art, s) },
+            prefetch = { spines, first, last -> prefetchSpines(vm.art, spines, first, last) },
         )
         TAB_ACTIVITY -> {
             // Visible: fetch now, and refresh on nudges until the tab changes.

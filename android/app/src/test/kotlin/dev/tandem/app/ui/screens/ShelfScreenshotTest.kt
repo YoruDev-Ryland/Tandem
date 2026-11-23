@@ -31,7 +31,8 @@ import org.robolectric.annotation.GraphicsMode
  * The Library tab at the devices' size (832×468 dp, xhdpi), light and dark: the mockup's shelf with the cursor on a
  * waiting game, a conflict on RetroArch's mixed shelf, an empty emulator, and four devices. It always checks that each
  * composes; with TANDEM_SHOT_DIR set it writes robo-library-*.png there. TANDEM_SHELF_ART may name a local cover image
- * for the focused game, to compare with the mockup by eye; it is never committed.
+ * for the focused game, to compare with the mockup by eye; TANDEM_SPINE_ART may name a local folder of
+ * `<key with / as _>.spine.png` and `.cover.png` images for the spines. Neither is ever committed.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -51,6 +52,13 @@ class ShelfScreenshotTest {
     @Test fun fourDevicesLight() = shoot(ThemeMode.Light, "robo-library-four-light.png", four(), downs = 3, rights = 1)
     @Test fun fourDevicesDark() = shoot(ThemeMode.Dark, "robo-library-four-dark.png", four(), downs = 3, rights = 1)
 
+    /** Dolphin's shelf with real spines (where TANDEM_SPINE_ART has them) and RetroArch's with built ones. */
+    @Test fun spinesLight() = shoot(ThemeMode.Light, "robo-library-spines-light.png", spines())
+    @Test fun spinesDark() = shoot(ThemeMode.Dark, "robo-library-spines-dark.png", spines())
+    @Test fun builtLight() = shoot(ThemeMode.Light, "robo-library-built-light.png", spines(), downs = 1)
+
+    private fun spines() = shelfSample(games = dolphinGames.map { it.copy(spine = true) } + retroarchGames)
+
     private fun four() = shelfSample(games = dolphinGames + azaharGames)
 
     private fun long() = shelfSample(games = dolphinGames + retroarchGames + listOf(
@@ -67,7 +75,7 @@ class ShelfScreenshotTest {
                 Chrome {
                     ShelfScreen(ui, top = {
                         TopBar(listOf("Library", "Activity", "Conflicts", "Settings"), 0, {}, status, {}, badge = { if (it == 2) "1" else null })
-                    }, actions = DeviceActions(), art = { _, k -> if (k == "GSXE69") art else null })
+                    }, actions = DeviceActions(), art = { _, k -> if (k == "GSXE69") art else null }, spineArt = { s -> localSpineArt(s) })
                 }
             }
         }
@@ -78,5 +86,14 @@ class ShelfScreenshotTest {
         val dir = System.getenv("TANDEM_SHOT_DIR") ?: return
         val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
         File(dir, name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    private val spineDir = System.getenv("TANDEM_SPINE_ART")?.let(::File)
+
+    private fun localSpineArt(s: dev.tandem.app.ui.state.Spine): SpineImages {
+        val dir = spineDir ?: return SpineImages()
+        fun img(kind: String) = File(dir, s.gameKey.replace('/', '_') + ".$kind.png").takeIf { it.isFile }
+            ?.let { BitmapFactory.decodeFile(it.path)?.asImageBitmap() }
+        return SpineImages(img("spine"), img("cover"))
     }
 }

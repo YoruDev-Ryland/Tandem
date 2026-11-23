@@ -119,6 +119,8 @@ data class Spine(
     val system: String?,
     val marks: List<PresenceCell>,
     val card: ShelfCard,
+    /** The server has a real case spine for this game (GameRow.spine). */
+    val hasSpine: Boolean = false,
 )
 
 /** An emulator in the strip: its [state] follows its name when it is the current one; [dimmed] when not set up here. */
@@ -229,6 +231,7 @@ fun spineOf(
         title = row.displayName ?: bareKey(row.emulatorId, row.gameKey),
         unnamed = row.displayName == null,
         system = row.system ?: systemLabel(row.emulatorId, row.gameKey, core),
+        hasSpine = row.spine,
         marks = rail.map { d -> presenceOf(row, d.deviceId).let { PresenceCell(it, presenceText(it, d.name, emulatorName)) } },
         card = ShelfCard("", "", false, "", Tone.Ink2, emptyList()),
     )

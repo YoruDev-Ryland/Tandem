@@ -35,9 +35,13 @@ class ArtCacheTest {
     private var now = 1_000_000L
     private val answers = ArrayDeque<() -> ArtResult>()
 
+    private val spineCalls = mutableListOf<Pair<String, String>>()
+    private val spineAnswers = ArrayDeque<() -> ArtResult>()
+
     private fun cache(maxBytes: Long = 50L * 1024 * 1024) = ArtCache(
         dir = dir,
         api = { e, k -> calls += e to k; answers.removeFirstOrNull()?.invoke() ?: ArtResult.None },
+        spineApi = { e, k -> spineCalls += e to k; spineAnswers.removeFirstOrNull()?.invoke() ?: ArtResult.None },
         maxBytes = maxBytes,
         clock = { now },
         delay = { delays += it },
@@ -173,7 +177,7 @@ class ArtCacheTest {
         val asked = java.util.concurrent.atomic.AtomicInteger()
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         val c = ArtCache(dir, api = { _, _ -> asked.incrementAndGet(); gate.await(); ArtResult.Image(png()) }, clock = { now }, delay = {})
-        c.prefetch(listOf("dolphin" to "GSXE69"))
+        c.prefetch(listOf(Triple("dolphin", "GSXE69", ArtKind.Cover)))
         kotlinx.coroutines.withTimeout(5000) { while (asked.get() == 0) kotlinx.coroutines.delay(5) }
         val loading = async { c.load("dolphin", "GSXE69") }
         kotlinx.coroutines.delay(50)
@@ -215,5 +219,39 @@ class ArtCacheTest {
         rested.values.forEach { it.complete(Unit) }        // too late for the games passed over: their waits were cancelled
         settle { shown != null }
         assertEquals(listOf("GALE01"), asked.toList())     // passing over games asks for none of them
+    }
+
+    @Test fun spine_kind_uses_the_spine_path_and_its_own_entry() = runBlocking {
+        val c = cache()
+        answer(ArtResult.Image(png(4, 6)))
+        spineAnswers.addLast { ArtResult.Image(png(2, 20)) }
+        val cover = c.load("dolphin", "GXBE69")!!
+        val spine = c.load("dolphin", "GXBE69", ArtKind.Spine)!!
+        assertEquals(listOf("dolphin" to "GXBE69"), calls)
+        assertEquals(listOf("dolphin" to "GXBE69"), spineCalls)
+        assertEquals(4 to 6, cover.width to cover.height)
+        assertEquals(2 to 20, spine.width to spine.height)
+        assertEquals(2, c.inMemory("dolphin", "GXBE69", ArtKind.Spine)!!.width)
+        assertEquals(4, c.inMemory("dolphin", "GXBE69")!!.width)
+    }
+
+    @Test fun prefetch_runs_at_most_four_at_once() = runBlocking {
+        var now = 0; var peak = 0
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val c = ArtCache(
+            dir = dir,
+            api = { _, _ ->
+                synchronized(this@ArtCacheTest) { now++; peak = maxOf(peak, now) }
+                gate.await()
+                synchronized(this@ArtCacheTest) { now-- }
+                ArtResult.None
+            },
+            clock = { 0L }, delay = {},
+        )
+        c.prefetch((1..10).map { Triple("retroarch", "g$it", ArtKind.Cover) })
+        kotlinx.coroutines.delay(300)
+        assertTrue("peak $peak", peak in 1..4)
+        gate.complete(Unit)
+        Unit
     }
 }

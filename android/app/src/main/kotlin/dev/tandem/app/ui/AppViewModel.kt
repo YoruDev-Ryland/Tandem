@@ -63,6 +63,7 @@ class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewMode
     val art = ArtCache(
         dir = java.io.File(app.cacheDir, "art"),
         api = { emu, key -> api()?.art(emu, key) ?: ArtResult.Failed },   // signed out: not an answer, ask again later
+        spineApi = { emu, key -> api()?.spine(emu, key) ?: ArtResult.Failed },
         scope = viewModelScope,
     )
     private val modules = ModuleRegistry.default().all()

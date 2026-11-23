@@ -57,4 +57,6 @@ interface Api {
     suspend fun vault(): List<VaultItemDto> = emptyList()
     /** The cover of [gameKey], for the shelf's card. Never throws. */
     suspend fun art(emulatorId: String, gameKey: String): ArtResult = ArtResult.None
+    /** The real case spine of [gameKey] (/v1/web/spine), same answers as [art]. Never throws. */
+    suspend fun spine(emulatorId: String, gameKey: String): ArtResult = ArtResult.None
 }
