@@ -44,6 +44,21 @@ class MelonDsModuleTest {
         assertEquals("CPUE", MelonDsModule.gameCode(rom("CPUE").inputStream()))
     }
 
+    @Test fun zipped_roms_carry_the_game_code_of_the_nds_inside() {
+        fun rom(code: String): ByteArray = ByteArray(0x200).also { b -> code.toByteArray(Charsets.ISO_8859_1).copyInto(b, 0x0C) }
+        fun zip(vararg entries: Pair<String, ByteArray>): ByteArray = java.io.ByteArrayOutputStream().also { bos ->
+            java.util.zip.ZipOutputStream(bos).use { z -> for ((n, b) in entries) { z.putNextEntry(java.util.zip.ZipEntry(n)); z.write(b); z.closeEntry() } }
+        }.toByteArray()
+        File("${internal()}/Games/nds").mkdirs()
+        File("${internal()}/Games/nds/Pokemon - Platinum Version (US).zip").writeBytes(zip("readme.txt" to ByteArray(40), "Pokemon - Platinum Version (US).nds" to rom("CPUE")))
+        File("${internal()}/Games/nds/NoRom.zip").writeBytes(zip("readme.txt" to rom("ABCD")))
+        File("${internal()}/Games/nds/Junk.zip").writeBytes(rom("WXYZ"))
+        val ids = m().installedGames(fs, det(), none).associate { it.gameKey to it.gameId }
+        assertEquals("CPUE", ids["nds/Pokemon - Platinum Version (US)"])
+        assertNull(ids["nds/NoRom"])
+        assertNull(ids["nds/Junk"])
+    }
+
     @Test fun orphan_sav_is_item_but_not_installed() {
         put("${internal()}/Games/nds/Orphan.sav")
         put("${internal()}/Games/nds/Real.nds")

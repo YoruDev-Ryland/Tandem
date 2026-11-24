@@ -90,7 +90,7 @@ class MelonDsModule(
         for (dir in romDirs(d)) for (n in romFiles(fs, dir)) {
             val base = n.substringBeforeLast('.')
             if (keyPrefix + base in found) continue
-            val code = try { fs.openRead("$dir/$n").use { gameCode(it) } } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { null }
+            val code = try { fs.openRead("$dir/$n").use { romGameCode(ext(n), it) } } catch (fu: FsUnavailableException) { throw fu } catch (_: Exception) { null }
             found[keyPrefix + base] = base to code
         }
         return found.map { (k, v) -> InstalledGame(k, v.first, gameId = v.second) }
@@ -118,6 +118,22 @@ class MelonDsModule(
     }
 
     companion object {
+        /** The game code of a ROM file by its extension: an .nds/.dsi header, or the first .nds/.dsi inside a .zip; null for anything else (.7z isn't read). */
+        fun romGameCode(ext: String, input: InputStream): String? = when (ext) {
+            "nds", "dsi" -> gameCode(input)
+            "zip" -> java.util.zip.ZipInputStream(input).let { z ->
+                var e = z.nextEntry
+                var seen = 0
+                while (e != null && seen++ < 64) {
+                    val n = e.name.lowercase()
+                    if (!e.isDirectory && (n.endsWith(".nds") || n.endsWith(".dsi"))) return@let gameCode(z)
+                    e = z.nextEntry
+                }
+                null
+            }
+            else -> null
+        }
+
         /** The DS header's 4-character game code (offset 0x0C), the GameTDB id; null unless it is 4 of A-Z, 0-9. */
         fun gameCode(input: InputStream): String? {
             val h = input.readNBytes(0x10)
