@@ -41,6 +41,8 @@ public sealed class MoveTimings
     public TimeSpan HoldTimeout { get; init; } = TimeSpan.FromSeconds(60);
     public TimeSpan ReadBackFirstDelay { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan ReadBackMaxDelay { get; init; } = TimeSpan.FromSeconds(30);
+    /// <summary>Before a "not stored" read-back is believed, the wait for a second read (a commit can land late).</summary>
+    public TimeSpan LateCommitDelay { get; init; } = TimeSpan.FromSeconds(2);
 }
 
 /// <summary>
@@ -169,8 +171,8 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
         try { job.Cts.Cancel(); } catch (ObjectDisposedException) { }
     }
 
-    /// <summary>Deletes the old copy a finished move left (see <see cref="DeleteOldCopy"/>: only blobs the current folder
-    /// also holds). 503 server_moving while a move runs; 409 when there is no old copy or the current folder is missing.</summary>
+    /// <summary>Deletes the old copy a finished move left (see <see cref="DeleteOldCopy"/>: never a blob a user still
+    /// holds that the current folder lacks). 503 server_moving while a move runs; 409 when there is no old copy or the current folder is missing.</summary>
     public async Task RemoveOldAsync(CancellationToken ct)
     {
         MoveRecord record;
@@ -192,7 +194,9 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
             if (!files.CheckPresent())
                 throw new ApiException(409, "files_unavailable", "The new files folder is missing. The old copy is kept until it is back.");
             var current = files.Root;
-            var (kept, keptBytes) = await Task.Run(() => DeleteOldCopy(old, current), ct);
+            var missing = await Task.Run(() => MissingFromCurrent(old, current), ct);
+            var referenced = await ReferencedAsync(missing, ct);
+            var (kept, keptBytes) = await Task.Run(() => DeleteOldCopy(old, current, missing, referenced), ct);
             var done = record with
             {
                 Status = kept == 0
@@ -412,7 +416,16 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
     {
         foreach (var d in job.CreatedDirs) Durability.SyncDirectory(Path.GetDirectoryName(d)!);
         Durability.SyncDirectory(job.Target);
-        if (Path.GetDirectoryName(job.Target) is { } parent) Durability.SyncDirectory(parent);
+        // Every level from the target's parent up to the parent of the topmost folder the check created.
+        var top = job.CreatedDir is { } created && (string.Equals(created, job.Target, StringComparison.Ordinal)
+                                                   || MoveTargetCheck.IsInside(job.Target, created, orSame: false))
+            ? Path.GetDirectoryName(created)
+            : Path.GetDirectoryName(job.Target);
+        for (var d = Path.GetDirectoryName(job.Target); d is not null; d = Path.GetDirectoryName(d))
+        {
+            Durability.SyncDirectory(d);
+            if (string.Equals(d, top, StringComparison.Ordinal)) break;
+        }
     }
 
     /// <summary>The current root is still the folder the move started from (an unmounted disk would look empty, and the
@@ -422,8 +435,8 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
 
     /// <summary>Stores files.location and the finished status in one save, then swaps the location. Runs under the
     /// hold. When the save throws, whether it was stored is read back, retried with backoff for as long as the database
-    /// does not answer: until then the hold stays, so no blob is written to either folder. Stored: the swap is done
-    /// (retried the same way). Not stored: it throws, and the move fails and cleans up.</summary>
+    /// does not answer: until then the hold stays, so no blob is written to either folder. Stored: the location is made
+    /// current without writing again. Not stored (twice, a moment apart): it throws, and the move fails and cleans up.</summary>
     private async Task<MoveRecord> SwitchAsync(Job job)
     {
         var status = _record!.Status;
@@ -440,30 +453,29 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
         catch (Exception ex)
         {
             logger.LogError(ex, "Storing the switch to {Target} failed; uploads stay on hold until it is known whether it was stored", job.Target);
+            var attempt = 0;
             var delay = timings.ReadBackFirstDelay;
-            bool? stored;
-            for (var attempt = 1; (stored = await SwitchStoredAsync(job.Target, job.Id, attempt)) is null; attempt++)
-                delay = await BackOffAsync(delay);
-            if (stored == false) throw;
-
-            // Stored: the same values again, which also makes them the current location.
-            while (true)
+            async Task<bool> ReadUntilAnsweredAsync()
             {
-                try
-                {
-                    using var scope = scopes.CreateScope();
-                    var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
-                    await TrackAsync(db, done, CancellationToken.None);
-                    await files.SwitchAsync(db, job.Target, job.Id, CancellationToken.None);
-                    logger.LogWarning("The switch to {Target} was stored despite the error; the move is done", job.Target);
-                    return done;
-                }
-                catch (Exception again)
-                {
-                    logger.LogError(again, "Could not make the stored switch current; retrying");
-                    delay = await BackOffAsync(delay);
-                }
+                bool? answer;
+                while ((answer = await SwitchStoredAsync(job.Target, job.Id, ++attempt)) is null) delay = await BackOffAsync(delay);
+                return answer.Value;
             }
+
+            var stored = await ReadUntilAnsweredAsync();
+            if (!stored)
+            {
+                // A commit can land after the error is reported: believe "not stored" only when a second read agrees.
+                await Task.Delay(timings.LateCommitDelay, CancellationToken.None);
+                stored = await ReadUntilAnsweredAsync();
+            }
+            if (!stored) throw;
+
+            // Stored (both settings went in the same save): make it current in memory, with no further write, so a
+            // database that reads but does not write cannot keep the hold.
+            files.UseStored(job.Target, job.Id);
+            logger.LogWarning("The switch to {Target} was stored despite the error; the move is done", job.Target);
+            return done;
         }
     }
 
@@ -668,32 +680,68 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
                && !MoveTargetCheck.IsInside(data, full, orSame: true);
     }
 
-    /// <summary>Only Tandem's entries, in the per-user folders (named by a user id): a blob file goes only when the
-    /// current root holds a file at the same relative path; any other blob is kept and counted. Upload temp files go too;
-    /// anything else stays. Then the emptied folders, and, when no blob was kept, the marker, a journal and the folder
-    /// itself if nothing else is left. Returns the kept blobs' count and bytes.</summary>
-    private static (int Kept, long Bytes) DeleteOldCopy(string root, string current)
+    /// <summary>The old copy's blobs, per user folder: (user id, hash, relative path, size).</summary>
+    private static IEnumerable<(Guid User, string Hash, string Rel, FileInfo File)> OldBlobs(string root)
+    {
+        if (!Directory.Exists(root)) yield break;
+        var walk = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0, IgnoreInaccessible = false };
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            if (!Guid.TryParseExact(Path.GetFileName(dir), "N", out var user)) continue;
+            foreach (var info in new DirectoryInfo(dir).EnumerateFiles("*", walk))
+                if (BlobHash.IsValid(info.Name)) yield return (user, info.Name, Path.GetRelativePath(root, info.FullName), info);
+        }
+    }
+
+    /// <summary>The old blobs the current root has no file for.</summary>
+    private static HashSet<(Guid, string)> MissingFromCurrent(string root, string current) =>
+        OldBlobs(root).Where(b => !File.Exists(Path.Combine(current, b.Rel))).Select(b => (b.User, b.Hash)).ToHashSet();
+
+    /// <summary>Of those, the ones a user still holds (a UserBlobs row): the only copy of a stored save.</summary>
+    private async Task<HashSet<(Guid, string)>> ReferencedAsync(HashSet<(Guid User, string Hash)> missing, CancellationToken ct)
+    {
+        var referenced = new HashSet<(Guid, string)>();
+        if (missing.Count == 0) return referenced;
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+        foreach (var group in missing.GroupBy(m => m.User))
+            foreach (var chunk in group.Select(m => m.Hash).Chunk(500))
+            {
+                var user = group.Key;
+                foreach (var hash in await db.UserBlobs.AsNoTracking().Where(b => b.UserId == user && chunk.Contains(b.Hash))
+                             .Select(b => b.Hash).ToListAsync(ct))
+                    referenced.Add((user, hash));
+            }
+        return referenced;
+    }
+
+    /// <summary>Only Tandem's entries, in the per-user folders (named by a user id). A blob file goes when the current
+    /// root holds the same relative path, or when it was found missing there and no user holds it any more (pruned, or
+    /// its account deleted, after the switch). A missing blob a user still holds is kept and counted, and so is one that
+    /// went missing from the current root after that was checked. Upload temp files go too; anything else stays. Then
+    /// the emptied folders, and, when no blob was kept, the marker, a journal and the folder itself if nothing else is
+    /// left. Returns the kept blobs' count and bytes.</summary>
+    private static (int Kept, long Bytes) DeleteOldCopy(string root, string current, HashSet<(Guid, string)> missing,
+        HashSet<(Guid, string)> referenced)
     {
         if (!Directory.Exists(root)) return (0, 0);
         var kept = 0;
         long bytes = 0;
+        foreach (var (user, hash, rel, info) in OldBlobs(root).ToList())
+        {
+            var key = (user, hash);
+            if (File.Exists(Path.Combine(current, rel)) || missing.Contains(key) && !referenced.Contains(key)) info.Delete();
+            else
+            {
+                kept++;
+                bytes += info.Length;
+            }
+        }
         var walk = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0, IgnoreInaccessible = false };
         foreach (var dir in Directory.EnumerateDirectories(root))
         {
             if (!Guid.TryParseExact(Path.GetFileName(dir), "N", out _)) continue;
-            foreach (var info in new DirectoryInfo(dir).EnumerateFiles("*", walk))
-            {
-                if (BlobHash.IsValid(info.Name))
-                {
-                    if (File.Exists(Path.Combine(current, Path.GetRelativePath(root, info.FullName)))) info.Delete();
-                    else
-                    {
-                        kept++;
-                        bytes += info.Length;
-                    }
-                }
-                else if (info.Name.Contains(".tmp-", StringComparison.Ordinal)) TryDeleteFile(info.FullName);
-            }
+            foreach (var tmp in Directory.EnumerateFiles(dir, "*.tmp-*", walk)) TryDeleteFile(tmp);
             foreach (var sub in Directory.EnumerateDirectories(dir, "*", walk).OrderByDescending(d => d.Length))
                 TryDeleteEmptyDirectory(sub);
             TryDeleteEmptyDirectory(dir);

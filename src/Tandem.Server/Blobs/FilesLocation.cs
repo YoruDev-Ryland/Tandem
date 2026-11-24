@@ -64,6 +64,10 @@ public sealed class FilesLocation
         _current = new Current(path, id, true);
     }
 
+    /// <summary>Makes a location already stored in the setting the current one, without writing (the move's save
+    /// reported an error, but reading the setting back shows it was stored).</summary>
+    public void UseStored(string path, Guid id) => _current = new Current(path, id, true);
+
     /// <summary>Re-reads the marker (a NAS may have come back) and returns whether the files are available.</summary>
     public bool Recheck()
     {

@@ -97,7 +97,11 @@ public class FilesMoverTests : IDisposable
             s.RemoveAll<IMountTable>();
             s.AddSingleton<IMountTable, NoContainer>();
             s.RemoveAll<MoveTimings>();
-            s.AddSingleton(timings ?? new MoveTimings { ReadBackFirstDelay = TimeSpan.FromMilliseconds(10), ReadBackMaxDelay = TimeSpan.FromMilliseconds(40) });
+            s.AddSingleton(timings ?? new MoveTimings
+            {
+                ReadBackFirstDelay = TimeSpan.FromMilliseconds(10), ReadBackMaxDelay = TimeSpan.FromMilliseconds(40),
+                LateCommitDelay = TimeSpan.FromMilliseconds(20),
+            });
             extra?.Invoke(s);
         };
         var (device, _) = await factory.Register(Admin);
@@ -398,7 +402,7 @@ public class FilesMoverTests : IDisposable
     }
 
     [Fact]
-    public async Task Remove_old_keeps_blobs_missing_from_the_new_location()
+    public async Task Remove_old_still_keeps_a_referenced_blob_missing_from_the_new_location()
     {
         using var s = await Start();
         var kept = await PutBlob(s.Device, "only in the old copy");
@@ -472,6 +476,104 @@ public class FilesMoverTests : IDisposable
         Assert.False(s.Gate.Holding);
         Assert.False(Directory.Exists(target));
         Assert.Equal("x", await GetBlob(s.Device, hash));
+    }
+
+    /// <summary>Stores files.location for the target directly, as a save that committed behind the job's back would.</summary>
+    private static async Task StoreLocation(ServerFactory f, string target)
+    {
+        using var scope = f.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+        db.ServerSettings.Add(new ServerSetting
+        {
+            Key = FilesLocation.Key,
+            Value = JsonSerializer.Serialize(new FilesLocationSetting(target, FilesLocation.ReadMarker(target)!.Value),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+        });
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task A_stored_switch_is_made_current_without_writing_again()
+    {
+        using var s = await Start();
+        var hash = await PutBlob(s.Device, "x");
+        var oldRoot = s.Files.Root;
+        var target = NewDir();
+        s.Hooks.SaveSwitch = async _ =>
+        {
+            await StoreLocation(s.Factory, target); // committed, but the job only sees the error
+            throw new IOException("connection reset after commit");
+        };
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        var status = await WaitFinished(s.Admin);
+
+        Assert.Equal(MovePhase.Done, status.Phase);
+        Assert.Equal(target, s.Files.Root);
+        Assert.Equal(oldRoot, status.OldLocation);
+        // No second write: the stored move record is still the running one (the next start reads the switch).
+        Assert.Contains("\"copying\"", await StoredSetting(s.Factory, FilesMover.Key), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(hash, Blobs(target));
+    }
+
+    [Fact]
+    public async Task A_switch_that_commits_late_is_found_by_the_second_read()
+    {
+        using var s = await Start();
+        var hash = await PutBlob(s.Device, "late");
+        var target = NewDir();
+        s.Hooks.SaveSwitch = _ => throw new IOException("timeout");
+        s.Hooks.BeforeReadBack = async attempt =>
+        {
+            if (attempt == 2) await StoreLocation(s.Factory, target); // the commit landed after the first read
+        };
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        var status = await WaitFinished(s.Admin);
+
+        Assert.Equal(MovePhase.Done, status.Phase);
+        Assert.Equal(target, s.Files.Root);
+        Assert.Equal("late", await GetBlob(s.Device, hash));
+    }
+
+    [Fact]
+    public async Task Remove_old_deletes_blobs_pruned_after_the_switch()
+    {
+        using var s = await Start();
+        var pruned = await PutBlob(s.Device, "unreferenced");
+        var oldRoot = s.Files.Root;
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, NewDir())).StatusCode);
+        Assert.Equal(MovePhase.Done, (await WaitFinished(s.Admin)).Phase);
+        s.Factory.Time.Advance(TimeSpan.FromHours(2));
+        Assert.Equal(1, (await s.Factory.Services.GetRequiredService<Pruner>().RunOnceAsync(default)).Blobs);
+        Assert.Contains(pruned, Blobs(oldRoot));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await s.Admin.PostAsync("/v1/admin/storage/move/remove-old", null)).StatusCode);
+
+        Assert.Empty(Blobs(oldRoot));
+        var status = (await GetStatus(s.Admin))!;
+        Assert.Equal(0, status.OldKept);
+        Assert.Null(status.OldLocation);
+    }
+
+    [Fact]
+    public async Task Remove_old_deletes_a_deleted_accounts_old_files()
+    {
+        using var s = await Start(allowRegistration: true);
+        var (other, otherKey) = await s.Factory.Register("other@example.com");
+        var theirs = await PutBlob(other, "theirs");
+        var oldRoot = s.Files.Root;
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, NewDir())).StatusCode);
+        Assert.Equal(MovePhase.Done, (await WaitFinished(s.Admin)).Phase);
+        Assert.Equal(HttpStatusCode.NoContent, (await s.Admin.DeleteAsync($"/v1/admin/users/{otherKey.UserId}")).StatusCode);
+        Assert.Contains(theirs, Blobs(oldRoot));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await s.Admin.PostAsync("/v1/admin/storage/move/remove-old", null)).StatusCode);
+
+        Assert.False(Directory.Exists(Path.Combine(oldRoot, otherKey.UserId.ToString("N"))));
+        var status = (await GetStatus(s.Admin))!;
+        Assert.Equal(0, status.OldKept);
+        Assert.Null(status.OldLocation);
     }
 
     [Fact]
