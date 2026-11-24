@@ -1,5 +1,5 @@
 import { spineBand, spineKind, spineRatio } from "../src/lib/spines";
-import { visibleRange, windowOrder } from "../src/lib/shelf";
+import { visibleRange, wheelStep, windowOrder } from "../src/lib/shelf";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cardCopy, cursorIndex, railLabel, railLabels, railRows, shelfOrder, systemName } from "../src/lib/shelf";
 import { SPINES, spineColour, spineInk, spineKey } from "../src/lib/spines";
@@ -315,5 +315,33 @@ describe("spine window", () => {
     expect(visibleRange(widths, 5, 100, 2, 120, 40)).toEqual([2, 4]);
     expect(visibleRange(widths, 5, 100, 2, 0, 10_000)).toEqual([0, 7]);
     expect(visibleRange([], 5, 100, 0, 0, 100)).toEqual([0, -1]);
+  });
+});
+
+describe("wheelStep", () => {
+  it("moves one game per mouse-wheel notch, down is the next game", () => {
+    expect(wheelStep(0, 100, 0)).toEqual({ step: 1, rest: 0 });
+    expect(wheelStep(0, -100, 0)).toEqual({ step: -1, rest: 0 });
+  });
+  it("a big notch is still one game", () => {
+    expect(wheelStep(0, 360, 0)).toEqual({ step: 1, rest: 0 });
+  });
+  it("line and page deltas are one game per event", () => {
+    expect(wheelStep(0, 3, 1)).toEqual({ step: 1, rest: 0 });
+    expect(wheelStep(0, -1, 2)).toEqual({ step: -1, rest: 0 });
+  });
+  it("small trackpad or smooth-wheel deltas add up to a step", () => {
+    let r = wheelStep(0, 15, 0);
+    expect(r.step).toBe(0);
+    r = wheelStep(r.rest, 15, 0);
+    expect(r.step).toBe(0);
+    r = wheelStep(r.rest, 15, 0);
+    expect(r).toEqual({ step: 1, rest: 0 });
+  });
+  it("turning the wheel back drops what had built up the other way", () => {
+    expect(wheelStep(30, -10, 0)).toEqual({ step: 0, rest: -10 });
+  });
+  it("no vertical movement is no step", () => {
+    expect(wheelStep(20, 0, 0)).toEqual({ step: 0, rest: 20 });
   });
 });

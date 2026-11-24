@@ -157,3 +157,19 @@ export function visibleRange(widths: number[], gap: number, card: number, index:
   }
   return first < 0 ? [0, -1] : [first, last];
 }
+
+/** Pixels of wheel travel that make one step along the shelf: under a usual mouse notch, so a notch is one game. */
+export const WHEEL_STEP_PX = 40;
+
+/**
+ * One wheel event as a cursor step along the shelf, like the arrow keys: down is the next game, up the one before.
+ * `rest` is the travel carried to the next event, so a trackpad's or a smooth wheel's small deltas still add up to
+ * steps; a large delta is still one game, and turning back drops what had built up the other way.
+ */
+export function wheelStep(rest: number, deltaY: number, deltaMode: number): { step: number; rest: number } {
+  if (deltaY === 0) return { step: 0, rest };
+  if (deltaMode !== 0) return { step: Math.sign(deltaY), rest: 0 };
+  const acc = Math.sign(rest) === Math.sign(deltaY) ? rest + deltaY : deltaY;
+  if (Math.abs(acc) < WHEEL_STEP_PX) return { step: 0, rest: acc };
+  return { step: Math.sign(acc), rest: 0 };
+}

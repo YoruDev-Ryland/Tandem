@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { GameRow } from "../api/types";
-  import { visibleRange, type CardCopy, type RailRow } from "../shelf";
+  import { visibleRange, wheelStep, type CardCopy, type RailRow } from "../shelf";
   import { spineBand, spineColour, spineInk, spineKind, spineRatio } from "../spines";
   import { bareKey, systemLabel } from "../systems";
   import ShelfCard from "./ShelfCard.svelte";
@@ -88,13 +88,19 @@
     };
   });
 
-  // A mouse wheel scrolls the shelf sideways; a trackpad's own sideways swipe already does.
+  // A mouse wheel moves the cursor a game at a time, like the arrow keys, and the shelf follows it. A trackpad's
+  // sideways swipe still scrolls the shelf freely.
+  let wheelRest = 0;
   $effect(() => {
     const el = scroller;
     const wheel = (e: WheelEvent) => {
-      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || el.scrollWidth <= el.clientWidth) return;
-      el.scrollLeft += e.deltaY;
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
       e.preventDefault();
+      const r = wheelStep(wheelRest, e.deltaY, e.deltaMode);
+      wheelRest = r.rest;
+      // No wrap: at either end the cursor stays.
+      const to = index + r.step;
+      if (r.step !== 0 && to >= 0 && to < games.length) onSelect(to);
     };
     el.addEventListener("wheel", wheel, { passive: false });
     return () => el.removeEventListener("wheel", wheel);

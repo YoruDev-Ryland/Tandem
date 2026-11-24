@@ -6,6 +6,7 @@
 
 - **The server reports its real version.** `/v1/server-info` and backups showed 0.1.0 for every release; the image
   now carries the release's version.
+- **The mouse wheel moves through the games shelf** in the web UI, one game per notch, like the arrow keys.
 
 ### Planned
 
