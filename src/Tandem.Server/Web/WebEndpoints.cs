@@ -59,6 +59,24 @@ public static class WebEndpoints
 
         web.MapPost("/saves/upload", UploadAsync).DisableAntiforgery().RequireStorage();
 
+        // Lost & found: the saves of deleted games. A web session only, like deleting the game.
+        var lost = web.MapGroup("/lost").RequireAuthorization(Auth.AuthSetup.WebSessionPolicy);
+        lost.MapGet("", (HttpContext http, SaveService saves, CancellationToken ct) => saves.ListLostAsync(http.User.UserId(), ct));
+        lost.MapGet("/{id:guid}/download", async (HttpContext http, SaveService saves, IBlobStore store, Guid id, CancellationToken ct) =>
+        {
+            var userId = http.User.UserId();
+            var item = await saves.GetLostAsync(userId, id, ct);
+            var stem = ZipExport.SanitizeSegment(ZipExport.FileName(item.GameKey));
+            return await FilesAsync(store, userId, Manifests.FromJson(item.ManifestJson), $"{stem}-lost.zip", ct);
+        });
+        lost.MapPost("/{id:guid}/restore", async (HttpContext http, SaveService saves, Guid id, CancellationToken ct) =>
+            Results.Ok(await saves.RestoreLostAsync(http.User.UserId(), id, ct)));
+        lost.MapDelete("/{id:guid}", async (HttpContext http, SaveService saves, Guid id, CancellationToken ct) =>
+        {
+            await saves.DeleteLostAsync(http.User.UserId(), id, ct);
+            return Results.NoContent();
+        });
+
         app.MapGet("/v1/saves/versions/{versionId:guid}/download", DownloadAsync).RequireAuthorization();
         app.MapGet("/v1/export.zip", ExportAsync).RequireAuthorization();
         return app;
@@ -74,8 +92,14 @@ public static class WebEndpoints
                 where v.Id == versionId && i.UserId == userId
                 select new { v.ManifestJson, v.Seq, i.GameKey }).FirstOrDefaultAsync(ct)
             ?? throw new ApiException(404, "version_not_found", "Version not found.");
-        var manifest = Manifests.FromJson(row.ManifestJson);
+        var name = $"{ZipExport.SanitizeSegment(ZipExport.FileName(row.GameKey))}-v{row.Seq}.zip";
+        return await FilesAsync(store, userId, Manifests.FromJson(row.ManifestJson), name, ct);
+    }
 
+    /// <summary>One file as itself; several as a zip named <paramref name="zipName"/>.</summary>
+    private static async Task<IResult> FilesAsync(IBlobStore store, Guid userId, List<ManifestEntry> manifest, string zipName,
+        CancellationToken ct)
+    {
         if (manifest.Count == 1)
         {
             var entry = manifest[0];
@@ -86,8 +110,7 @@ public static class WebEndpoints
 
         var items = manifest.OrderBy(e => e.Path, StringComparer.Ordinal).Select(e => new ZipItem(e.Path, e.Hash)).ToList();
         await ZipExport.RequireBlobsAsync(store, userId, items, ct);
-        var name = $"{ZipExport.SanitizeSegment(ZipExport.FileName(row.GameKey))}-v{row.Seq}.zip";
-        return Results.Stream(s => ZipExport.WriteAsync(s, userId, items, store, ct), "application/zip", name);
+        return Results.Stream(s => ZipExport.WriteAsync(s, userId, items, store, ct), "application/zip", zipName);
     }
 
     private static async Task<IResult> ExportAsync(HttpContext http, TandemDbContext db, IBlobStore store, string? emulator, CancellationToken ct)

@@ -42,6 +42,17 @@ class MainActivityServiceTest {
         assertFalse(dev.tandem.app.service.Watchdog.check(store, running = false) { true })
     }
 
+    @Test fun anAppUpdateRestartsSyncWhenThisDeviceCanSync() {
+        val replaced = android.content.Intent(android.content.Intent.ACTION_MY_PACKAGE_REPLACED)
+        dev.tandem.app.service.BootReceiver().onReceive(app, replaced)
+        assertNull("signed out: nothing to restart", shadowOf(app).nextStartedService)
+        store.signIn("http://nas:5100", "k", "d", emptyList())
+        dev.tandem.app.service.BootReceiver().onReceive(app, replaced)
+        assertEquals(SyncService::class.java.name, shadowOf(app).nextStartedService?.component?.className)
+        dev.tandem.app.service.BootReceiver().onReceive(app, android.content.Intent("some.other.ACTION"))
+        assertNull(shadowOf(app).nextStartedService)
+    }
+
     @Test fun aLateRevokeForAReplacedKeyChangesNothing() {
         store.signIn("http://nas:5100", "new key", "d2", emptyList())
         AppGraph.revoked(app, "old key")

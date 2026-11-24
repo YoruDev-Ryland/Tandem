@@ -1,7 +1,7 @@
 services:
   tandem:
-    # <owner> is the GitHub account or organisation you install from (the owner of the repo that publishes the image).
-    image: ghcr.io/<owner>/tandem:latest
+    # Published by github.com/YoruDev-Ryland/Tandem for linux/amd64 and linux/arm64.
+    image: ghcr.io/yorudev-ryland/tandem:latest
     # To build from source instead of pulling the image:
     # build: .
     container_name: tandem

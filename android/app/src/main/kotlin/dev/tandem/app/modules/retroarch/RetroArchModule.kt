@@ -165,7 +165,11 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
     override fun installedGames(fs: Fs, d: Detected, settings: DeviceSettings): List<InstalledGame> {
         val found = LinkedHashMap<String, String?>()
         val systems = HashMap<String, String>()
+        // Archives a playlist opens inside ("x.zip#inner.gba"): RetroArch names their saves after the inner file, so
+        // the archive itself is not a second game when the ROM folders are walked.
+        val opened = HashSet<String>()
         for (p in playlists(fs, d)) {
+            archiveSep.findAll(p.path).lastOrNull()?.let { opened += Paths.canonical(p.path.substring(0, it.range.last).replace('\\', '/')) }
             val b = contentBase(p.path)
             if (b.isEmpty()) continue
             val k = keyPrefix + b
@@ -173,7 +177,7 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
             if (p.system != null) systems.putIfAbsent(k, p.system)
         }
         for (dir in settings.romDirs.map { Paths.canonical(it) }) for (f in fs.walk(dir)) {
-            if (f.isDir) continue
+            if (f.isDir || Paths.canonical(f.path) in opened) continue
             val n = name(f.path)
             if (n.substringAfterLast('.', "").lowercase() !in romExts) continue
             val b = n.substringBeforeLast('.')

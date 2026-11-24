@@ -313,6 +313,59 @@ public class ArtEndpointTests
     }
 
     [Fact]
+    public async Task A_miss_recorded_before_the_system_was_known_is_looked_up_again_once_it_is()
+    {
+        var png = FakePng();
+        var listing = """{ "tree": [ { "path": "Golden Sun (USA, Europe).png", "mode": "100644", "type": "blob", "size": 900 } ] }""";
+        var cover = LibretroThumbnailSource.FileUri("Nintendo_-_Game_Boy_Advance", "Golden Sun (USA, Europe).png");
+        var sources = new FakeSources(u =>
+            u == LibretroIndex.ListingUri("Nintendo_-_Game_Boy_Advance") ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(listing) }
+            : u == cover ? FakeSources.Image(png)
+            : FakeSources.NotFound());
+        using var f = Factory(sources);
+        var (device, _) = await f.Register(Email);
+        const string url = "/v1/web/art/retroarch/retroarch/Golden%20Sun";
+        async Task Report(string? system) => (await device.PutAsJsonAsync("/v1/devices/me/installs/retroarch",
+            new Tandem.Protocol.InstallsRequest([new Tandem.Protocol.InstalledGame("retroarch/Golden Sun", "Golden Sun", null, system)]))).EnsureSuccessStatusCode();
+
+        await Report(null); // an old app: no system, so no source can look it up
+        Assert.Equal(HttpStatusCode.Accepted, (await device.GetAsync(url)).StatusCode);
+        await Drain(f);
+        Assert.Equal("no_art", await ErrorCode(await device.GetAsync(url)));
+
+        await Report("GBA"); // the new app reports the system: the old miss no longer counts
+        Assert.Equal(HttpStatusCode.Accepted, (await device.GetAsync(url)).StatusCode);
+        await Drain(f);
+        var r = await device.GetAsync(url);
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        Assert.Equal(png, await r.Content.ReadAsByteArrayAsync());
+
+        // A miss under the same system still holds (no lookup per request).
+        var calls = sources.Calls;
+        await Report("GBA");
+        Assert.Equal(HttpStatusCode.OK, (await device.GetAsync(url)).StatusCode);
+        Assert.Equal(calls, sources.Calls);
+    }
+
+    [Fact]
+    public async Task A_cover_miss_holds_while_the_system_stays_the_same()
+    {
+        var sources = new FakeSources(_ => FakeSources.NotFound());
+        using var f = Factory(sources);
+        var (device, _) = await f.Register(Email);
+        await device.PutAsJsonAsync("/v1/devices/me/installs/retroarch",
+            new Tandem.Protocol.InstallsRequest([new Tandem.Protocol.InstalledGame("retroarch/Nothing", "Nothing", null, "GBA")]));
+        const string url = "/v1/web/art/retroarch/retroarch/Nothing";
+        Assert.Equal(HttpStatusCode.Accepted, (await device.GetAsync(url)).StatusCode);
+        await Drain(f);
+        var calls = sources.Calls;
+        Assert.Equal("no_art", await ErrorCode(await device.GetAsync(url)));
+        Assert.Equal("no_art", await ErrorCode(await device.GetAsync(url)));
+        await Drain(f);
+        Assert.Equal(calls, sources.Calls);
+    }
+
+    [Fact]
     public async Task Another_users_installed_game_is_not_found()
     {
         var sources = new FakeSources(_ => FakeSources.Image(FakePng()));

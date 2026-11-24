@@ -37,6 +37,7 @@ every game then shows the no-art card.
 - ASP.NET Core and Entity Framework Core (including `Microsoft.EntityFrameworkCore.Sqlite`, `Microsoft.AspNetCore.OpenApi`): MIT
 - Npgsql and `Npgsql.EntityFrameworkCore.PostgreSQL`: PostgreSQL licence (permissive; see each package)
 - AWSSDK.S3: Apache-2.0
+- SkiaSharp and `SkiaSharp.NativeAssets.Linux.NoDependencies` (case spines): MIT; the bundled Skia library: BSD-3-Clause
 
 ## Web UI (npm)
 

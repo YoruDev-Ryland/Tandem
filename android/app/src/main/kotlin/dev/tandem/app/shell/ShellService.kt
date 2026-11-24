@@ -62,6 +62,10 @@ class ShellService() : IShellService.Stub() {
         }
     }
 
+    override fun installApk(apk: ParcelFileDescriptor, size: Long): String = guard {
+        ParcelFileDescriptor.AutoCloseInputStream(apk).use { ShellInstall.run(it, ShellInstall.command(size)) }
+    }
+
     override fun installedPackagesCsv(): String = guard { ProcessProbe.installedPackages().joinToString(",") }
 
     @Synchronized

@@ -12,6 +12,9 @@ import dev.tandem.app.R
 import dev.tandem.app.sync.SyncConflict
 import java.util.concurrent.atomic.AtomicInteger
 
+/** Opens the app to install the ready update once sync is idle (the update notification, with automatic installs off). */
+const val ACTION_INSTALL_UPDATE = "dev.tandem.app.action.INSTALL_UPDATE"
+
 /** The web app's Configs page, where a config conflict is chosen (the device has no config conflict view). */
 fun configsUrl(serverUrl: String): String = "${serverUrl.trimEnd('/')}/configs"
 
@@ -40,6 +43,7 @@ class Notifier(context: Context, private val serverUrl: () -> String? = { null }
         const val ID_CLOSE_EMULATOR = 2
         const val ID_CONFLICT = 3
         const val ID_REVOKED = 4
+        const val ID_UPDATE = 5
         private const val ID_OTHER_BASE = 100
         private const val ID_OTHER_COUNT = 20
         const val REVOKED_TITLE = "This device was removed from the server"
@@ -97,6 +101,19 @@ class Notifier(context: Context, private val serverUrl: () -> String? = { null }
 
     /** Once, when the server first answers device_revoked: the persistent state lives in the app. */
     fun revoked() = post(ID_REVOKED, REVOKED_TITLE, REVOKED_TEXT)
+
+    /**
+     * "Tandem X.Y.Z is ready to install". Without [confirm] the tap opens the app, which installs it once sync is
+     * idle; with it (Android's install prompt, from a PackageInstaller session) the tap opens that prompt.
+     */
+    fun updateReady(version: String, confirm: Intent? = null) {
+        val open = if (confirm != null) pending(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), 2)
+        else pending(Intent(ctx, MainActivity::class.java).setAction(ACTION_INSTALL_UPDATE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), 3)
+        val text = if (confirm != null) "Tap to install it." else "Tap to install it when sync is idle."
+        post(ID_UPDATE, "Tandem $version is ready to install", text, open)
+    }
+
+    fun cancelUpdate() = runCatching { nm.cancel(ID_UPDATE) }
 
     private fun post(id: Int, title: String, text: String, open: PendingIntent = openApp()) {
         runCatching {

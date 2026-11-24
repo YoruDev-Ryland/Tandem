@@ -420,6 +420,65 @@ namespace Tandem.Server.Data.Migrations.Sqlite
                     b.ToTable("InstallRecords");
                 });
 
+            modelBuilder.Entity("Tandem.Server.Data.LostItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Core")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EmulatorId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("GameKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("LostUtc")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ManifestHash")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ManifestJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Slot")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("TotalSize")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("LostItems");
+                });
+
             modelBuilder.Entity("Tandem.Server.Data.PairingCode", b =>
                 {
                     b.Property<string>("CodeHash")
@@ -908,6 +967,15 @@ namespace Tandem.Server.Data.Migrations.Sqlite
                     b.HasOne("Tandem.Server.Data.Device", null)
                         .WithMany()
                         .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Tandem.Server.Data.LostItem", b =>
+                {
+                    b.HasOne("Tandem.Server.Data.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

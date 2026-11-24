@@ -8,7 +8,12 @@ public enum ArtKind { Cover, Spine }
 /// <param name="Kind">Cover (the art sources) or Spine (a GameTDB case scan, cut).</param>
 /// <param name="GameId">The GameTDB id a device reported (DS, 3DS), for spines.</param>
 public sealed record ArtRequest(string EmulatorId, string GameKey, string? DisplayName, string? Core, string? System = null,
-    ArtKind Kind = ArtKind.Cover, string? GameId = null);
+    ArtKind Kind = ArtKind.Cover, string? GameId = null)
+{
+    /// <summary>What a lookup was made with (the resolved system and the GameTDB id). A miss recorded under another basis
+    /// no longer counts, so a game looked up before its device reported a system is looked up again once it does.</summary>
+    public string Basis => $"{ArtSystems.Resolve(EmulatorId, GameKey, Core, System) ?? "-"}|{GameId ?? "-"}";
+}
 
 /// <summary>
 /// One place cover art may come from. A source only builds addresses; the fetcher downloads them in order and keeps the

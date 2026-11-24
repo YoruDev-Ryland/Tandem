@@ -111,6 +111,18 @@ class RetroArchModuleTest {
         assertEquals(null, games["retroarch/Mystery"])
     }
 
+    @Test fun an_archive_a_playlist_opens_inside_is_one_game_not_two() {
+        withCfg()
+        val roms = tmp.root.path + "/roms"
+        put(ra("playlists/Nintendo - Game Boy Advance.lpl"), """{"items":[
+            {"path":"$roms/gba/Pokemon - Emerald Version.zip#Pokemon - Emerald Version (USA).gba","label":"Pokemon - Emerald Version (USA, Europe)"}]}""")
+        put("$roms/gba/Pokemon - Emerald Version.zip")
+        put("$roms/gba/Unlisted.zip")
+        val keys = m().installedGames(fs(), detect(), DeviceSettings(listOf(roms), emptyMap())).map { it.gameKey }
+        // RetroArch names the save after the file inside the archive, so that is the game; the archive is not a second one.
+        assertEquals(listOf("retroarch/Pokemon - Emerald Version (USA)", "retroarch/Unlisted"), keys)
+    }
+
     @Test fun systems_from_names() {
         assertEquals("GBA", RetroArchSystems.fromDb("Nintendo - Game Boy Advance.lpl"))
         assertEquals(null, RetroArchSystems.fromDb("content_history.lpl"))

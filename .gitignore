@@ -8,3 +8,14 @@ node_modules/
 data/
 TestResults/
 web/dist
+.claude/
+.env
+.env.*
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+keystore.properties
+local.properties

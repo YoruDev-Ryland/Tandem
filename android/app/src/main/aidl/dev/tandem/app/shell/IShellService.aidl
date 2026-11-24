@@ -25,4 +25,7 @@ interface IShellService {
     // is. Any other value (0 is an old service's empty reply) is a probe failure. Throws a PROBE error when the process
     // list can't be trusted (fail closed).
     int isAnyProcessAlive(in String[] pkgs) = 12;
+    // Runs `pm install -r -S size` with the APK streamed on stdin and returns what pm printed ("Success" or
+    // "Failure [...]"). An old service without it answers null: install another way.
+    String installApk(in ParcelFileDescriptor apk, long size) = 13;
 }
