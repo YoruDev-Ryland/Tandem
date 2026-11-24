@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { changePassword, deleteAccount } from "../../lib/api/endpoints";
+  import { changeEmail, changePassword, deleteAccount } from "../../lib/api/endpoints";
   import { ApiError } from "../../lib/api/http";
   import Dialog from "../../lib/ui/Dialog.svelte";
   import { session } from "../../lib/session.svelte";
@@ -32,6 +32,37 @@
       error = settingsError(err);
     } finally {
       busy = false;
+    }
+  }
+
+  // Change the email: the password confirms it.
+  let newEmail = $state("");
+  let emailPassword = $state("");
+  let emailBusy = $state(false);
+  let emailError = $state<string | null>(null);
+  let emailDone = $state(false);
+  const emailReady = $derived(newEmail.trim().length > 0 && emailPassword.length > 0 && !emailBusy);
+  const EMAIL_TEXT: Record<string, string> = {
+    invalid_email: "That isn't a valid email address.",
+    bad_password: "That password isn't right.",
+    email_taken: "Another account already uses that address.",
+  };
+
+  async function submitEmail(e: SubmitEvent) {
+    e.preventDefault();
+    if (!emailReady) return;
+    emailBusy = true;
+    emailError = null;
+    emailDone = false;
+    try {
+      session.update(await changeEmail(newEmail.trim(), emailPassword));
+      newEmail = "";
+      emailPassword = "";
+      emailDone = true;
+    } catch (err) {
+      emailError = err instanceof ApiError && EMAIL_TEXT[err.code] ? EMAIL_TEXT[err.code]! : settingsError(err);
+    } finally {
+      emailBusy = false;
     }
   }
 
@@ -81,7 +112,17 @@
   <h2>Account</h2>
   <p class="note">Signed in as <span class="mono">{session.account?.email}</span></p>
 
-  <form onsubmit={submit}>
+  <h3>Change email</h3>
+  <form aria-label="Change email" onsubmit={submitEmail}>
+    <Field label="New email" type="email" autocomplete="email" bind:value={newEmail} oninput={() => (emailDone = false)} />
+    <Field label="Current password" type="password" autocomplete="current-password" bind:value={emailPassword} oninput={() => (emailDone = false)} />
+    {#if emailError}<p class="fault" role="alert">{emailError}</p>{/if}
+    {#if emailDone}<p class="note" role="status">Email changed.</p>{/if}
+    <div class="actions"><Button type="submit" variant="primary" disabled={!emailReady}>Save</Button></div>
+  </form>
+
+  <h3>Change password</h3>
+  <form aria-label="Change password" onsubmit={submit}>
     <Field label="Current password" type="password" autocomplete="current-password" bind:value={current} oninput={() => (done = false)} />
     <Field label="New password" type="password" autocomplete="new-password" bind:value={next} oninput={() => (done = false)} />
     {#if tooShort}<p class="fault">Use at least 8 characters.</p>{/if}

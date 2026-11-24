@@ -71,14 +71,14 @@
     <p class="note" aria-busy="true">— — —</p>
   {:else if usage.data.totalBytes === 0}
     <Empty text="Nothing is stored yet." />
-    {#if isAdmin && usage.data.server}<StorageLower usage={usage.data} {isAdmin} filesOnly />{/if}
+    {#if isAdmin && usage.data.server}<StorageLower usage={usage.data} {isAdmin} filesOnly onchanged={usage.reload} />{/if}
   {:else}
     {@const u = usage.data}
     {#if view === "map"}<MapView usage={u} {isAdmin} />
     {:else if view === "bars"}<BarsView usage={u} {isAdmin} />
     {:else}<BlocksView usage={u} {isAdmin} />
     {/if}
-    <StorageLower usage={u} {isAdmin} />
+    <StorageLower usage={u} {isAdmin} onchanged={usage.reload} />
   {/if}
 </div>
 

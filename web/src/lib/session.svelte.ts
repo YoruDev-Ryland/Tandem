@@ -47,6 +47,10 @@ export const session = {
     returnTo = null;
     router.go(to);
   },
+  /** The signed-in account changed (a new email): show it. */
+  update(next: AccountInfo): void {
+    account = next;
+  },
   /** The account is gone (deleted, with the server clearing the cookie): forget it and go to sign-in. */
   forget(): void {
     account = null;

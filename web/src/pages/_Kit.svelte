@@ -2,6 +2,8 @@
   // Dev-only page that renders every UI kit component. ?theme=light|dark forces a theme; ?pad=1 fakes a gamepad; ?dialog=1 opens the dialog.
   // ?storage=map|bars|blocks shows the Storage section, opened on that view, with a real server's numbers instead
   // (&user=1: as a non-admin). Its calls are answered here, so no server is needed.
+  // &move=copying|holding|done|kept|failed shows that phase of a move in the Files block; &dialog=ok|bad|remove opens the
+  // Move files dialog (checked fine or refused) or the remove-old confirm. ?account=1 shows Settings › Account.
   import { onMount } from "svelte";
   import { ApiError } from "../lib/api/http";
   import type { DeviceSummary, FileDiff } from "../lib/api/types";
@@ -21,6 +23,8 @@
   import ErrorLine from "../lib/ui/ErrorLine.svelte";
   import Field from "../lib/ui/Field.svelte";
   import Storage from "./settings/Storage.svelte";
+  import Account from "./settings/Account.svelte";
+  import type { MoveCheckResult, MoveStatus } from "../lib/api/types";
   import { session } from "../lib/session.svelte";
   import { storageUsage } from "./_storageFixture";
   import "./settings/settings.css";
@@ -102,6 +106,65 @@
   let compare = $state("v6");
 
   const storageView = params.get("storage");
+  const accountKit = params.get("account") === "1";
+  const MB = 1024 * 1024;
+  const moveBase: MoveStatus = {
+    phase: "Copying", from: "/data/blobs", to: "/mnt/big/tandem", filesDone: 48, filesTotal: 148, bytesDone: 31 * MB, bytesTotal: 79 * MB,
+    error: null, oldLocation: null, oldBytes: 0, startedUtc: "2026-11-24T10:00:00Z", oldKept: 0,
+  };
+  const MOVES: Record<string, MoveStatus> = {
+    copying: moveBase,
+    holding: { ...moveBase, phase: "Holding", filesDone: 148, bytesDone: 79 * MB },
+    done: { ...moveBase, phase: "Done", filesDone: 148, bytesDone: 79 * MB, oldLocation: "/data/blobs", oldBytes: 79 * MB },
+    kept: { ...moveBase, phase: "Done", filesDone: 148, bytesDone: 79 * MB, oldLocation: "/data/blobs", oldBytes: 2 * MB, oldKept: 3 },
+    failed: { ...moveBase, phase: "Failed", error: "The disk holding /mnt/big/tandem filled up." },
+  };
+  const moveKit = MOVES[params.get("move") ?? ""] ?? null;
+  const dialogKit = params.get("dialog");
+  const checkOk: MoveCheckResult = {
+    path: "/mnt/big/tandem", ok: true, bytesToCopy: 79 * MB, mountLine: null,
+    items: [
+      { name: "Absolute path", ok: true, problem: null },
+      { name: "Outside the current folder", ok: true, problem: null },
+      { name: "Writable", ok: true, problem: null },
+      { name: "Free space", ok: true, problem: null },
+      { name: "A real mount", ok: true, problem: null },
+      { name: "Empty", ok: true, problem: null },
+    ],
+  };
+  const checkBad: MoveCheckResult = {
+    ...checkOk, path: "/srv/tandem", ok: false, mountLine: "- /your/host/folder:/srv/tandem",
+    items: checkOk.items.map((i) => i.name === "A real mount"
+      ? { ...i, ok: false, problem: "This folder is inside the container and would be lost on the next update. Mount a folder there first:" }
+      : i.name === "Free space" ? { ...i, ok: false, problem: "Only 40.0 MB is free there; the copy needs 79.0 MB and 1.0 GB is kept free." } : i),
+  };
+  if (storageView && dialogKit) {
+    onMount(() => {
+      const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      const click = (name: string) => [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === name)?.click();
+      void (async () => {
+        await wait(600);
+        if (dialogKit === "remove") return click("Remove old copy");
+        click("Move files…");
+        await wait(200);
+        const input = document.querySelector<HTMLInputElement>("dialog input");
+        if (!input) return;
+        input.value = dialogKit === "bad" ? "/srv/tandem" : "/mnt/big/tandem";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await wait(100);
+        click("Check");
+      })();
+    });
+  }
+  if (accountKit) {
+    const real = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/v1/account")) return new Response(JSON.stringify({ id: "kit", email: "kit@example.test", isAdmin: true }), { headers: { "Content-Type": "application/json" } });
+      return real(input, init);
+    };
+    void session.check();
+  }
   if (storageView) {
     const admin = params.get("user") !== "1";
     const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
@@ -110,7 +173,10 @@
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const method = init?.method ?? "GET";
       if (url.endsWith("/v1/account")) return json({ id: "kit", email: "kit@example.test", isAdmin: admin });
-      if (url.endsWith("/v1/settings/storage")) return json(admin ? storageUsage : { ...storageUsage, server: null });
+      const usage = { ...storageUsage, server: storageUsage.server && { ...storageUsage.server, move: moveKit } };
+      if (url.endsWith("/v1/settings/storage")) return json(admin ? usage : { ...usage, server: null });
+      if (url.endsWith("/v1/admin/storage/move/check")) return json(dialogKit === "bad" ? checkBad : checkOk);
+      if (url.endsWith("/v1/admin/storage/move")) return json(moveKit);
       if (url.endsWith("/v1/settings/storage-view")) return method === "GET" ? json({ view: storageView }) : new Response(null, { status: 204 });
       return real(input, init);
     };
@@ -118,7 +184,11 @@
   }
 </script>
 
-{#if storageView}
+{#if accountKit}
+  <main class="storage-kit">
+    {#if session.account}<Account />{/if}
+  </main>
+{:else if storageView}
   <main class="storage-kit">
     {#if session.account}<Storage />{/if}
   </main>

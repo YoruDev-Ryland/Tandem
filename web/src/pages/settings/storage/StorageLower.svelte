@@ -4,17 +4,17 @@
   import { formatSize } from "../../../lib/format";
   import { router } from "../../../lib/router.svelte";
   import { kindRows, olderLine } from "../../../lib/storage/page";
-  import Button from "../../../lib/ui/Button.svelte";
+  import MoveFiles from "./MoveFiles.svelte";
 
   interface Props {
     usage: StorageUsage;
     isAdmin: boolean;
     /** Only the admin's Files block: nothing of the account's own is stored yet. */
     filesOnly?: boolean;
-    /** Opens the move (Task 10). */
-    onMove?: () => void;
+    /** The page's figures are read again (a move started, finished, or its old copy went). */
+    onchanged?: () => void;
   }
-  let { usage: u, isAdmin, filesOnly = false, onMove }: Props = $props();
+  let { usage: u, isAdmin, filesOnly = false, onchanged }: Props = $props();
 
   const kinds = $derived(kindRows(u, isAdmin));
   const older = $derived(olderLine(u));
@@ -56,7 +56,7 @@
           {#if server.lowDisk}
             <p class="fault">The disk holding {server.lowDisk} is almost full. New saves are refused until there is room.</p>
           {/if}
-          <div><Button onclick={() => onMove?.()}>Move files…</Button></div>
+          <MoveFiles move={server.move} {onchanged} />
         </div>
       {/if}
     </div>

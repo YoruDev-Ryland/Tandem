@@ -137,19 +137,21 @@ describe("Settings", () => {
 
   it("changes the password and says the other browsers were signed out", async () => {
     const calls = await open();
-    await fireEvent.input(await screen.findByLabelText("Current password"), { target: { value: "oldpassword" } });
-    await fireEvent.input(screen.getByLabelText("New password"), { target: { value: "newpassword1" } });
-    await fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+    const form = within(await screen.findByRole("form", { name: "Change password" }));
+    await fireEvent.input(form.getByLabelText("Current password"), { target: { value: "oldpassword" } });
+    await fireEvent.input(form.getByLabelText("New password"), { target: { value: "newpassword1" } });
+    await fireEvent.click(form.getByRole("button", { name: "Change password" }));
     await screen.findByText("Password changed. Your other browsers were signed out.");
     expect(calls.find((c) => c.url === "/v1/account/password")?.body).toEqual({ current: "oldpassword", new: "newpassword1" });
-    expect((screen.getByLabelText("Current password") as HTMLInputElement).value).toBe("");
+    expect((form.getByLabelText("Current password") as HTMLInputElement).value).toBe("");
   });
 
   it("shows a wrong current password in place", async () => {
     await openWith("Account", { "POST /v1/account/password": () => reply(400, { code: "wrong_password", message: "x" }) });
-    await fireEvent.input(await screen.findByLabelText("Current password"), { target: { value: "bad" } });
-    await fireEvent.input(screen.getByLabelText("New password"), { target: { value: "newpassword1" } });
-    await fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+    const form = within(await screen.findByRole("form", { name: "Change password" }));
+    await fireEvent.input(form.getByLabelText("Current password"), { target: { value: "bad" } });
+    await fireEvent.input(form.getByLabelText("New password"), { target: { value: "newpassword1" } });
+    await fireEvent.click(form.getByRole("button", { name: "Change password" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/current password is incorrect/i);
   });
 
