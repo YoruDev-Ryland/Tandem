@@ -45,6 +45,7 @@ public static class ServerSetup
         builder.Services.AddSingleton<IBlobPutHook, NoBlobPutHook>();
         builder.Services.AddHostedService<FilesLocationWatcher>();
         builder.Services.AddSingleton<IMoveHooks, NoMoveHooks>();
+        builder.Services.AddSingleton<MoveTimings>();
         builder.Services.AddSingleton<FilesMover>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<FilesMover>()); // a move cut short by a restart is cleaned up
         builder.Services.AddSingleton<IBlobStore, BlobStore>();

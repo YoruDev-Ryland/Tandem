@@ -45,6 +45,12 @@ public class FilesMoverTests : IDisposable
             AfterFileWritten?.Invoke(copyPath);
             return Task.CompletedTask;
         }
+
+        public Func<Func<Task>, Task>? SaveSwitch { get; set; }
+        public Task SaveSwitchAsync(Func<Task> save) => SaveSwitch?.Invoke(save) ?? save();
+
+        public Func<int, Task>? BeforeReadBack { get; set; }
+        public Task BeforeReadBackAsync(int attempt) => BeforeReadBack?.Invoke(attempt) ?? Task.CompletedTask;
     }
 
     private sealed class NoContainer : IMountTable
@@ -77,7 +83,8 @@ public class FilesMoverTests : IDisposable
         public void Dispose() => Factory.Dispose();
     }
 
-    private static async Task<Server> Start(Action<IServiceCollection>? extra = null, bool allowRegistration = false)
+    private static async Task<Server> Start(Action<IServiceCollection>? extra = null, bool allowRegistration = false,
+        MoveTimings? timings = null)
     {
         var hooks = new Hooks();
         var factory = new ServerFactory();
@@ -89,6 +96,8 @@ public class FilesMoverTests : IDisposable
             s.AddSingleton<IMoveHooks>(hooks);
             s.RemoveAll<IMountTable>();
             s.AddSingleton<IMountTable, NoContainer>();
+            s.RemoveAll<MoveTimings>();
+            s.AddSingleton(timings ?? new MoveTimings { ReadBackFirstDelay = TimeSpan.FromMilliseconds(10), ReadBackMaxDelay = TimeSpan.FromMilliseconds(40) });
             extra?.Invoke(s);
         };
         var (device, _) = await factory.Register(Admin);
@@ -256,6 +265,213 @@ public class FilesMoverTests : IDisposable
         Assert.Equal([kept], Blobs(target));
         Assert.Equal(1, status.FilesTotal);
         Assert.Equal(4, status.OldBytes);
+    }
+
+    private static Task<HttpResponseMessage> TryPut(HttpClient device, string text)
+    {
+        var content = new ByteArrayContent(Encoding.UTF8.GetBytes(text));
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        return device.PutAsync($"/v1/blobs/{Hash(Encoding.UTF8.GetBytes(text))}", content);
+    }
+
+    [Fact]
+    public async Task A_switch_save_that_fails_without_saving_fails_the_move_and_removes_the_copy()
+    {
+        using var s = await Start();
+        var hash = await PutBlob(s.Device, "stays");
+        var oldRoot = s.Files.Root;
+        var target = NewDir();
+        s.Hooks.SaveSwitch = _ => throw new IOException("database is locked");
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        var status = await WaitFinished(s.Admin);
+
+        Assert.Equal(MovePhase.Failed, status.Phase);
+        Assert.EndsWith("Nothing was changed.", status.Error);
+        Assert.Equal(oldRoot, s.Files.Root);
+        Assert.Null(await StoredSetting(s.Factory, FilesLocation.Key));
+        Assert.False(Directory.Exists(target));
+        Assert.Equal("stays", await GetBlob(s.Device, hash));
+    }
+
+    [Fact]
+    public async Task A_switch_save_that_throws_after_saving_completes_the_move()
+    {
+        using var s = await Start();
+        var hash = await PutBlob(s.Device, "moved anyway");
+        var target = NewDir();
+        s.Hooks.SaveSwitch = async save =>
+        {
+            await save();
+            throw new IOException("connection reset after commit");
+        };
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        var status = await WaitFinished(s.Admin);
+
+        Assert.Equal(MovePhase.Done, status.Phase);
+        Assert.Equal(target, s.Files.Root);
+        Assert.Contains(hash, Blobs(target));
+        Assert.Equal("moved anyway", await GetBlob(s.Device, hash));
+    }
+
+    [Fact]
+    public async Task While_the_switch_outcome_is_unknown_uploads_stay_on_hold_and_no_move_starts()
+    {
+        using var s = await Start();
+        await PutBlob(s.Device, "x");
+        var target = NewDir();
+        var attempts = 0;
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        s.Hooks.SaveSwitch = async save =>
+        {
+            await save();
+            throw new IOException("connection reset after commit");
+        };
+        s.Hooks.BeforeReadBack = _ =>
+        {
+            Interlocked.Increment(ref attempts);
+            return answer.Task.IsCompleted ? Task.CompletedTask : throw new IOException("database unreachable");
+        };
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        var until = DateTime.UtcNow + Soon;
+        while (Volatile.Read(ref attempts) < 8 && DateTime.UtcNow < until) await Task.Delay(10);
+        Assert.True(Volatile.Read(ref attempts) >= 8); // past any fixed number of tries
+
+        Assert.True(s.Gate.Holding);
+        var put = await TryPut(s.Device, "while unknown");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, put.StatusCode);
+        Assert.Equal("server_moving", (await put.ReadAsync<ErrorResponse>()).Code);
+        Assert.Equal(HttpStatusCode.Conflict, (await StartMove(s.Admin, NewDir())).StatusCode);
+        s.Mover.Cancel(); // too late: the switch may be stored
+        Assert.True(s.Gate.Holding);
+
+        answer.SetResult();
+        var status = await WaitFinished(s.Admin);
+        Assert.Equal(MovePhase.Done, status.Phase);
+        Assert.Equal(target, s.Files.Root);
+        var after = await PutBlob(s.Device, "after");
+        Assert.Contains(after, Blobs(target));
+    }
+
+    [Fact]
+    public async Task A_target_whose_marker_vanished_before_the_switch_fails_the_move()
+    {
+        using var s = await Start();
+        await PutBlob(s.Device, "x");
+        var oldRoot = s.Files.Root;
+        var target = NewDir();
+        s.Hooks.AfterCopyPass = _ =>
+        {
+            File.Delete(Path.Combine(target, FilesLocation.MarkerName));
+            return Task.CompletedTask;
+        };
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        var status = await WaitFinished(s.Admin);
+
+        Assert.Equal(MovePhase.Failed, status.Phase);
+        Assert.Equal("The new folder changed during the move. Nothing was changed.", status.Error);
+        Assert.Equal(oldRoot, s.Files.Root);
+        Assert.Null(await StoredSetting(s.Factory, FilesLocation.Key));
+    }
+
+    [Fact]
+    public async Task A_copy_that_vanished_before_the_switch_fails_the_move()
+    {
+        using var s = await Start();
+        var hash = await PutBlob(s.Device, "x");
+        var target = NewDir();
+        s.Hooks.AfterCopyPass = _ =>
+        {
+            File.Delete(Directory.GetFiles(target, hash, SearchOption.AllDirectories).Single());
+            return Task.CompletedTask;
+        };
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        var status = await WaitFinished(s.Admin);
+
+        Assert.Equal(MovePhase.Failed, status.Phase);
+        Assert.Equal("The new folder changed during the move. Nothing was changed.", status.Error);
+        Assert.Null(await StoredSetting(s.Factory, FilesLocation.Key));
+    }
+
+    [Fact]
+    public async Task Remove_old_keeps_blobs_missing_from_the_new_location()
+    {
+        using var s = await Start();
+        var kept = await PutBlob(s.Device, "only in the old copy");
+        var gone = await PutBlob(s.Device, "in both");
+        var oldRoot = s.Files.Root;
+        var target = NewDir();
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        Assert.Equal(MovePhase.Done, (await WaitFinished(s.Admin)).Phase);
+        File.Delete(Directory.GetFiles(target, kept, SearchOption.AllDirectories).Single()); // lost from the new folder
+
+        Assert.Equal(HttpStatusCode.NoContent, (await s.Admin.PostAsync("/v1/admin/storage/move/remove-old", null)).StatusCode);
+
+        Assert.Equal([kept], Blobs(oldRoot));
+        Assert.DoesNotContain(gone, Blobs(oldRoot));
+        var status = (await GetStatus(s.Admin))!;
+        Assert.Equal(1, status.OldKept);
+        Assert.Equal(oldRoot, status.OldLocation);
+        Assert.Equal(20, status.OldBytes);
+    }
+
+    [Fact]
+    public async Task Remove_old_refuses_while_the_new_folder_is_missing()
+    {
+        using var s = await Start();
+        var hash = await PutBlob(s.Device, "x");
+        var oldRoot = s.Files.Root;
+        var target = NewDir();
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        Assert.Equal(MovePhase.Done, (await WaitFinished(s.Admin)).Phase);
+        File.Delete(Path.Combine(target, FilesLocation.MarkerName)); // an unmounted disk
+
+        var r = await s.Admin.PostAsync("/v1/admin/storage/move/remove-old", null);
+        Assert.Equal(HttpStatusCode.Conflict, r.StatusCode);
+        Assert.Equal("files_unavailable", (await r.ReadAsync<ErrorResponse>()).Code);
+        Assert.Contains(hash, Blobs(oldRoot));
+    }
+
+    [Fact]
+    public async Task A_failed_move_after_a_check_removes_the_folder_the_check_created()
+    {
+        using var s = await Start();
+        await PutBlob(s.Device, "x");
+        var target = Path.Combine(NewDir("parent"), "files");
+        var check = await (await s.Admin.PostAsJsonAsync("/v1/admin/storage/move/check", new MovePathRequest(target)))
+            .ReadAsync<MoveCheckResult>();
+        Assert.True(check.Ok);
+        Assert.True(Directory.Exists(target)); // the check made it
+        s.Hooks.AfterFileWritten = path => File.WriteAllText(path, "broken");
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        Assert.Equal(MovePhase.Failed, (await WaitFinished(s.Admin)).Phase);
+
+        Assert.False(Directory.Exists(Path.GetDirectoryName(target)));
+    }
+
+    [Fact]
+    public async Task A_hold_that_cannot_drain_in_time_fails_the_move()
+    {
+        using var s = await Start(timings: new MoveTimings { HoldTimeout = TimeSpan.FromMilliseconds(200) });
+        var hash = await PutBlob(s.Device, "x");
+        var target = NewDir();
+        IDisposable? writer = null;
+        s.Hooks.AfterCopyPass = async ct => writer = await s.Gate.EnterWriteAsync(ct); // a write that does not finish
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        var status = await WaitFinished(s.Admin);
+        writer?.Dispose();
+
+        Assert.Equal(MovePhase.Failed, status.Phase);
+        Assert.Equal("Uploads did not pause in time. Nothing was changed.", status.Error);
+        Assert.False(s.Gate.Holding);
+        Assert.False(Directory.Exists(target));
+        Assert.Equal("x", await GetBlob(s.Device, hash));
     }
 
     [Fact]

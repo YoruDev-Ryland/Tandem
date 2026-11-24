@@ -15,6 +15,7 @@ public sealed record MovePathRequest(string Path);
 public enum MovePhase { Copying, Holding, Done, Failed }
 
 /// <summary>The last (or running) move of the stored files. <see cref="OldLocation"/> and <see cref="OldBytes"/> name the
-/// old copy a finished move left behind, until it is removed on request; null and 0 otherwise.</summary>
+/// old copy a finished move left behind, until it is removed on request; null and 0 otherwise. <see cref="OldKept"/> counts
+/// the old copy's files a removal left because the new folder does not hold them.</summary>
 public sealed record MoveStatus(MovePhase Phase, string From, string To, int FilesDone, int FilesTotal, long BytesDone,
-    long BytesTotal, string? Error, string? OldLocation, long OldBytes, DateTimeOffset StartedUtc);
+    long BytesTotal, string? Error, string? OldLocation, long OldBytes, DateTimeOffset StartedUtc, int OldKept = 0);
