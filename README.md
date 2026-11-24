@@ -159,8 +159,50 @@ Once you trust the setup, turn on **auto-apply** so incoming saves are written w
 - **Activity.** What synced, when, from which device, and anything that failed.
 - **Web UI.** The same games, plus devices, configs, the Vault, Lost & found, notifications (ntfy, Discord, webhooks),
   backups and account settings.
+- **Storage.** Settings › Storage shows what Tandem holds, by emulator, game and kind, in three views: **Map**
+  (a treemap you can zoom into an emulator), **Bars** (ranked bars and a disk ruler) and **Blocks** (a grid where one
+  block is a fixed number of MB). Switch with the control beside the heading, with `{` and `}` on a keyboard, or with
+  **Y** on a controller; the choice is remembered per account. Everyone sees their own data; admins also see the files
+  location and the free space on its disk.
 
 Tandem never writes into an emulator's files while that emulator is running, and it backs up what it overwrites.
+
+### Moving the stored files
+
+An admin can move the stored files (saves, states, configs and the Vault) to another folder, for example a bigger disk
+or a NAS, from Settings › Storage › **Move files...**, while the server runs. Only those files move. The database, the
+cover-art cache and temporary files stay in `/data`.
+
+In Docker the new folder has to be a mounted volume, or it would live in the container and be lost on the next update.
+Add the mount first, for example in `tandem.yml` or your compose file, and recreate the container:
+
+```yaml
+    volumes:
+      - tandem-data:/data
+      - /your/host/folder:/files2
+```
+
+Then enter `/files2` in the dialog. The move goes in steps:
+
+1. **Check.** The folder must be empty, writable, a real mount (in Docker), outside the current location, and have room
+   for the files plus `MIN_FREE_BYTES`. Nothing is copied until every check passes.
+2. **Copy.** Files are copied while Tandem keeps working, and each is verified against its hash before it counts.
+3. **Short hold.** Uploads pause for a moment while the last changes are copied. Handhelds show a wait, not an error,
+   and send what they held once it's over.
+4. **Switch.** Tandem starts using the new folder. The old copy stays where it was.
+
+**Remove old copy** deletes the old files, only when you ask. If a move fails or you cancel it, the old location is
+unchanged and the partial copy is removed.
+
+If the folder later goes missing (an unmounted NAS, say), Tandem does not create an empty one in its place. Uploads and
+downloads of files are refused, Home shows a red line naming the folder, and Tandem checks again every minute.
+Restore the mount and it carries on.
+
+### Changing your email
+
+Settings › Account › **Change email** asks for the new address and your current password. Paired devices stay signed
+in; your other web sessions are signed out. An address another account uses is refused. Admins can also run
+`change-email <old> <new>` on the server (see Admin commands).
 
 ## Choosing how devices reach the server
 

@@ -7,25 +7,12 @@
 - **The server reports its real version.** `/v1/server-info` and backups showed 0.1.0 for every release; the image
   now carries the release's version.
 - **The mouse wheel moves through the games shelf** in the web UI, one game per notch, like the arrow keys.
-
-### Planned
-
-- **Storage page (web, admin).** One place that shows what Tandem's data takes up and how much room is left:
-  - the total, and the free space on the disk it lives on, with the `MIN_FREE_BYTES` floor marked;
-  - split by kind: saves and states, configs, Vault, Lost & found, the cover-art cache and the database;
-  - per emulator and per game, largest first, so it's clear what to prune;
-  - what the retention settings would free.
-
-  It builds on the per-emulator usage the retention settings already compute.
-- **Choose where the data lives, and move it there.** An admin setting for the folder that holds saves, states and
-  other stored files, for example a bigger disk or a NAS mount added to the container:
-  - the new folder is checked first (writable, enough free space, not inside the current one);
-  - existing files are copied, each one checked against its hash, and only then does the server switch to the new
-    folder; the old copy is removed only after the switch, and only when asked;
-  - progress shows on the page; uploads wait while the switch happens; a failed or cancelled move leaves everything
-    where it was.
-
-  In Docker the new folder has to be mounted into the container first; the page says which path to mount.
-- **Change your email in the web UI.** Settings › Account gets a "Change email" form that asks for the current
-  password and refuses an address another account uses. Paired devices stay signed in. An admin command
-  `change-email <old> <new>` does the same from the server.
+- **A Storage page in Settings.** Shows what Tandem holds and how much room is left, in three views (Map, Bars,
+  Blocks; Y switches views on a controller): by emulator, game and kind, what older versions take, and, for admins,
+  the files location and free disk space with the `MIN_FREE_BYTES` floor.
+- **Move the stored files to another folder** from the Storage page, while the server runs. The folder is checked
+  first (in Docker it must be a mounted volume), files are copied and verified, uploads pause briefly and handhelds
+  send their changes afterwards. The old copy is removed only when you ask. If the folder goes missing, uploads are
+  refused and Home says so; nothing is recreated.
+- **Change your email** in Settings › Account (asks for your password; devices stay signed in), and
+  `change-email <old> <new>` as an admin command.
