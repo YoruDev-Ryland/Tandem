@@ -85,3 +85,8 @@ public enum SetupStepKind { InstallEmulator, InstallCores, GrantFolders, PlaceVa
 public sealed record SetupStep(SetupStepKind Kind, string EmulatorId, string Label, bool Done, string? Detail);
 
 public sealed record SetupChecklist(IReadOnlyList<SetupStep> Steps);
+
+/// <summary>A save or state in Lost &amp; found: the newest copy of an item whose game was deleted. Reason is
+/// "game_deleted" for now. Slot and Core are "" when empty.</summary>
+public sealed record LostItemRow(Guid Id, string EmulatorId, ItemKind Kind, string GameKey, string Slot, string Core, string? DisplayName,
+    long TotalSize, string Reason, DateTimeOffset LostUtc);

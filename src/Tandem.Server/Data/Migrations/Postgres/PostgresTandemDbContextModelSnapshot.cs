@@ -429,6 +429,65 @@ namespace Tandem.Server.Data.Migrations.Postgres
                     b.ToTable("InstallRecords");
                 });
 
+            modelBuilder.Entity("Tandem.Server.Data.LostItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Core")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("EmulatorId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("GameKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTimeOffset>("LostUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ManifestHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ManifestJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Slot")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("TotalSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("LostItems");
+                });
+
             modelBuilder.Entity("Tandem.Server.Data.PairingCode", b =>
                 {
                     b.Property<string>("CodeHash")
@@ -917,6 +976,15 @@ namespace Tandem.Server.Data.Migrations.Postgres
                     b.HasOne("Tandem.Server.Data.Device", null)
                         .WithMany()
                         .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Tandem.Server.Data.LostItem", b =>
+                {
+                    b.HasOne("Tandem.Server.Data.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

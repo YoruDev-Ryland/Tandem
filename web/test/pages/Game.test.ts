@@ -102,13 +102,14 @@ describe("Game", () => {
     expect(calls).toContainEqual({ method: "POST", url: "/v1/saves/item-save/versions/v4/restore", body: { deviceId: "d-odin" } });
   });
 
-  it("deletes the game's saves from the server after a confirm that says devices upload them again", async () => {
+  it("deletes the game's saves after a confirm that says they move to Lost & found and devices upload them again", async () => {
     const calls = serve();
     render(Game);
     await screen.findByRole("heading", { name: "v4 from Odin 3" });
     await fireEvent.click(screen.getByRole("button", { name: "Delete from server…" }));
     await screen.findByRole("heading", { name: "Delete these saves from the server?" });
-    expect(screen.getByText(/including 1 pinned version\. It can't be undone\.$/)).toBeTruthy();
+    expect(screen.getByText(/including 1 pinned version\. The newest copy of each moves to Lost & found in the Vault, where you can restore or download it\.$/)).toBeTruthy();
+    expect(screen.queryByText(/can't be undone/)).toBeNull();
     expect(screen.getByText(
       "Devices keep their files. Devices that still have this save upload it again within about 15 minutes, as a new save without this history.",
     )).toBeTruthy();

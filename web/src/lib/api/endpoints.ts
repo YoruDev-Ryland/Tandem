@@ -122,6 +122,13 @@ export const vaultUpload = (req: { category: string; emulatorId?: string | null;
 export const sendVault = (itemId: string, deviceId: string) =>
   api<T.SendVaultResponse>("POST", `/v1/vault/${enc(itemId)}/send`, { deviceId } satisfies T.SendVaultRequest);
 
+// ---- Lost & found ----
+export const getLost = () => api<T.LostItemRow[]>("GET", "/v1/web/lost");
+/** Back as the game's newest save (Accepted), beside a newer one as a conflict (Conflict), or already there (Unchanged). */
+export const restoreLost = (id: string) => api<T.SaveUploadResponse>("POST", `/v1/web/lost/${enc(id)}/restore`);
+/** Deletes it for good. */
+export const deleteLost = (id: string) => api<void>("DELETE", `/v1/web/lost/${enc(id)}`);
+
 // ---- Activity ----
 export const getActivity = (filter: T.ActivityFilter = {}) =>
   api<T.ActivityPage>("GET", `/v1/activity${query({ ...filter })}`);

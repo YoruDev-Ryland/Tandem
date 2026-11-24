@@ -163,7 +163,7 @@
     try {
       await deleteGame(emu, key);
       deleting = false;
-      flash.say(`Deleted ${deleteTarget.title} from the server.`);
+      flash.say(`Deleted ${deleteTarget.title}. Its saves are in Lost & found.`);
       router.go("/games");
     } catch (e) {
       deleteError = e;
@@ -398,7 +398,7 @@
   <Dialog bind:open={deleting} locked={deleteBusy} title="Delete these saves from the server?">
     {#if deleteTarget}
       <p class="note first">
-        This removes {deleteTarget.title}'s {deleteTarget.versions} save {deleteTarget.versions === 1 ? "version" : "versions"}{#if deleteTarget.states > 0}{" "}and {deleteTarget.states} save {deleteTarget.states === 1 ? "state" : "states"}{/if} from the server, with their history{#if deleteTarget.pinned > 0}, including {deleteTarget.pinned} pinned {deleteTarget.pinned === 1 ? "version" : "versions"}{/if}. It can't be undone.
+        This removes {deleteTarget.title}'s {deleteTarget.versions} save {deleteTarget.versions === 1 ? "version" : "versions"}{#if deleteTarget.states > 0}{" "}and {deleteTarget.states} save {deleteTarget.states === 1 ? "state" : "states"}{/if} from the server, with their history{#if deleteTarget.pinned > 0}, including {deleteTarget.pinned} pinned {deleteTarget.pinned === 1 ? "version" : "versions"}{/if}. The newest copy of each moves to Lost & found in the Vault, where you can restore or download it.
       </p>
       <p class="note">Devices keep their files. Devices that still have this save upload it again within about 15 minutes, as a new save without this history.</p>
       {#if deleteError}<div class="line"><ErrorLine error={deleteError} /></div>{/if}

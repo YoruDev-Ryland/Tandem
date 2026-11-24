@@ -24,6 +24,10 @@ export function downloadUrl(versionId: string): string {
   return `/v1/saves/versions/${seg(versionId)}/download`;
 }
 
+export function lostDownloadUrl(id: string): string {
+  return `/v1/web/lost/${seg(id)}/download`;
+}
+
 export function exportZipUrl(emu?: string): string {
   return emu ? `/v1/export.zip?emulator=${seg(emu)}` : "/v1/export.zip";
 }

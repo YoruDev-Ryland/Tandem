@@ -124,6 +124,7 @@ public sealed class BackupTests : IDisposable
         ["WebSessions"] = await db.WebSessions.CountAsync(),
         ["ServerSettings"] = await db.ServerSettings.CountAsync(),
         ["UserSettings"] = await db.UserSettings.CountAsync(),
+        ["LostItems"] = await db.LostItems.CountAsync(),
     });
 
     /// <summary>The restored server holds the same versions, the same blob bytes, and the old device key still works.</summary>
@@ -181,6 +182,73 @@ public sealed class BackupTests : IDisposable
         Assert.Contains("Restored", output);
         Assert.Equal(await Counts(source), await Counts(fresh));
         await AssertRestored(source, fresh, key);
+    }
+
+    [Fact]
+    public async Task Lost_and_found_is_in_a_backup_and_comes_back_on_restore()
+    {
+        var folder = NewFolder();
+        using var source = NewFactory();
+        var (admin, _, _) = await Seed(source);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"/v1/web/games/eden/{Game}")).StatusCode);
+        var lost = Assert.Single(await admin.GetOk<List<LostItemRow>>("/v1/web/lost"));
+        await UseFolder(admin, folder);
+        Assert.True((await Backups(source).RunOnceAsync(CancellationToken.None)).Ok);
+
+        using var fresh = NewFactory();
+        await fresh.Client().GetAsync("/healthz");
+        var (code, _, error) = await Cli(fresh, "restore-backup", Path.Combine(folder, Assert.Single(BackupFiles(folder))));
+
+        Assert.True(code == 0, error);
+        var web = await fresh.WebLogin(Admin);
+        Assert.Equal(lost, Assert.Single(await web.GetOk<List<LostItemRow>>("/v1/web/lost")));
+        var download = await web.GetAsync($"/v1/web/lost/{lost.Id}/download");
+        Assert.Equal(HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal("version two", await download.Content.ReadAsStringAsync());
+        Assert.Equal(SaveUploadStatus.Accepted,
+            (await (await web.PostAsync($"/v1/web/lost/{lost.Id}/restore", null)).ReadAsync<SaveUploadResponse>()).Status);
+    }
+
+    [Fact]
+    public async Task A_backup_from_before_lost_and_found_still_restores()
+    {
+        var folder = NewFolder();
+        using var source = NewFactory();
+        var (admin, key, _) = await Seed(source);
+        await UseFolder(admin, folder);
+        Assert.True((await Backups(source).RunOnceAsync(CancellationToken.None)).Ok);
+        var file = Path.Combine(folder, Assert.Single(BackupFiles(folder)));
+
+        // Rewrite it as an older server wrote it: no LostItems table in the manifest or the archive.
+        var old = Path.Combine(folder, "old.tar.gz");
+        await using (var input = File.OpenRead(file))
+        await using (var gunzip = new System.IO.Compression.GZipStream(input, System.IO.Compression.CompressionMode.Decompress))
+        await using (var reader = new System.Formats.Tar.TarReader(gunzip))
+        await using (var output = File.Create(old))
+        await using (var gzip = new System.IO.Compression.GZipStream(output, System.IO.Compression.CompressionLevel.Fastest))
+        await using (var writer = new System.Formats.Tar.TarWriter(gzip, System.Formats.Tar.TarEntryFormat.Pax))
+        {
+            while (await reader.GetNextEntryAsync(copyData: true) is { } entry)
+            {
+                if (entry.Name == "db/LostItems.jsonl") continue;
+                if (entry.Name == BackupFormat.ManifestEntry)
+                {
+                    var manifest = (await System.Text.Json.JsonSerializer.DeserializeAsync<BackupManifest>(entry.DataStream!, BackupFormat.ManifestJson))!;
+                    Assert.True(manifest.Tables.Remove("LostItems"));
+                    entry.DataStream = new MemoryStream(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(manifest, BackupFormat.ManifestJson));
+                }
+                await writer.WriteEntryAsync(entry);
+            }
+        }
+
+        using var fresh = NewFactory();
+        await fresh.Client().GetAsync("/healthz");
+        var (code, _, error) = await Cli(fresh, "restore-backup", old);
+
+        Assert.True(code == 0, error);
+        Assert.Equal(await Counts(source), await Counts(fresh));
+        await AssertRestored(source, fresh, key);
+        Assert.Empty(await (await fresh.WebLogin(Admin)).GetOk<List<LostItemRow>>("/v1/web/lost"));
     }
 
     [Fact]
