@@ -17,6 +17,7 @@ public abstract class TandemDbContext(DbContextOptions options) : DbContext(opti
     public DbSet<SaveItem> SaveItems => Set<SaveItem>();
     public DbSet<SaveVersion> SaveVersions => Set<SaveVersion>();
     public DbSet<DeviceItemState> DeviceItemStates => Set<DeviceItemState>();
+    public DbSet<LostItem> LostItems => Set<LostItem>();
     public DbSet<ConfigBundle> ConfigBundles => Set<ConfigBundle>();
     public DbSet<ConfigVersion> ConfigVersions => Set<ConfigVersion>();
     public DbSet<SyncGroup> SyncGroups => Set<SyncGroup>();
@@ -89,6 +90,13 @@ public abstract class TandemDbContext(DbContextOptions options) : DbContext(opti
             e.HasIndex(x => new { x.ItemId, x.Seq }).IsUnique();
             e.HasOne<SaveItem>().WithMany().HasForeignKey(x => x.ItemId).OnDelete(DeleteBehavior.Cascade);
             e.Property(x => x.EmulatorVersion).HasMaxLength(40);
+        });
+
+        m.Entity<LostItem>(e =>
+        {
+            e.HasIndex(x => x.UserId);
+            e.Property(x => x.Reason).HasMaxLength(32);
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         m.Entity<DeviceItemState>(e =>

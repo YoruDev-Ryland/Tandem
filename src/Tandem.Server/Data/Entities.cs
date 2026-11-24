@@ -107,6 +107,32 @@ public class SaveVersion
     public int? FileCount { get; set; }
 }
 
+/// <summary>
+/// Lost &amp; found: the head of a save item whose home went away (its game was deleted on the web). Holds the head
+/// version's manifest, so the pruner keeps its blobs and a backup carries it, until the owner restores it (it goes
+/// back as the game's newest version, or as a conflict next to a newer one) or deletes it for good.
+/// </summary>
+public class LostItem
+{
+    public const string GameDeleted = "game_deleted";
+
+    public Guid Id { get; set; }
+    public Guid UserId { get; set; }
+    public string EmulatorId { get; set; } = "";
+    public ItemKind Kind { get; set; }
+    public string GameKey { get; set; } = "";
+    public string Slot { get; set; } = "";
+    /// <summary>The lost head version's core (for a state, also the item's).</summary>
+    public string Core { get; set; } = "";
+    public string? DisplayName { get; set; }
+    public string ManifestJson { get; set; } = "";
+    public string ManifestHash { get; set; } = "";
+    public long TotalSize { get; set; }
+    /// <summary>Why it lost its home; <see cref="GameDeleted"/> for now.</summary>
+    public string Reason { get; set; } = "";
+    public DateTimeOffset LostUtc { get; set; }
+}
+
 public class DeviceItemState
 {
     public Guid DeviceId { get; set; }
