@@ -34,6 +34,16 @@ class WorkQueueTest {
         assertTrue(q.offer("scan"))
     }
 
+    @Test fun waiting_lists_what_is_queued_but_not_yet_running() = runBlocking {
+        val q = WorkQueue<String>()
+        q.offer("scan"); q.offer("apply")
+        assertEquals(setOf("scan", "apply"), q.waiting())
+        val inside = mutableListOf<Set<String>>()
+        q.close()
+        q.consume { inside += q.waiting() }
+        assertEquals(listOf(setOf("apply"), emptySet<String>()), inside)
+    }
+
     @Test fun item_offered_while_running_is_queued_again() = runBlocking {
         val q = WorkQueue<String>()
         val seen = mutableListOf<String>()

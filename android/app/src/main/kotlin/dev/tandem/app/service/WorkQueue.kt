@@ -18,6 +18,9 @@ class WorkQueue<K : Any> {
         return true
     }
 
+    /** The items queued and not yet started. */
+    fun waiting(): Set<K> = synchronized(pending) { pending.toSet() }
+
     /** Runs [handle] for each item in order, one at a time, until cancelled or [handle] throws. */
     suspend fun consume(handle: suspend (K) -> Unit) {
         for (item in ch) {

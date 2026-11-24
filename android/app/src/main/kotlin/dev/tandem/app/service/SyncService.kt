@@ -325,6 +325,7 @@ class SyncService : Service() {
                         log("deliveries: ${r.applied} applied, ${r.skipped} skipped, ${r.failed} failed, ${r.waitingForEmulator} waiting")
                 }
                 SyncWork.Monitor -> monitor(s)
+                SyncWork.InstallUpdate -> {}
             }
         } catch (e: CancellationException) {
             error = e

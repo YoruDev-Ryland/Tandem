@@ -44,8 +44,11 @@ private class GhRelease(
 
 private val json = Json { ignoreUnknownKeys = true }
 
-/** Reads GitHub's answer for the latest release. Only the exact asset names count; a link must be https. */
-fun parseRelease(body: String): ReleaseParse {
+/**
+ * Reads GitHub's answer for the latest release. Only the exact asset names count; a link must be https ([httpsOnly]
+ * is off only for tests against a local server).
+ */
+fun parseRelease(body: String, httpsOnly: Boolean = true): ReleaseParse {
     val gh = try {
         json.decodeFromString<GhRelease>(body)
     } catch (_: Exception) {
@@ -53,7 +56,7 @@ fun parseRelease(body: String): ReleaseParse {
     }
     if (gh.draft || gh.prerelease) return ReleaseParse.Invalid("the latest release is a draft or a prerelease")
     val code = ReleaseTag.versionCode(gh.tag) ?: return ReleaseParse.Invalid("the release tag \"${gh.tag}\" is not a version")
-    fun asset(name: String) = gh.assets.firstOrNull { it.name == name && it.size > 0 && it.url.startsWith("https://") }
+    fun asset(name: String) = gh.assets.firstOrNull { it.name == name && it.size > 0 && (it.url.startsWith("https://") || !httpsOnly && it.url.startsWith("http://")) }
         ?.let { ReleaseAsset(it.name, it.url, it.size) }
     val apk = asset(APK_ASSET) ?: return ReleaseParse.Invalid("the release has no $APK_ASSET")
     val sha = asset(SHA_ASSET) ?: return ReleaseParse.Invalid("the release has no $SHA_ASSET")
