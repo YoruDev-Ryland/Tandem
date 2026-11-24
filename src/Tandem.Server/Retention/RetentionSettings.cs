@@ -1,10 +1,13 @@
 using System.Globalization;
 using Tandem.Protocol;
+using Tandem.Server.Art;
 using Tandem.Server.Auth;
+using Tandem.Server.Blobs;
 using Tandem.Server.Data;
 using Tandem.Server.Http;
 using Tandem.Server.Saves;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace Tandem.Server.Retention;
 
@@ -79,14 +82,78 @@ public static class RetentionEndpoints
             return await RetentionSettings.LoadAsync(db, userId, ct);
         });
 
-        settings.MapGet("/storage", (HttpContext http, TandemDbContext db, CancellationToken ct) =>
-            StorageAsync(db, http.User.UserId(), ct));
+        settings.MapGet("/storage", async (HttpContext http, TandemDbContext db, IOptions<ServerOptions> options, FilesLocation location,
+            StorageMonitor monitor, IFreeSpaceProbe probe, FilesMover mover, CancellationToken ct) =>
+        {
+            var usage = await StorageAsync(db, http.User.UserId(), ct);
+            return http.User.IsAdmin()
+                ? usage with { Server = await ServerStorageAsync(db, options.Value, location, monitor, probe, mover, ct) }
+                : usage;
+        });
+
+        settings.MapGet("/storage-view", async (HttpContext http, TandemDbContext db, CancellationToken ct) =>
+        {
+            var userId = http.User.UserId();
+            var value = await db.UserSettings.AsNoTracking().Where(s => s.UserId == userId && s.Key == StorageViewKey)
+                .Select(s => s.Value).FirstOrDefaultAsync(ct);
+            return new StorageViewDto(value is not null && StorageViews.Contains(value) ? value : DefaultStorageView);
+        });
+
+        settings.MapPut("/storage-view", async (HttpContext http, TandemDbContext db, StorageViewDto? body, CancellationToken ct) =>
+        {
+            if (body?.View is not { } view || !StorageViews.Contains(view))
+                throw new ApiException(400, "bad_value", $"view must be one of: {string.Join(", ", StorageViews)}.");
+            var userId = http.User.UserId();
+            var row = await db.UserSettings.FirstOrDefaultAsync(s => s.UserId == userId && s.Key == StorageViewKey, ct);
+            if (row is null) db.UserSettings.Add(new UserSetting { UserId = userId, Key = StorageViewKey, Value = view });
+            else row.Value = view;
+            await db.SaveChangesAsync(ct);
+            return new StorageViewDto(view);
+        });
         return app;
+    }
+
+    public const string StorageViewKey = "storage.view";
+    public const string DefaultStorageView = "map";
+    private static readonly string[] StorageViews = ["map", "bars", "blocks"];
+
+    /// <summary>All accounts' figures, for admins: stored files, the files disk, art, and the database file with its -wal.</summary>
+    public static async Task<StorageServer> ServerStorageAsync(TandemDbContext db, ServerOptions options, FilesLocation location,
+        StorageMonitor monitor, IFreeSpaceProbe probe, FilesMover mover, CancellationToken ct)
+    {
+        var filesBytes = await db.UserBlobs.AsNoTracking().SumAsync(b => (long?)b.Size, ct) ?? 0;
+        var root = location.Root;
+        return new StorageServer(filesBytes,
+            root.Length > 0 ? probe.TotalBytes(root) : null, root.Length > 0 ? probe.FreeBytes(root) : null,
+            options.MinFreeBytes, DirectoryBytes(ArtStore.DirectoryOf(options)), SqliteBytes(db), root, location.IsDefault,
+            mover.Status, monitor.LowDisk);
+    }
+
+    private static long DirectoryBytes(string dir)
+    {
+        try
+        {
+            return Directory.Exists(dir)
+                ? new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length)
+                : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; }
+    }
+
+    /// <summary>The SQLite file plus its write-ahead log; null for Postgres or an in-memory database.</summary>
+    private static long? SqliteBytes(TandemDbContext db)
+    {
+        if (!db.Database.IsSqlite()) return null;
+        var source = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(db.Database.GetConnectionString()).DataSource;
+        if (string.IsNullOrEmpty(source) || source.Equals(":memory:", StringComparison.OrdinalIgnoreCase)) return null;
+        var file = Path.GetFullPath(source);
+        long Length(string path) { try { return File.Exists(path) ? new FileInfo(path).Length : 0; } catch (IOException) { return 0; } }
+        return Length(file) + Length(file + "-wal");
     }
 
     /// <summary>
     /// Bytes of unique blobs (by hash) the user holds. Per emulator: the blobs of its save/state, config and vault
-    /// versions and raw config uploads ("" = vault items not tied to an emulator). Per game: its save/state versions.
+    /// versions and raw config uploads ("" = vault items not tied to an emulator). Per game: its save/state versions. Server is left null (the endpoint fills it for admins).
     /// A blob shared by two emulators or games counts once in each row, so rows can add up to more than the total.
     /// </summary>
     public static async Task<StorageUsage> StorageAsync(TandemDbContext db, Guid userId, CancellationToken ct)
@@ -96,7 +163,7 @@ public static class RetentionEndpoints
         var saves = await (from v in db.SaveVersions.AsNoTracking()
                 join i in db.SaveItems.AsNoTracking() on v.ItemId equals i.Id
                 where i.UserId == userId
-                select new { i.EmulatorId, i.GameKey, i.DisplayName, v.ManifestJson }).ToListAsync(ct);
+                select new { i.EmulatorId, i.GameKey, i.DisplayName, i.Kind, VersionId = v.Id, IsHead = i.HeadVersionId == v.Id, v.ManifestJson }).ToListAsync(ct);
         var configs = await (from v in db.ConfigVersions.AsNoTracking()
                 join b in db.ConfigBundles.AsNoTracking() on v.BundleId equals b.Id
                 where b.UserId == userId
@@ -110,6 +177,8 @@ public static class RetentionEndpoints
                 where i.UserId == userId
                 select new { EmulatorId = i.EmulatorId ?? "", v.ManifestJson }).ToListAsync(ct);
 
+        var lost = await db.LostItems.AsNoTracking().Where(l => l.UserId == userId).Select(l => l.ManifestJson).ToListAsync(ct);
+
         var byEmulator = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         void AddTo<TKey>(Dictionary<TKey, HashSet<string>> map, TKey key, string json) where TKey : notnull
         {
@@ -122,19 +191,53 @@ public static class RetentionEndpoints
         foreach (var r in vault) AddTo(byEmulator, r.EmulatorId, r.ManifestJson);
 
         var byGame = new Dictionary<(string, string), HashSet<string>>();
+        var currentByGame = new Dictionary<(string, string), HashSet<string>>();
+        var versionsByGame = new Dictionary<(string, string), int>();
+        var kindsByGame = new Dictionary<(string, string), SortedSet<string>>();
         var names = new Dictionary<(string, string), string>();
+        var saveHashes = new HashSet<string>(StringComparer.Ordinal);
+        var stateHashes = new HashSet<string>(StringComparer.Ordinal);
+        var headHashes = new HashSet<string>(StringComparer.Ordinal);
+        var allSaveStateHashes = new HashSet<string>(StringComparer.Ordinal);
         foreach (var r in saves)
         {
-            AddTo(byGame, (r.EmulatorId, r.GameKey), r.ManifestJson);
-            if (r.DisplayName is not null) names[(r.EmulatorId, r.GameKey)] = r.DisplayName;
+            var game = (r.EmulatorId, r.GameKey);
+            AddTo(byGame, game, r.ManifestJson);
+            versionsByGame[game] = versionsByGame.GetValueOrDefault(game) + 1;
+            if (!kindsByGame.TryGetValue(game, out var kinds)) kindsByGame[game] = kinds = new SortedSet<string>(StringComparer.Ordinal);
+            kinds.Add(r.Kind.ToString());
+            if (r.DisplayName is not null) names[game] = r.DisplayName;
+            var hashes = Manifests.FromJson(r.ManifestJson).Select(e => e.Hash).ToList();
+            allSaveStateHashes.UnionWith(hashes);
+            (r.Kind == ItemKind.State ? stateHashes : saveHashes).UnionWith(hashes);
+            if (r.IsHead)
+            {
+                AddTo(currentByGame, game, r.ManifestJson);
+                headHashes.UnionWith(hashes);
+            }
         }
+        var configHashes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var r in configs.Select(c => c.ManifestJson).Concat(raw.Select(c => c.ManifestJson)))
+            foreach (var e in Manifests.FromJson(r)) configHashes.Add(e.Hash);
+        var vaultHashes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var r in vault) foreach (var e in Manifests.FromJson(r.ManifestJson)) vaultHashes.Add(e.Hash);
+        var lostHashes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var json in lost) foreach (var e in Manifests.FromJson(json)) lostHashes.Add(e.Hash);
 
-        long Sum(HashSet<string> hashes) => hashes.Sum(h => sizes.GetValueOrDefault(h));
+        long Sum(IEnumerable<string> hashes) => hashes.Sum(h => sizes.GetValueOrDefault(h));
         var emulators = byEmulator.Select(kv => new StorageRow(kv.Key, null, null, Sum(kv.Value)))
             .OrderByDescending(r => r.Bytes).ThenBy(r => r.EmulatorId, StringComparer.Ordinal).ToList();
-        var games = byGame.Select(kv => new StorageRow(kv.Key.Item1, kv.Key.Item2, names.GetValueOrDefault(kv.Key), Sum(kv.Value)))
-            .OrderByDescending(r => r.Bytes).ThenBy(r => r.EmulatorId, StringComparer.Ordinal).ThenBy(r => r.GameKey, StringComparer.Ordinal)
-            .Take(TopGames).ToList();
-        return new StorageUsage(sizes.Values.Sum(), emulators, games);
+        var gameRows = byGame.Select(kv =>
+        {
+            var current = currentByGame.GetValueOrDefault(kv.Key);
+            var currentBytes = current is null ? 0 : Sum(current);
+            var bytes = Sum(kv.Value);
+            return new StorageGame(kv.Key.Item1, kv.Key.Item2, names.GetValueOrDefault(kv.Key), bytes, currentBytes, bytes - currentBytes,
+                versionsByGame[kv.Key], kindsByGame[kv.Key].ToList());
+        }).OrderByDescending(g => g.Bytes).ThenBy(g => g.EmulatorId, StringComparer.Ordinal).ThenBy(g => g.GameKey, StringComparer.Ordinal).ToList();
+        var topGames = gameRows.Take(TopGames).Select(g => new StorageRow(g.EmulatorId, g.GameKey, g.DisplayName, g.Bytes)).ToList();
+        var kindBytes = new StorageKinds(Sum(saveHashes), Sum(stateHashes), Sum(configHashes), Sum(vaultHashes), Sum(lostHashes));
+        return new StorageUsage(sizes.Values.Sum(), emulators, topGames, gameRows, kindBytes,
+            Sum(allSaveStateHashes.Where(h => !headHashes.Contains(h))), null);
     }
 }

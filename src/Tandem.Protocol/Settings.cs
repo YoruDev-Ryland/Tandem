@@ -10,7 +10,26 @@ public sealed record RetentionSettingsDto(int SaveVersions, int ConfigVersions, 
 /// <see cref="GameKey"/> and <see cref="DisplayName"/> are set only on game rows.</summary>
 public sealed record StorageRow(string EmulatorId, string? GameKey, string? DisplayName, long Bytes);
 
-public sealed record StorageUsage(long TotalBytes, IReadOnlyList<StorageRow> ByEmulator, IReadOnlyList<StorageRow> TopGames);
+/// <summary>One game's stored bytes (unique blobs across its save/state versions). <see cref="CurrentBytes"/> are the blobs
+/// of its items' head versions; <see cref="OlderBytes"/> the blobs only older versions hold. <see cref="Kinds"/> are the
+/// item kinds it has ("Save", "State"), distinct and sorted.</summary>
+public sealed record StorageGame(string EmulatorId, string GameKey, string? DisplayName, long Bytes, long CurrentBytes, long OlderBytes,
+    int Versions, IReadOnlyList<string> Kinds);
+
+/// <summary>Unique bytes each kind references; a blob shared between kinds counts in each.</summary>
+public sealed record StorageKinds(long Saves, long States, long Configs, long Vault, long LostAndFound);
+
+/// <summary>Server-wide figures (all accounts), for admins only. <see cref="DatabaseBytes"/> is null for Postgres.</summary>
+public sealed record StorageServer(long FilesBytes, long? DiskTotalBytes, long? DiskFreeBytes, long MinFreeBytes, long ArtBytes,
+    long? DatabaseBytes, string FilesLocation, bool DefaultLocation, MoveStatus? Move, string? LowDisk);
+
+/// <summary>The signed-in user's own figures; <see cref="Server"/> is set for admins only. <see cref="OlderBytes"/> are the
+/// unique bytes only non-head save/state versions reference.</summary>
+public sealed record StorageUsage(long TotalBytes, IReadOnlyList<StorageRow> ByEmulator, IReadOnlyList<StorageRow> TopGames,
+    IReadOnlyList<StorageGame> Games, StorageKinds ByKind, long OlderBytes, StorageServer? Server);
+
+/// <summary>The storage page's chosen view: "map", "bars" or "blocks".</summary>
+public sealed record StorageViewDto(string View);
 
 /// <summary>One notification destination. <see cref="Token"/> is write-only: it is accepted on PUT (an ntfy bearer
 /// token; omit it to keep the stored token of an existing target with the same <see cref="Url"/>, send "" to clear it)
