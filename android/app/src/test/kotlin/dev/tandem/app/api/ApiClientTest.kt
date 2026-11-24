@@ -4,6 +4,8 @@ import dev.tandem.app.model.ItemKind
 import dev.tandem.app.model.ManifestEntry
 import dev.tandem.app.model.SaveUploadRequest
 import dev.tandem.app.model.SaveUploadStatus
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -155,5 +157,64 @@ class ApiClientTest {
             // OkHttp's call timeout cancels the call: it fails rather than completing after the server answers
         }
         assertTrue("cancelled by the call timeout, not the 3 s answer", System.nanoTime() - started < 2_500_000_000L)
+    }
+
+    // ---- cover art: GET /v1/web/art/{emulator}/{key} ----
+
+    @Test fun slash_and_unicode_key_path() = runBlocking {
+        val key = "GBA/Pokémon - Emerald Version (USA).srm"
+        server.enqueue(MockResponse.Builder().code(404).body("""{"code":"not_found"}""").build())
+        server.enqueue(MockResponse.Builder().code(404).body("""{"error":"no_art"}""").build())
+        val c = ApiClient(base(), "k")
+        try { c.game("retro arch", key) } catch (_: ApiException) { }
+        assertEquals(ArtResult.None, c.art("retro arch", key))
+        val game = server.takeRequest().url.encodedPath
+        val art = server.takeRequest()
+        assertEquals(game.replace("/v1/web/games/", "/v1/web/art/"), art.url.encodedPath)
+        assertEquals("/v1/web/art/retro%20arch/GBA/Pok%C3%A9mon%20-%20Emerald%20Version%20(USA).srm", art.url.encodedPath)
+        assertEquals("1", art.headers["Tandem-Protocol"])
+        assertEquals("Bearer k", art.headers["Authorization"])
+    }
+
+    @Test fun art_answers_map_to_results() = runBlocking {
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 1, 2, 3)
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "image/png").body(okio.Buffer().write(png)).build())
+        server.enqueue(MockResponse.Builder().code(202).setHeader("Retry-After", "3").body("""{"error":"art_pending"}""").build())
+        server.enqueue(MockResponse.Builder().code(404).body("""{"error":"no_art"}""").build())
+        server.enqueue(MockResponse.Builder().code(500).body("boom").build())
+        server.enqueue(MockResponse.Builder().code(404).body("""{"code":"art_unavailable","message":"x","error":"art_unavailable"}""").build())
+        val c = ApiClient(base(), "k")
+        val image = c.art("dolphin", "GSXE69")
+        assertTrue(image is ArtResult.Image && image.bytes.contentEquals(png))
+        assertEquals(ArtResult.Pending, c.art("dolphin", "GSXE69"))
+        assertEquals(ArtResult.None, c.art("dolphin", "GSXE69"))
+        assertEquals(ArtResult.Failed, c.art("dolphin", "GSXE69"))
+        // The server couldn't reach a source: a failure to try again, not "no art".
+        assertEquals(ArtResult.Failed, c.art("dolphin", "GSXE69"))
+    }
+
+    @Test fun cancelling_an_art_load_cancels_its_request() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(200).headersDelay(5, TimeUnit.SECONDS).build())
+        val cancelled = java.util.concurrent.CountDownLatch(1)
+        val http = okhttp3.OkHttpClient.Builder().eventListener(object : okhttp3.EventListener() {
+            override fun canceled(call: okhttp3.Call) = cancelled.countDown()
+        }).build()
+        val c = ApiClient(base(), "k", http = http)
+        val job = launch(kotlinx.coroutines.Dispatchers.IO) { c.art("dolphin", "GSXE69") }
+        server.takeRequest(2, TimeUnit.SECONDS)
+        job.cancelAndJoin()
+        assertTrue("the HTTP call was cancelled with its caller", cancelled.await(2, TimeUnit.SECONDS))
+    }
+
+    @Test fun art_that_cannot_be_reached_is_a_failure_not_a_throw() = runBlocking {
+        val c = ApiClient("http://127.0.0.1:1", "k")
+        assertEquals(ArtResult.Failed, c.art("dolphin", "GSXE69"))
+    }
+
+    @Test fun art_for_a_revoked_key_reports_the_revoke() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(401).body(revokedBody).build())
+        var revoked = 0
+        assertEquals(ArtResult.Failed, ApiClient(base(), "k", onRevoked = { revoked++ }).art("dolphin", "GSXE69"))
+        assertEquals(1, revoked)
     }
 }

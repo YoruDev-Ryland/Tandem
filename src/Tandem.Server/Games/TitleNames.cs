@@ -39,6 +39,15 @@ public sealed class TitleNames
         return gameId.Length == 4 && _byPrefix.GetValueOrDefault(gameId) is { } id ? _names.GetValueOrDefault(id) : null;
     }
 
+    /// <summary>The 6-character game id for a Dolphin key: the key itself, or (a 4-character Wii id) the first listed
+    /// 6-character id starting with it. Null when it can't be told.</summary>
+    public string? FullDiscId(string gameId)
+    {
+        if (!IsDiscId(gameId)) return null;
+        if (gameId.Length == 6) return gameId;
+        return _byPrefix.GetValueOrDefault(gameId);
+    }
+
     /// <summary>Reads GameTDB's wiitdb.txt: a "TITLES = …" header line, then one "ID = Title" line per game.</summary>
     public static TitleNames ParseGameTdb(Stream list)
     {

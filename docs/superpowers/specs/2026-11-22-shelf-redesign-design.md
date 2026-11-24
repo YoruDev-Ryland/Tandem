@@ -167,7 +167,10 @@ The screen is built top to bottom:
   While the game is still focused, the client shows the no-art card and asks again once after the Retry-After.
   If the answer is still 202, it gives up until the game is focused again.
 - **404 `no_art`:** the sources were tried and have nothing. Sent with `Cache-Control: private, max-age=86400`, so a
-  client may remember the miss for a day. The server keeps its own 7-day miss record.
+  client may remember the miss for a day (less when the server's record ends sooner). The server keeps its own 7-day miss record.
+- **404 `art_unavailable`:** a source could not be reached (network error, timeout, 5xx, 429) or the fetch failed on
+  the server. Sent with `Cache-Control: private, max-age=` the seconds left of the server's 1-hour retry (at most 3600).
+  It is not "no art": the app treats it as a failed load and asks again on the next focus.
 
 **Server behaviour.**
 - **Lookup:** fetched on demand, at most once per game per 7 days for a miss, then cached under `/data/art/`. Size caps: 2 MB per image, 500 MB in total, with the least recently used removed first.

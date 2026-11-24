@@ -406,8 +406,14 @@ namespace Tandem.Server.Data.Migrations.Sqlite
                     b.Property<string>("DisplayName")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("GameId")
+                        .HasColumnType("TEXT");
+
                     b.Property<long>("SeenUtc")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("System")
+                        .HasColumnType("TEXT");
 
                     b.HasKey("DeviceId", "EmulatorId", "GameKey");
 

@@ -73,6 +73,11 @@ describe.each([
     expect(contrast(colour(theme, token), colour(theme, "--bg"))).toBeGreaterThanOrEqual(4.5);
   });
 
+  // The card keeps --ink3 for marks only (3:1 for graphics); its words are --ink2 at least.
+  it.each(["--ink", "--ink2", "--wait", "--fault"])("%s on --raised (the shelf card)", (token) => {
+    expect(contrast(colour(theme, token), colour(theme, "--raised"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("--focus-ink on --focus-bg", () => {
     expect(contrast(colour(theme, "--focus-ink"), colour(theme, "--focus-bg"))).toBeGreaterThanOrEqual(4.5);
   });
@@ -93,6 +98,19 @@ describe.each([
   it("keeps --ink3 dimmer than --ink2", () => {
     const bg = colour(theme, "--bg");
     expect(contrast(colour(theme, "--ink3"), bg)).toBeLessThan(contrast(colour(theme, "--ink2"), bg));
+  });
+});
+
+describe("the shelf matches the app (EmuColors)", () => {
+  it("has the app's raised card colour in both themes", () => {
+    expect(resolve(dark, "--raised").toLowerCase()).toBe("#1c1c1b");
+    expect(resolve(light, "--raised").toLowerCase()).toBe("#f8f7f3");
+  });
+  it("draws the shelf edge in ink2 in dark (no glare) and ink in light", () => {
+    expect(resolve(dark, "--shelf-edge")).toBe(resolve(dark, "--ink2"));
+    expect(resolve(light, "--shelf-edge")).toBe(resolve(light, "--ink"));
+    const island = parse(block('[data-theme="light"]:not(:root)'));
+    expect(island["--shelf-edge"]).toBe(resolve(light, "--ink"));
   });
 });
 

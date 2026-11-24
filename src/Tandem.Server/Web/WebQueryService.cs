@@ -1,3 +1,4 @@
+using Tandem.Server.Art;
 using System.Text.Json;
 using Tandem.Protocol;
 using Tandem.Server.Data;
@@ -88,7 +89,8 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
         var keys = items.Select(i => (i.EmulatorId, i.GameKey)).Concat(installs.Select(r => (r.EmulatorId, r.GameKey))).Distinct().ToList();
         var itemsBy = items.ToLookup(i => (i.EmulatorId, i.GameKey));
         var installsBy = installs.ToLookup(r => (r.EmulatorId, r.GameKey));
-        var rows = keys.Select(k => BuildRow(k.EmulatorId, k.GameKey, itemsBy[k].ToList(), installsBy[k].ToList(), heads, states)).ToList();
+        var art = options.Value.EnableArt;
+        var rows = keys.Select(k => BuildRow(k.EmulatorId, k.GameKey, itemsBy[k].ToList(), installsBy[k].ToList(), heads, states, art)).ToList();
 
         if (!string.IsNullOrWhiteSpace(q))
             rows = rows.Where(r => r.GameKey.Contains(q, StringComparison.OrdinalIgnoreCase)
@@ -97,7 +99,7 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
     }
 
     private static GameRow BuildRow(string emulatorId, string gameKey, List<SaveItem> items, List<InstallRecord> installs,
-        Dictionary<Guid, HeadInfo> heads, GameStates states)
+        Dictionary<Guid, HeadInfo> heads, GameStates states, bool artEnabled)
     {
         var saveItem = items.Where(i => i.Kind == ItemKind.Save).OrderBy(i => i.Slot != "").ThenBy(i => i.Slot, StringComparer.Ordinal).FirstOrDefault();
         var newestItem = items.Where(i => i.HeadVersionId is Guid h && heads.ContainsKey(h))
@@ -109,9 +111,14 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
         var devices = states.For(emulatorId, items, installs, heads, reference, newest?.DeviceId);
         // A save item's core lives on its versions (only states key the item by core).
         var saveCore = saveItem?.HeadVersionId is Guid sh && heads.TryGetValue(sh, out var saveHead) && saveHead.Core != "" ? saveHead.Core : null;
+        var latest = installs.OrderByDescending(r => r.SeenUtc).ToList();
+        var reported = latest.Select(r => r.System).FirstOrDefault(s => s is not null);
+        var system = ArtSystems.Resolve(emulatorId, gameKey, saveCore, reported);
+        var gameId = latest.Select(r => r.GameId).FirstOrDefault(s => s is not null);
         return new GameRow(emulatorId, gameKey, display, installs.Select(r => r.DeviceId).Distinct().ToList(),
             saveItem?.Id, newest?.DeviceId, newest?.ReceivedUtc, items.Count(i => i.Kind == ItemKind.State), items.Any(i => i.OpenConflict),
-            devices, states.DeviceName(newest?.DeviceId), saveCore, saveItem?.HeadVersionId);
+            devices, states.DeviceName(newest?.DeviceId), saveCore, saveItem?.HeadVersionId,
+            system, SpineEligibility.Has(emulatorId, gameKey, system, gameId, artEnabled));
     }
 
     public async Task<GameDetail> GameAsync(Guid userId, string emulatorId, string gameKey, CancellationToken ct)
@@ -145,7 +152,7 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
                 states.DeviceName(v.DeviceId), v.ReceivedUtc, v.TotalSize, v.Core, v.Variant,
                 v.Pinned, v.ConflictReason, v.Id == i.HeadVersionId, v.Resolved, v.ManifestHash,
                 v.FileCount ?? Manifests.FromJson(v.OldManifest ?? "[]").Count, v.EmulatorVersion)).ToList())).ToList();
-        return new GameDetail(BuildRow(emulatorId, gameKey, items, installs, heads, states), details);
+        return new GameDetail(BuildRow(emulatorId, gameKey, items, installs, heads, states, options.Value.EnableArt), details);
     }
 
     // ---- Devices ----

@@ -1,3 +1,4 @@
+using Tandem.Server.Art;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Tandem.Protocol;
@@ -154,7 +155,7 @@ public sealed partial class DeviceService(TandemDbContext db, TimeProvider time,
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var g in games)
         {
-            if (string.IsNullOrEmpty(g.GameKey) || g.GameKey.Length > 300 || g.DisplayName is { Length: > 300 } || g.Crc32 is { Length: > 16 })
+            if (string.IsNullOrEmpty(g.GameKey) || g.GameKey.Length > 300 || g.DisplayName is { Length: > 300 } || g.Crc32 is { Length: > 16 } || g.System is { Length: > 32 } || g.GameId is { Length: > 32 })
                 throw new ApiException(400, "bad_game", "GameKey must be 1-300 characters, DisplayName at most 300.");
             if (!keys.Add(g.GameKey))
                 throw new ApiException(400, "duplicate_game", $"Duplicate game '{g.GameKey}'.");
@@ -173,13 +174,16 @@ public sealed partial class DeviceService(TandemDbContext db, TimeProvider time,
             var g = byKey[r.GameKey];
             r.DisplayName = names.Resolve(emulatorId, g.GameKey, g.DisplayName);
             r.Crc32 = g.Crc32;
+            r.System = ArtSystems.Normalize(g.System);
+            r.GameId = SpineEligibility.NormalizeGameId(g.GameId);
             r.SeenUtc = now;
         }
         foreach (var g in added)
             db.InstallRecords.Add(new InstallRecord
             {
                 DeviceId = deviceId, EmulatorId = emulatorId, GameKey = g.GameKey,
-                DisplayName = names.Resolve(emulatorId, g.GameKey, g.DisplayName), Crc32 = g.Crc32, SeenUtc = now,
+                DisplayName = names.Resolve(emulatorId, g.GameKey, g.DisplayName), Crc32 = g.Crc32,
+                System = ArtSystems.Normalize(g.System), GameId = SpineEligibility.NormalizeGameId(g.GameId), SeenUtc = now,
             });
         await db.SaveChangesAsync(ct);
 

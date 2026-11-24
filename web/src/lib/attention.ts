@@ -12,6 +12,8 @@ export interface AttentionItem {
   text: string;
   href?: string;
   action?: string;
+  /** The page tab where it gets dealt with; that tab carries a mark while the item stands. */
+  tab: string;
 }
 
 export interface ConfigConflictRef {
@@ -62,32 +64,32 @@ export function attentionItems(home: HomeResponse | undefined, games: GameRow[],
 
   // ---- Needs you ----
   if (a?.diskLow)
-    out.push({ key: "disk", tone: "fault", text: "The server is almost out of disk space. New saves are refused until there is room.", href: "/settings?s=storage", action: "See storage" });
+    out.push({ tab: "/settings", key: "disk", tone: "fault", text: "The server is almost out of disk space. New saves are refused until there is room.", href: "/settings?s=storage", action: "See storage" });
   const conflicted = games.filter((g) => g.openConflict);
   if (conflicted.length === 1) {
     const g = conflicted[0]!;
-    out.push({ key: "conflict", tone: "fault", text: `${title(g)} has two different saves.`, href: gamePath(g.emulatorId, g.gameKey) + "/conflict", action: "Choose" });
+    out.push({ tab: "/games", key: "conflict", tone: "fault", text: `${title(g)} has two different saves.`, href: gamePath(g.emulatorId, g.gameKey) + "/conflict", action: "Choose" });
   } else if (conflicted.length > 1) {
-    out.push({ key: "conflict", tone: "fault", text: `${conflicted.length} games have two different saves.`, href: "/conflicts", action: "Choose" });
+    out.push({ tab: "/games", key: "conflict", tone: "fault", text: `${conflicted.length} games have two different saves.`, href: "/conflicts", action: "Choose" });
   }
   for (const c of configs)
-    out.push({ key: `config/${c.bundleId}`, tone: "fault", text: `${emulatorName(c.emulatorId)} config for ${c.name} has two versions. Changes stop until you choose.`, href: configConflictPath(c.emulatorId, c.bundleId), action: "Choose" });
+    out.push({ tab: "/configs", key: `config/${c.bundleId}`, tone: "fault", text: `${emulatorName(c.emulatorId)} config for ${c.name} has two versions. Changes stop until you choose.`, href: configConflictPath(c.emulatorId, c.bundleId), action: "Choose" });
   // The count arrives before the bundles do; never hide a conflict the server reported.
   const unseen = (a?.configConflicts ?? 0) - configs.length;
   if (configs.length === 0 && unseen > 0)
-    out.push({ key: "config", tone: "fault", text: `${plural(unseen, "config has", "configs have")} two versions.`, href: "/configs", action: "Choose" });
+    out.push({ tab: "/configs", key: "config", tone: "fault", text: `${plural(unseen, "config has", "configs have")} two versions.`, href: "/configs", action: "Choose" });
   if (a && a.firstSyncReviews > 0)
-    out.push({ key: "first-sync", tone: "fault", text: `${plural(a.firstSyncReviews, "save needs", "saves need")} a first-sync review.`, href: "/conflicts", action: "Review" });
+    out.push({ tab: "/games", key: "first-sync", tone: "fault", text: `${plural(a.firstSyncReviews, "save needs", "saves need")} a first-sync review.`, href: "/conflicts", action: "Review" });
   for (const id of a?.shizukuOffDevices ?? [])
-    out.push({ key: `shizuku/${id}`, tone: "fault", text: `Shizuku is off on ${deviceName(id)}. Nothing syncs there until it is back on.`, href: `/devices/${encodeURIComponent(id)}`, action: "Open" });
+    out.push({ tab: "/devices", key: `shizuku/${id}`, tone: "fault", text: `Shizuku is off on ${deviceName(id)}. Nothing syncs there until it is back on.`, href: `/devices/${encodeURIComponent(id)}`, action: "Open" });
   if (a && a.failedDeliveries24h > 0)
-    out.push({ key: "failed", tone: "fault", text: `${plural(a.failedDeliveries24h, "delivery", "deliveries")} failed in the last day.`, href: "/activity", action: "See activity" });
+    out.push({ tab: "/activity", key: "failed", tone: "fault", text: `${plural(a.failedDeliveries24h, "delivery", "deliveries")} failed in the last day.`, href: "/activity", action: "See activity" });
 
   // ---- Waiting ----
   for (const g of games) {
     for (const d of g.devices) {
       if (d.state !== "Waiting") continue;
-      out.push({ key: `wait/${g.emulatorId}/${g.gameKey}/${d.deviceId}`, tone: "wait", text: `${title(g)} reaches ${d.deviceName} when ${emulatorName(g.emulatorId)} closes.`, href: gamePath(g.emulatorId, g.gameKey), action: "Open" });
+      out.push({ tab: "/games", key: `wait/${g.emulatorId}/${g.gameKey}/${d.deviceId}`, tone: "wait", text: `${title(g)} reaches ${d.deviceName} when ${emulatorName(g.emulatorId)} closes.`, href: gamePath(g.emulatorId, g.gameKey), action: "Open" });
     }
   }
 
@@ -95,39 +97,33 @@ export function attentionItems(home: HomeResponse | undefined, games: GameRow[],
   for (const id of a?.silentDevices ?? []) {
     const d = devices.find((x) => x.id === id);
     const quiet = quietFor(d?.lastSeenUtc ?? null, now);
-    out.push({ key: `silent/${id}`, tone: "ink", text: quiet ? `${deviceName(id)} hasn't checked in for ${quiet}.` : `${deviceName(id)} hasn't checked in yet.`, href: `/devices/${encodeURIComponent(id)}`, action: "Open" });
+    out.push({ tab: "/devices", key: `silent/${id}`, tone: "ink", text: quiet ? `${deviceName(id)} hasn't checked in for ${quiet}.` : `${deviceName(id)} hasn't checked in yet.`, href: `/devices/${encodeURIComponent(id)}`, action: "Open" });
   }
 
   // ---- Quiet notes ----
   if (a?.backupNotConfigured)
-    out.push({ key: "backup", tone: "quiet", text: "Backups of this server aren't set up yet.", href: "/settings?s=backup", action: "Set up" });
+    out.push({ tab: "/settings", key: "backup", tone: "quiet", text: "Backups of this server aren't set up yet.", href: "/settings?s=backup", action: "Set up" });
   return out;
 }
 
-export interface Hero {
-  text: string;
+const RANK: Record<AttentionTone, number> = { fault: 0, wait: 1, ink: 2, quiet: 3 };
+
+/** A page tab's mark: how many items stand there, in the colour of the most urgent. */
+export interface TabMark {
   tone: AttentionTone;
-  /** The rest of a single item's text, said under the hero. */
-  sub?: string;
-  /** When the hero is one item, it carries that item's link, and the list leaves the item out. */
-  item?: AttentionItem;
+  count: number;
 }
 
-function single(item: AttentionItem): Hero {
-  const i = item.text.indexOf(". ");
-  return i < 0 ? { text: item.text, tone: item.tone, item } : { text: item.text.slice(0, i + 1), sub: item.text.slice(i + 2), tone: item.tone, item };
-}
-
-/** The one sentence at the top of Home, and its colour. */
-export function heroLine(items: AttentionItem[]): Hero {
-  const faults = items.filter((i) => i.tone === "fault");
-  if (faults.length === 1) return single(faults[0]!);
-  if (faults.length > 1) return { text: `${faults.length} things need you.`, tone: "fault" };
-  const waits = items.filter((i) => i.tone === "wait");
-  if (waits.length === 1) return single(waits[0]!);
-  if (waits.length > 1) return { text: `${waits.length} saves are waiting for an emulator to close.`, tone: "wait" };
-  const facts = items.filter((i) => i.tone === "ink");
-  if (facts.length === 1) return single(facts[0]!);
-  if (facts.length > 1) return { text: `${facts.length} devices haven't checked in lately.`, tone: "ink" };
-  return { text: "Everything is where it should be.", tone: "ink" };
+/** The mark each page tab carries, keyed by the tab's path. Tabs with nothing standing are absent. */
+export function tabMarks(items: AttentionItem[]): Record<string, TabMark> {
+  const out: Record<string, TabMark> = {};
+  for (const it of items) {
+    const m = out[it.tab];
+    if (!m) out[it.tab] = { tone: it.tone, count: 1 };
+    else {
+      m.count++;
+      if (RANK[it.tone] < RANK[m.tone]) m.tone = it.tone;
+    }
+  }
+  return out;
 }

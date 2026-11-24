@@ -54,6 +54,7 @@ precedence over the plain names.
 | `ALLOW_ROOT` | `false` | The entrypoint refuses `PUID=0` or `PGID=0` unless this is `true`. |
 | `SERVER_NAME` | `Tandem` | Shown to clients (max 60 characters). |
 | `TITLE_NAMES` | `true` | Downloads the public Switch (titledb) and 3DS (3dsdb) title lists weekly so saves keyed by title id show game names. `false` keeps the server offline; those games then show their ids. |
+| `ART` | `true` | Fetches cover art for the game a client is showing, from libretro-thumbnails and GameTDB, and caches it in the data directory (up to 500 MB). `false` sends no art requests; games show the no-art card. |
 | `WEB_ROOT` | `wwwroot` beside the app | The built web UI. |
 
 SQLite runs in WAL mode, so a running backup does not block uploads.

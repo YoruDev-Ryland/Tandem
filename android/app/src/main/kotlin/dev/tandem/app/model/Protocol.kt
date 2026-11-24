@@ -46,6 +46,10 @@ val ProtocolJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
     val gameKey: String,
     val displayName: String? = null,
     val crc32: String? = null,
+    /** The game's system label (GBA, SNES, …) when the device can tell it; RetroArch only. */
+    val system: String? = null,
+    /** The game's GameTDB id when the device can read it from the game file (DS game code, 3DS product code). */
+    val gameId: String? = null,
 )
 @Serializable data class InstallsRequest(val games: List<InstalledGame>)
 /** POST /v1/devices/me/forget: the server drops what it recorded this device as holding for these emulators. */

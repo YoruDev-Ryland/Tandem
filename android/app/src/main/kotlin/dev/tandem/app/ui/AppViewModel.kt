@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.tandem.app.api.Api
 import dev.tandem.app.api.ApiClient
+import dev.tandem.app.api.ArtResult
+import dev.tandem.app.ui.art.ArtCache
 import dev.tandem.app.service.AppGraph
 import dev.tandem.app.modules.ModuleRegistry
 import dev.tandem.app.service.SyncService
@@ -56,6 +58,14 @@ class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewMode
     /** The hint bar's success lines: a choice the server took, a held save that landed. */
     val notices = Notices(viewModelScope)
     val device = DeviceViewModel(state, server.games, { store.deviceId }, viewModelScope, core = { emu, key -> coreOf(store.itemKeys(), emu, key) })
+
+    /** The shelf card's covers, kept in the app's cache folder (Android may clear it; they come back on demand). */
+    val art = ArtCache(
+        dir = java.io.File(app.cacheDir, "art"),
+        api = { emu, key -> api()?.art(emu, key) ?: ArtResult.Failed },   // signed out: not an answer, ask again later
+        spineApi = { emu, key -> api()?.spine(emu, key) ?: ArtResult.Failed },
+        scope = viewModelScope,
+    )
     private val modules = ModuleRegistry.default().all()
     private val emulatorNames = modules.associate { it.emulatorId to it.displayName }
     val conflicts = ConflictsViewModel(

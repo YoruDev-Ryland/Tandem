@@ -1,4 +1,5 @@
 using Tandem.Server.Accounts;
+using Tandem.Server.Art;
 using Tandem.Server.Backup;
 using Tandem.Server.Auth;
 using Tandem.Server.Blobs;
@@ -69,6 +70,20 @@ public static class ServerSetup
         builder.Services.AddHttpClient(Games.TitleNamesRefresher.ClientName, c => c.Timeout = TimeSpan.FromMinutes(10))
             .RemoveAllLoggers(); // one Information line per list download is noise (F-28)
         builder.Services.AddHostedService<Games.TitleNamesRefresher>();
+        builder.Services.AddSingleton<Art.ArtStore>();
+        builder.Services.AddSingleton<Art.ILibretroIndex, Art.LibretroIndex>();
+        builder.Services.AddSingleton<Art.IArtSource, Art.GameTdbCoverSource>();     // sources are tried in this order
+        builder.Services.AddSingleton<Art.IArtSource, Art.LibretroThumbnailSource>();
+        builder.Services.AddSingleton<Art.GameTdbSpineSource>();
+        builder.Services.AddSingleton<Art.ArtFetcher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Art.ArtFetcher>());
+        builder.Services.AddHttpClient(Art.ArtFetcher.ClientName, c =>
+            {
+                c.Timeout = Art.ArtFetcher.RequestTimeout;
+                c.DefaultRequestHeaders.UserAgent.ParseAdd(Art.ArtFetcher.UserAgent);
+            })
+            .ConfigurePrimaryHttpMessageHandler(Art.ArtFetcher.CreatePrimaryHandler)
+            .RemoveAllLoggers(); // one Information line per cover is noise
         builder.Services.AddSingleton<NotifyTriggers>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<NotifyTriggers>());
     }
@@ -121,6 +136,7 @@ public static class ServerSetup
         app.MapVaultEndpoints();
         app.MapEventEndpoints();
         app.MapWebEndpoints();
+        app.MapArtEndpoints();
         app.MapRetentionEndpoints();
         app.MapBackupEndpoints();
         app.MapNotifyEndpoints();

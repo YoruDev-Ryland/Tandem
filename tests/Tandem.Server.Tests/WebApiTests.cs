@@ -489,6 +489,62 @@ public class WebApiTests
     }
 
     [Fact]
+    public async Task A_game_has_a_spine_when_its_scan_can_be_found()
+    {
+        using var f = NewFactory();
+        f.Settings["Tandem:EnableArt"] = "true";
+        var (odin, _) = await f.Register(Email, deviceName: "Odin");
+        var web = await f.WebLogin(Email);
+        await odin.PutAsJsonAsync("/v1/devices/me/installs/melonds", new InstallsRequest([
+            new InstalledGame("nds/Pokemon - Platinum Version (US)", null, null, null, "cpue"),
+            new InstalledGame("nds/NoId", null, null),
+            new InstalledGame("nds/Short", null, null, null, "CPU"),
+            new InstalledGame("nds/Bang", null, null, null, "CPUE!"),
+            new InstalledGame("nds/Full", null, null, null, "CTR-P-EKJE"),
+        ]));
+        await odin.PutAsJsonAsync("/v1/devices/me/installs/azahar", new InstallsRequest([new InstalledGame("0004000000055D00", null, null, null, "EKJE")]));
+        await Save(odin, "a", null, "GXBE69", emulator: "dolphin");
+        await Save(odin, "a", null, "0100F2C0115B6000");
+
+        var games = await Get<GameRow[]>(web, "/v1/web/games");
+        bool Spine(string key) => games.Single(g => g.GameKey == key).Spine;
+
+        Assert.True(Spine("nds/Pokemon - Platinum Version (US)"));
+        Assert.False(Spine("nds/NoId"));
+        Assert.False(Spine("nds/Short"));
+        Assert.False(Spine("nds/Bang"));
+        Assert.False(Spine("nds/Full"));
+        Assert.True(Spine("0004000000055D00"));
+        Assert.True(Spine("GXBE69"));
+        Assert.False(Spine("0100F2C0115B6000"));
+    }
+
+    [Fact]
+    public async Task A_games_system_comes_from_its_core_else_from_what_the_device_reported()
+    {
+        using var f = NewFactory();
+        var (odin, _) = await f.Register(Email, deviceName: "Odin");
+        var web = await f.WebLogin(Email);
+        await odin.PutAsJsonAsync("/v1/devices/me/installs/retroarch", new InstallsRequest([
+            new InstalledGame("retroarch/Golden Sun", "Golden Sun", null, "gba"),
+            new InstalledGame("retroarch/Emerald", null, null, "SNES"),
+            new InstalledGame("retroarch/Odd", null, null, "Nintendo - Game Boy Advance"),
+            new InstalledGame("retroarch/Plain", null, null),
+        ]));
+        await Save(odin, "a", null, "retroarch/Emerald", emulator: "retroarch", core: "mGBA");
+        await Save(odin, "a", null, "GXBE69", emulator: "dolphin");
+
+        var games = await Get<GameRow[]>(web, "/v1/web/games");
+        string? Sys(string key) => games.Single(g => g.GameKey == key).System;
+
+        Assert.Equal("GBA", Sys("retroarch/Golden Sun"));
+        Assert.Equal("GBA", Sys("retroarch/Emerald"));      // the save's core wins over the report
+        Assert.Null(Sys("retroarch/Odd"));                  // an unknown label is dropped
+        Assert.Null(Sys("retroarch/Plain"));
+        Assert.Equal("GC", Sys("GXBE69"));
+    }
+
+    [Fact]
     public async Task Setup_checklist_lists_missing_emulators_cores_and_folders()
     {
         using var f = NewFactory();

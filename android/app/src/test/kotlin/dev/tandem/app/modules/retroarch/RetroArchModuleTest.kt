@@ -91,6 +91,35 @@ class RetroArchModuleTest {
         assertFalse("retroarch/notes" in keys)
     }
 
+    @Test fun installed_games_carry_their_system() {
+        withCfg()
+        put(ra("playlists/Nintendo - Game Boy Advance.lpl"), res("gba.lpl"))
+        put(ra("playlists/builtin/content_history.lpl"), """{"items":[
+            {"path":"/x/Super Metroid.sfc","label":"Super Metroid","core_name":"DETECT"},
+            {"path":"/x/Crystal.zip","label":"Crystal","core_name":"Nintendo - Game Boy Color (Gambatte)"},
+            {"path":"/x/Disc.chd","label":"Disc","core_name":"DETECT"},
+            {"path":"/x/Named.bin","db_name":"Sony - PlayStation.lpl"}]}""")
+        val games = m().installedGames(fs(), detect(), DeviceSettings(listOf(tmp.root.path + "/roms"), emptyMap()).also {
+            put(tmp.root.path + "/roms/Golden Sun.gba"); put(tmp.root.path + "/roms/Mystery.zip")
+        }).associate { it.gameKey to it.system }
+        assertEquals("GBA", games["retroarch/Castlevania - Aria of Sorrow (USA)"])   // the system playlist's name
+        assertEquals("SNES", games["retroarch/Super Metroid"])                       // the file's extension
+        assertEquals("GBC", games["retroarch/Crystal"])                              // the core name's database part
+        assertEquals("PSX", games["retroarch/Named"])                                // db_name
+        assertEquals("GBA", games["retroarch/Golden Sun"])                           // a ROM folder file
+        assertEquals(null, games["retroarch/Disc"])
+        assertEquals(null, games["retroarch/Mystery"])
+    }
+
+    @Test fun systems_from_names() {
+        assertEquals("GBA", RetroArchSystems.fromDb("Nintendo - Game Boy Advance.lpl"))
+        assertEquals(null, RetroArchSystems.fromDb("content_history.lpl"))
+        assertEquals("GBA", RetroArchSystems.fromCoreName("mGBA"))
+        assertEquals("SNES", RetroArchSystems.fromCoreName("Nintendo - SNES / SFC (Snes9x - Current)"))
+        assertEquals(null, RetroArchSystems.fromCoreName("DETECT"))
+        assertEquals("N64", RetroArchSystems.fromExtension("Game.Z64"))
+    }
+
     @Test fun cores_from_playlists() {
         withCfg()
         put(ra("playlists/Nintendo - Game Boy Advance.lpl"), res("gba.lpl"))

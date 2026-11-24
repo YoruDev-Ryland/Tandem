@@ -2,10 +2,13 @@ package dev.tandem.app.api
 
 import dev.tandem.app.model.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,8 +18,12 @@ import okhttp3.Response
 import okio.BufferedSink
 import okio.source
 import java.io.InputStream
+import kotlin.coroutines.resume
 
 const val PROTOCOL_VERSION = "1"
+
+/** The largest cover the app takes (the server caps images at 2 MiB). */
+private const val MAX_ART_BYTES = 4L * 1024 * 1024
 private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
 private val OCTET = "application/octet-stream".toMediaType()
 
@@ -189,6 +196,51 @@ class ApiClient(
     override suspend fun me(): DeviceSummary = get("/v1/devices/me", DeviceSummary.serializer())
 
     override suspend fun vault(): List<VaultItemDto> = get("/v1/vault", ListSerializer(VaultItemDto.serializer()))
+
+    /**
+     * The cover, by the same path encoding as [game]. 200 is the image (at most [MAX_ART_BYTES]), 202 pending, 404 none;
+     * 404 art_unavailable (the server couldn't reach a source), anything else, or no answer at all, is a failure. A
+     * revoked key is still reported through onRevoked. Cancelling the caller cancels the request.
+     */
+    override suspend fun art(emulatorId: String, gameKey: String): ArtResult = image("art", emulatorId, gameKey)
+
+    /** The real case spine: as [art], at /v1/web/spine (404 no_spine is none). */
+    override suspend fun spine(emulatorId: String, gameKey: String): ArtResult = image("spine", emulatorId, gameKey)
+
+    private suspend fun image(kind: String, emulatorId: String, gameKey: String): ArtResult {
+        val call = http.newCall(req("/v1/web/$kind/${encodeSegment(emulatorId)}/${encodeKey(gameKey)}").get().build())
+        return suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: java.io.IOException) {
+                    if (cont.isActive) cont.resume(ArtResult.Failed)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val result = try { artResult(response) } catch (_: java.io.IOException) { ArtResult.Failed }
+                    if (cont.isActive) cont.resume(result)
+                }
+            })
+        }
+    }
+
+    private fun artResult(response: Response): ArtResult = response.use { r ->
+        when (r.code) {
+            200 -> {
+                val bytes = r.body.source().let { src ->
+                    if (!src.request(MAX_ART_BYTES + 1)) src.readByteArray() else null   // too big: not a cover
+                }
+                if (bytes == null || bytes.isEmpty()) ArtResult.Failed else ArtResult.Image(bytes)
+            }
+            202 -> ArtResult.Pending
+            404 -> {
+                val code = runCatching { ProtocolJson.decodeFromString(ErrorBody.serializer(), r.body.string()).code }.getOrNull()
+                if (code == "art_unavailable") ArtResult.Failed else ArtResult.None
+            }
+            401 -> { runCatching { check(r) }; ArtResult.Failed }
+            else -> ArtResult.Failed
+        }
+    }
 }
 
 private fun query(vararg params: Pair<String, Any?>): String =

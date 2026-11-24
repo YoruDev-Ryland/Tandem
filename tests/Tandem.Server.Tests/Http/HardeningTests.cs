@@ -210,7 +210,7 @@ public class HardeningTests
             var r = await f.CreateClient().GetAsync(path);
             var csp = string.Join("", r.Headers.GetValues("Content-Security-Policy"));
             Assert.Contains("default-src 'self'", csp);
-            Assert.Contains("img-src 'self' data:", csp);
+            Assert.Contains("img-src 'self' data: blob:;", csp);
             Assert.Contains("font-src 'self' data:", csp); // Vite inlines small font subsets as data: URLs
             Assert.Contains("frame-ancestors 'none'", csp);
             Assert.Equal("nosniff", r.Headers.GetValues("X-Content-Type-Options").Single());

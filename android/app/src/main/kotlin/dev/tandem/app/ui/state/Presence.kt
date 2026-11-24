@@ -12,15 +12,20 @@ data class DeviceColumn(val id: String, val name: String)
  * [self]. The same columns as the web's matrixColumns, minus this device: its own state is the HERE column.
  */
 fun deviceColumns(rows: List<GameRow>, self: String?): List<DeviceColumn> {
-    val seen = LinkedHashMap<String, String>()
-    for (r in rows) for (d in r.devices) if (d.deviceId != self) seen.putIfAbsent(d.deviceId, d.deviceName)
-    val sorted = seen.map { (id, name) -> DeviceColumn(id, name) }
-        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, DeviceColumn::name).thenBy { it.id })
+    val sorted = otherDevices(rows, self)
     val count = HashMap<String, Int>()
     return sorted.map { c ->
         val n = count.merge(c.name, 1, Int::plus)!!
         if (n == 1) c else c.copy(name = "${c.name} ($n)")
     }
+}
+
+/** The devices in [rows] other than [self], by name ignoring case, then id; names as they are (not numbered). */
+internal fun otherDevices(rows: List<GameRow>, self: String?): List<DeviceColumn> {
+    val seen = LinkedHashMap<String, String>()
+    for (r in rows) for (d in r.devices) if (d.deviceId != self) seen.putIfAbsent(d.deviceId, d.deviceName)
+    return seen.map { (id, name) -> DeviceColumn(id, name) }
+        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, DeviceColumn::name).thenBy { it.id })
 }
 
 /** How [deviceId] holds [g], as the web's presence() says it. */

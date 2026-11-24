@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import dev.tandem.app.MainActivity
+import dev.tandem.app.R
 import dev.tandem.app.sync.SyncConflict
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -65,7 +66,7 @@ class Notifier(context: Context, private val serverUrl: () -> String? = { null }
         PendingIntent.getActivity(ctx, code, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     fun status(text: String): Notification = Notification.Builder(ctx, CHANNEL_SYNC)
-        .setSmallIcon(android.R.drawable.stat_notify_sync)
+        .setSmallIcon(R.drawable.ic_stat_tandem)
         .setContentTitle("Tandem")
         .setContentText(text)
         .setOngoing(true)
@@ -102,7 +103,7 @@ class Notifier(context: Context, private val serverUrl: () -> String? = { null }
             nm.notify(
                 id,
                 Notification.Builder(ctx, CHANNEL_ALERTS)
-                    .setSmallIcon(android.R.drawable.stat_notify_sync)
+                    .setSmallIcon(R.drawable.ic_stat_tandem)
                     .setContentTitle(title)
                     .setContentText(text)
                     .setStyle(Notification.BigTextStyle().bigText(text))

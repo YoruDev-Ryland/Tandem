@@ -26,7 +26,8 @@ export type SetupStepKind =
   | "ChooseConfig";
 
 export type EmulatorId = "eden" | "retroarch" | "azahar" | "ppsspp" | "vita3k" | "dolphin" | "melonds";
-export const EMULATOR_IDS: readonly EmulatorId[] = ["eden", "retroarch", "azahar", "ppsspp", "vita3k", "dolphin", "melonds"];
+/** Module order: the app's ModuleRegistry order, which the shelf's strip and the gamepad's Up/Down follow. */
+export const EMULATOR_IDS: readonly EmulatorId[] = ["eden", "dolphin", "retroarch", "melonds", "azahar", "ppsspp", "vita3k"];
 
 // ---- Errors, server, accounts ----
 export interface ErrorResponse { code: string; message: string }
@@ -201,6 +202,10 @@ export interface GameRow {
   core: string | null;
   /** The head version of the game's save item (what Y downloads), or null. */
   headVersionId: Guid | null;
+  /** The game's system label as the server settled it (GBA, GC, …); absent on older servers. */
+  system?: string | null;
+  /** True when the server can give a real case spine at /v1/web/spine. */
+  spine?: boolean;
 }
 export interface VersionSummary {
   id: Guid;

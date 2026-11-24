@@ -21,6 +21,10 @@ data class EmuColors(
     val wait: Color,
     val fault: Color,
     val glyph: Color,
+    /** A surface raised off the background: the shelf's pulled-out card. */
+    val raised: Color,
+    /** The shelf's edge under the spines: ink in light; in dark a step down from ink, so it doesn't glare. */
+    val shelfEdge: Color,
 ) {
     companion object {
         private val darkBg = Color(0xFF121212)
@@ -40,6 +44,8 @@ data class EmuColors(
             wait = Color(0xFFF0A030),
             fault = Color(0xFFFF6B55),
             glyph = Color(0xFF2A2A2A),
+            raised = Color(0xFF1C1C1B),
+            shelfEdge = Color(0xFFA3A3A0),
         )
 
         val Light = EmuColors(
@@ -54,6 +60,8 @@ data class EmuColors(
             wait = Color(0xFF9A5C00),
             fault = Color(0xFFC23824),
             glyph = Color(0xFFD6D6D1),
+            raised = Color(0xFFF8F7F3),
+            shelfEdge = lightInk,
         )
     }
 }

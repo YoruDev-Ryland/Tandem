@@ -3,6 +3,19 @@ package dev.tandem.app.api
 import dev.tandem.app.model.*
 import java.io.InputStream
 
+/**
+ * The server's answer for a game's cover (GET /v1/web/art/{emulator}/{key}): [Image] (200) with its bytes, [Pending]
+ * (202: it is being fetched, ask again in a moment), [None] (404: the sources have nothing, or art is off), or
+ * [Failed]: the question didn't get an answer (no network, a timeout, a 5xx). Failed is not "no art": it is worth
+ * asking again later.
+ */
+sealed interface ArtResult {
+    class Image(val bytes: ByteArray) : ArtResult
+    data object Pending : ArtResult
+    data object None : ArtResult
+    data object Failed : ArtResult
+}
+
 open class ApiException(val status: Int, val code: String?, message: String?) : Exception(message)
 
 interface Api {
@@ -42,4 +55,8 @@ interface Api {
     suspend fun me(): DeviceSummary
     /** The vault's items, to learn a Vault delivery's category and name (a delivery carries only the item id). */
     suspend fun vault(): List<VaultItemDto> = emptyList()
+    /** The cover of [gameKey], for the shelf's card. Never throws. */
+    suspend fun art(emulatorId: String, gameKey: String): ArtResult = ArtResult.None
+    /** The real case spine of [gameKey] (/v1/web/spine), same answers as [art]. Never throws. */
+    suspend fun spine(emulatorId: String, gameKey: String): ArtResult = ArtResult.None
 }
