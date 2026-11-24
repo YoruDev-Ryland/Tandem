@@ -20,6 +20,42 @@ sealed interface SyncWork {
     /** An apply the user asked for: what it holds back for a running emulator is applied when that emulator closes. */
     data object ApplyRequested : SyncWork
     data object Monitor : SyncWork
+    /**
+     * Installs a downloaded app update if sync is idle ([installBlocker]). It runs in the queue's one consumer, so no
+     * scan, upload or apply runs while it installs; an update that is held back is offered again later.
+     */
+    data object InstallUpdate : SyncWork
+}
+
+/** What a sync session has in hand, for the app-update gate. */
+data class SyncActivity(
+    /** The work items queued and not started (the running one is the caller itself). */
+    val waitingWork: Set<SyncWork>,
+    /** Uploads the engine holds, debounced or retrying. */
+    val queuedUploads: Int,
+    /** Emulators whose exit finishes an apply the user asked for. */
+    val awaitingExit: Set<String>,
+    /** Deliveries held back for a running emulator, applied when it closes. */
+    val heldDeliveries: Int,
+)
+
+/**
+ * Why an app update must not install now, or null when sync is idle: no scan or apply is queued, no upload waits,
+ * and nothing waits for an emulator to close to be applied. Replacing the app kills its process, which would cut any
+ * of those short. Ticks and process probes come every few seconds whatever happens, so they don't count.
+ */
+fun installBlocker(a: SyncActivity): String? {
+    val work = a.waitingWork - setOf(SyncWork.Tick, SyncWork.Monitor, SyncWork.InstallUpdate)
+    return when {
+        SyncWork.FullScan in work -> "a scan is queued"
+        work.isNotEmpty() -> "an apply is queued"
+        a.queuedUploads == 1 -> "1 upload is waiting"
+        a.queuedUploads > 1 -> "${a.queuedUploads} uploads are waiting"
+        a.awaitingExit.isNotEmpty() -> "an apply waits for ${a.awaitingExit.sorted().joinToString(", ")} to close"
+        a.heldDeliveries == 1 -> "1 delivery waits for an emulator to close"
+        a.heldDeliveries > 1 -> "${a.heldDeliveries} deliveries wait for an emulator to close"
+        else -> null
+    }
 }
 
 /** The emulators whose next exit finishes an apply the user asked for. */

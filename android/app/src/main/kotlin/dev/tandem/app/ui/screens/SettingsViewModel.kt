@@ -16,6 +16,7 @@ import dev.tandem.app.ui.state.PermissionState
 import dev.tandem.app.ui.state.Permissions
 import dev.tandem.app.ui.state.ServerChange
 import dev.tandem.app.ui.state.checkNewServer
+import dev.tandem.app.update.UpdateUi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,6 +64,17 @@ data class SettingsUi(
     /** Account › Change server address: the check in progress or its outcome. */
     val serverChange: ServerChange = ServerChange.Idle,
     val appVersion: String = "",
+    /** About: the app updater's state. */
+    val update: UpdateUi = UpdateUi(),
+)
+
+/** The app updater as Settings › About drives it. */
+class UpdateControls(
+    val state: StateFlow<UpdateUi> = MutableStateFlow(UpdateUi()),
+    val check: () -> Unit = {},
+    /** Installs the ready update once sync is idle. */
+    val install: () -> Unit = {},
+    val setAutoInstall: (Boolean) -> Unit = {},
 )
 
 const val AZAHAR_ROOT = "azahar.root"
@@ -89,6 +101,7 @@ class SettingsViewModel(
     private val anon: (String) -> Api = { error("no client") },
     private val keyed: (String) -> Api = { error("no client") },
     private val appVersion: String = "",
+    private val updates: UpdateControls = UpdateControls(),
 ) {
     private val section = MutableStateFlow(SettingsSection.Sync)
     private val focus = MutableStateFlow<EmulatorFocus?>(null)
@@ -99,10 +112,10 @@ class SettingsViewModel(
     val ui: StateFlow<SettingsUi> =
         combine(
             combine(store.changes, deviceName, section, focus, packages) { _, name, sec, f, inst -> build(name, sec, f, inst) },
-            permissions.state, serverChange,
-        ) { u, p, c -> u.copy(permissions = p, serverChange = c) }
+            permissions.state, serverChange, updates.state,
+        ) { u, p, c, up -> u.copy(permissions = p, serverChange = c, update = up) }
             .stateIn(scope, SharingStarted.Eagerly, build(deviceName.value, section.value, focus.value, packages.value)
-                .copy(permissions = permissions.state.value))
+                .copy(permissions = permissions.state.value, update = updates.state.value))
 
     private fun build(name: String?, sec: SettingsSection, f: EmulatorFocus?, inst: Set<String>): SettingsUi {
         val st = store.settings
@@ -141,6 +154,15 @@ class SettingsViewModel(
     fun show() { packages.value = installed(); permissions.refresh() }
 
     fun requestPermission(r: PermissionRequest) = permissions.request(r)
+
+    /** About › Check now. */
+    fun checkUpdate() = updates.check()
+
+    /** About › Install now: the ready update installs once sync is idle. */
+    fun installUpdate() = updates.install()
+
+    /** About › Install updates automatically. */
+    fun setAutoInstall(on: Boolean) = updates.setAutoInstall(on)
 
     /**
      * Account › Change server address: checks [raw] is this same server under another address (it answers

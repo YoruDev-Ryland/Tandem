@@ -24,6 +24,9 @@ val tandemVersionName: String = System.getenv("TANDEM_VERSION_NAME")?.takeIf { i
     ?: git("describe", "--tags", "--always")?.removePrefix("v")?.let { if (it.first().isDigit()) it else "0.1.0-$it" }
     ?: "0.1.0"
 
+// The GitHub repository whose releases the app updates itself from (owner/name).
+val tandemUpdateRepo: String = System.getenv("TANDEM_UPDATE_REPO")?.takeIf { it.isNotBlank() } ?: "YoruDev-Ryland/Tandem"
+
 /** android/keystore.properties (gitignored; see scripts/make-release-key.sh). Release builds are signed only with it. */
 val keystoreProps: Properties? = rootProject.file("keystore.properties").takeIf { it.isFile }?.let { f ->
     Properties().apply { f.inputStream().use { load(it) } }
@@ -47,6 +50,7 @@ android {
         // int until 2038. (Evaluated at configuration time; revisit if the configuration cache is turned on.)
         val shellServiceVersion = (System.currentTimeMillis() / 1000L).toInt()
         buildConfigField("int", "SHELL_SERVICE_VERSION", "$shellServiceVersion")
+        buildConfigField("String", "UPDATE_REPO", "\"$tandemUpdateRepo\"")
     }
     signingConfigs {
         if (keystoreProps != null) create("release") {
