@@ -32,6 +32,8 @@ public static class AdminCli
         new("reset-password", "reset-password <email>", "Set a new generated password for an account, print it, and sign out its web sessions (devices stay paired; " +
             "use revoke-device for those).",
             ResetPasswordAsync),
+        new("change-email", "change-email <old> <new>",
+            "Change an account's email address (devices and web sessions stay signed in).", ChangeEmailAsync),
         new("revoke-device", "revoke-device <deviceId>", "Revoke a device: its key stops working.", RevokeDeviceAsync),
         new("restore-backup", "restore-backup <file> [--passphrase X]",
             $"Restore a backup file into an empty server (no users, empty blob directory). An encrypted backup needs its " +
@@ -164,6 +166,18 @@ public static class AdminCli
         await accounts.ResetPassword(email, password, ct);
         await output.WriteLineAsync($"New password for {email}");
         await output.WriteLineAsync($"Password: {password}");
+        return 0;
+    }
+
+    private static async Task<int> ChangeEmailAsync(string[] args, IServiceProvider services, TextWriter output, CancellationToken ct)
+    {
+        if (args.Length != 2 || args.Any(a => a.StartsWith("--", StringComparison.Ordinal))) return UsageError;
+        using var scope = services.CreateScope();
+        var accounts = scope.ServiceProvider.GetRequiredService<AccountService>();
+        var from = AccountService.NormalizeEmail(args[0]);
+        var to = AccountService.NormalizeEmail(args[1]);
+        await accounts.ChangeEmail(from, to, ct);
+        await output.WriteLineAsync($"Changed {from} to {to}.");
         return 0;
     }
 

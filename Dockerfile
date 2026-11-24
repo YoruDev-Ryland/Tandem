@@ -35,7 +35,7 @@ COPY docker/entrypoint.sh docker/admin-command.sh /app/docker/
 # curl for the healthcheck: the base image has none and the server has no healthcheck subcommand yet; setpriv, used to drop privileges, ships with util-linux.
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* \
     && chmod +x /app/docker/*.sh \
-    && for c in list-users create-user reset-password revoke-device restore-backup; do \
+    && for c in list-users create-user reset-password change-email revoke-device restore-backup; do \
          ln -s /app/docker/admin-command.sh "/usr/local/bin/$c"; \
        done \
     && mkdir -p /data

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using Tandem.Protocol;
 using Tandem.Server.Auth;
 using Tandem.Server.Data;
+using Tandem.Server.Events;
 using Tandem.Server.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -9,7 +10,8 @@ using Microsoft.Extensions.Options;
 
 namespace Tandem.Server.Accounts;
 
-public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> options, TimeProvider time, LoginThrottle throttle)
+public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> options, TimeProvider time, LoginThrottle throttle,
+    IActivityLog activity)
 {
     public const string AllowRegistrationKey = "allowRegistration";
     public const int MinPasswordLength = 8;
@@ -173,6 +175,60 @@ public sealed class AccountService(TandemDbContext db, IOptions<ServerOptions> o
         user.PasswordHash = Hasher.HashPassword(user, request.New);
         await db.SaveChangesAsync(ct);
         await db.WebSessions.Where(s => s.UserId == userId && s.TokenHash != currentSessionHash).ExecuteDeleteAsync(ct);
+    }
+
+    /// <summary>Changes the signed-in user's email after checking their password. A wrong password is 403 bad_password and
+    /// counts toward the <see cref="LoginThrottle"/> like a failed sign-in (from this <paramref name="client"/> bucket).
+    /// Device keys stay valid; every other web session is signed out, the one making the change
+    /// (<paramref name="currentSessionHash"/>) stays.</summary>
+    public async Task<AccountInfo> ChangeEmail(Guid userId, ChangeEmailRequest request, string? currentSessionHash, string client, CancellationToken ct)
+    {
+        var email = NormalizeEmail(request.NewEmail);
+        var user = await db.Users.FirstAsync(u => u.Id == userId, ct);
+        throttle.Check(user.Email, client);
+        if (!VerifyPassword(user, request.Password))
+        {
+            throttle.Failed(user.Email, client);
+            throw new ApiException(403, "bad_password", "The password is incorrect.");
+        }
+        throttle.Succeeded(user.Email, client);
+        await SetEmail(user, email, ct);
+        await db.WebSessions.Where(s => s.UserId == userId && s.TokenHash != currentSessionHash).ExecuteDeleteAsync(ct);
+        return new AccountInfo(user.Id, user.Email, user.IsAdmin);
+    }
+
+    /// <summary>Changes the email of the account with <paramref name="oldEmail"/> (admin CLI). No password is needed and nobody
+    /// is signed out: sessions and devices stay as they are.</summary>
+    public async Task ChangeEmail(string oldEmail, string newEmail, CancellationToken ct)
+    {
+        var from = NormalizeEmail(oldEmail);
+        var to = NormalizeEmail(newEmail);
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Email == from, ct)
+            ?? throw new ApiException(404, "user_not_found", $"No account with email {from}.");
+        await SetEmail(user, to, ct);
+    }
+
+    private async Task SetEmail(User user, string email, CancellationToken ct)
+    {
+        if (await db.Users.AnyAsync(u => u.Email == email && u.Id != user.Id, ct))
+            throw new ApiException(409, "email_taken", "An account with this email already exists.");
+        var previous = user.Email;
+        user.Email = email;
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // A concurrent change took the address between the check and the write.
+            user.Email = previous;
+            db.Entry(user).State = EntityState.Unchanged;
+            if (await db.Users.AsNoTracking().AnyAsync(u => u.Email == email && u.Id != user.Id, ct))
+                throw new ApiException(409, "email_taken", "An account with this email already exists.");
+            throw;
+        }
+        throttle.Clear(previous);
+        await activity.WriteAsync(user.Id, "email_changed", $"Email changed to {email}");
     }
 
     /// <summary>Sets a new password for the account with this email (admin CLI) and signs out every web session of

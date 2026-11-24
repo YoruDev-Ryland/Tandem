@@ -63,6 +63,13 @@ public static class AccountEndpoints
             return Results.NoContent();
         }).RequireAuthorization(AuthSetup.WebSessionPolicy);
 
+        account.MapPost("/email", (ChangeEmailRequest request, HttpContext http, AccountService accounts, CancellationToken ct) =>
+        {
+            var current = http.Request.Cookies.TryGetValue(WebSessionCookie.Name, out var token) && !string.IsNullOrEmpty(token)
+                ? Secrets.Hash(token) : null;
+            return accounts.ChangeEmail(http.User.UserId(), request, current, AuthSetup.PartitionKey(http.Connection.RemoteIpAddress), ct);
+        }).RequireAuthorization(AuthSetup.WebSessionPolicy);
+
         // Self-service account deletion: the password confirms it, and the only admin cannot leave other users without one.
         account.MapDelete("", async ([Microsoft.AspNetCore.Mvc.FromBody] DeleteAccountRequest? request, HttpContext http,
             UserDeletion deletion, TandemDbContext db, CancellationToken ct) =>

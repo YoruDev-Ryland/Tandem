@@ -76,6 +76,29 @@ public class AdminCliTests
     }
 
     [Fact]
+    public async Task Cli_change_email_changes_it_and_refuses_a_taken_address()
+    {
+        using var f = new ServerFactory();
+        var password = PasswordIn((await Cli(f, "create-user", "me@example.com")).Output);
+        await Cli(f, "create-user", "taken@example.com");
+
+        var (code, output, error) = await Cli(f, "change-email", "Me@Example.com", "New@Example.com");
+        Assert.Equal(0, code);
+        Assert.Equal("", error);
+        Assert.Contains("Changed me@example.com to new@example.com.", output);
+        Assert.Equal(HttpStatusCode.OK, (await Login(f, "new@example.com", password)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Login(f, "me@example.com", password)).StatusCode);
+
+        var (takenCode, _, takenError) = await Cli(f, "change-email", "new@example.com", "taken@example.com");
+        Assert.Equal(1, takenCode);
+        Assert.Contains("already exists", takenError);
+        var (missing, _, _) = await Cli(f, "change-email", "nobody@example.com", "x@example.com");
+        Assert.Equal(1, missing);
+        var (usage, _, _) = await Cli(f, "change-email", "only-one@example.com");
+        Assert.Equal(1, usage);
+    }
+
+    [Fact]
     public async Task Cli_unknown_command_exits_1()
     {
         using var f = new ServerFactory();

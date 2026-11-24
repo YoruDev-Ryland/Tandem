@@ -13,6 +13,7 @@ public sealed record PairingCodeResponse(string Code, string QrPayload, DateTime
 public sealed record RedeemPairingRequest(string Code, string DeviceName, string Platform);
 public sealed record AccountInfo(Guid Id, string Email, bool IsAdmin);
 public sealed record ChangePasswordRequest(string Current, string New);
+public sealed record ChangeEmailRequest(string NewEmail, string Password);
 /// <summary>DELETE /v1/account: the account's own password confirms the deletion.</summary>
 public sealed record DeleteAccountRequest(string Password);
 /// <summary>POST /v1/admin/users/{id}/reset-password: the new generated password (every web session of the user is signed out).</summary>

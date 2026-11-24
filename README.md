@@ -224,6 +224,7 @@ upload, 8 GiB), `Tandem__AuthRequestsPerMinute` (10) and `Tandem__PruneIntervalM
 docker exec tandem list-users
 docker exec tandem create-user me@example.com --admin   # prints the generated password
 docker exec tandem reset-password me@example.com        # prints the new password
+docker exec tandem change-email me@example.com new@example.com   # devices and web sessions stay signed in
 docker exec tandem revoke-device <deviceId>
 ```
 
