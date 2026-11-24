@@ -15,6 +15,21 @@
   import Field from "../lib/ui/Field.svelte";
   import HintBar from "../lib/ui/HintBar.svelte";
   import List from "../lib/ui/List.svelte";
+  import Tabs from "../lib/ui/Tabs.svelte";
+  import LostFound from "./vault/LostFound.svelte";
+
+  // Two sections: the system files sent to devices, and Lost & found (the saves of deleted games).
+  const SECTIONS = [
+    { id: "files", label: "System files", path: "/vault" },
+    { id: "lost", label: "Lost & found", path: "/vault?s=lost" },
+  ];
+  let section = $state(new URLSearchParams(router.search).get("s") === "lost" ? "lost" : "files");
+  const current = $derived(SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]);
+  function select(path: string) {
+    section = new URL(path, location.origin).searchParams.get("s") === "lost" ? "lost" : "files";
+    router.go(path, { replace: true });
+  }
+  let lostCount = $state<number | null>(null);
 
   const vault = resource(getVault, ["vault", "devices"]);
   const devices = resource(getDevices, ["devices"]);
@@ -156,7 +171,7 @@
 
   $effect(() =>
     onAction((a) => {
-      if (a === "x") {
+      if (a === "x" && section === "files") {
         openUpload();
         return true;
       }
@@ -172,9 +187,14 @@
 
 <div class="page">
   <section>
-    <h1>Vault{#if vault.data}<small>{rows.length}</small>{/if}</h1>
+    <h1>Vault{#if section === "files" && vault.data}<small>{rows.length}</small>{:else if section === "lost" && lostCount !== null}<small>{lostCount}</small>{/if}</h1>
+    <div class="tabs">
+      <Tabs level={2} items={SECTIONS.map((s) => ({ label: s.label, path: s.path }))} active={current.path} onSelect={select} />
+    </div>
 
-    {#if vault.error && !vault.data}
+    {#if section === "lost"}
+      <LostFound bind:count={lostCount} />
+    {:else if vault.error && !vault.data}
       <ErrorLine error={vault.error} />
     {:else if !vault.data}
       <p class="loading" aria-busy="true">— — —</p>
@@ -194,11 +214,13 @@
       </List>
     {/if}
 
-    {#if status}<p class="ink2 line">{status}</p>{/if}
-    {#if failure}<div class="line"><ErrorLine error={failure} /></div>{/if}
-    <div class="actions">
-      <Button glyph="x" onclick={openUpload}>Upload from this PC…</Button>
-    </div>
+    {#if section === "files"}
+      {#if status}<p class="ink2 line">{status}</p>{/if}
+      {#if failure}<div class="line"><ErrorLine error={failure} /></div>{/if}
+      <div class="actions">
+        <Button glyph="x" onclick={openUpload}>Upload from this PC…</Button>
+      </div>
+    {/if}
   </section>
 
   <Dialog bind:open={sending} title={sendTarget ? `Send ${sendTarget.name}` : "Send"}>
@@ -256,11 +278,13 @@
   </Dialog>
 
   <HintBar
-    hints={[
-      ...(rows.length > 0 ? [{ glyph: "a" as const, label: "Send to a device…" }] : []),
-      { glyph: "x", label: "Upload…" },
-      { glyph: "b", label: "Back" },
-    ]}
+    hints={section === "lost"
+      ? [...(lostCount ? [{ glyph: "a" as const, label: "Restore or download…" }] : []), { glyph: "b", label: "Back" }]
+      : [
+          ...(rows.length > 0 ? [{ glyph: "a" as const, label: "Send to a device…" }] : []),
+          { glyph: "x", label: "Upload…" },
+          { glyph: "b", label: "Back" },
+        ]}
   />
 </div>
 
@@ -279,6 +303,9 @@
     font: 600 48px/1 "Barlow Semi Condensed", sans-serif;
     letter-spacing: -0.02em;
     color: var(--ink);
+  }
+  .tabs {
+    margin-bottom: 22px;
   }
   h1 small {
     margin-left: 14px;

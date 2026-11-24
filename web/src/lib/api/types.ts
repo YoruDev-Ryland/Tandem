@@ -284,6 +284,21 @@ export interface ConfigOverview { emulators: EmulatorConfigRow[] }
 export interface SetupStep { kind: SetupStepKind; emulatorId: string; label: string; done: boolean; detail: string | null }
 export interface SetupChecklist { steps: SetupStep[] }
 
+/** A save or state in Lost & found (the newest copy of an item whose game was deleted). Slot and core are "" when empty. */
+export interface LostItemRow {
+  id: Guid;
+  emulatorId: string;
+  kind: ItemKind;
+  gameKey: string;
+  slot: string;
+  core: string;
+  displayName: string | null;
+  totalSize: number;
+  /** "game_deleted" for now. */
+  reason: string;
+  lostUtc: string;
+}
+
 // ---- SSE ----
-export type Topic = "activity" | "saves" | "conflicts" | "configs" | "vault" | "devices";
-export const TOPICS: readonly Topic[] = ["activity", "saves", "conflicts", "configs", "vault", "devices"];
+export type Topic = "activity" | "saves" | "conflicts" | "configs" | "vault" | "devices" | "lost";
+export const TOPICS: readonly Topic[] = ["activity", "saves", "conflicts", "configs", "vault", "devices", "lost"];
