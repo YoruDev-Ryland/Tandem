@@ -57,7 +57,9 @@ public class BlobTests
     private static string[] Files(ServerFactory f)
     {
         var dir = Path.Combine(f.DataDirectory, "blobs");
-        return Directory.Exists(dir) ? Directory.GetFiles(dir, "*", SearchOption.AllDirectories) : [];
+        return Directory.Exists(dir)
+            ? Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Where(f => Path.GetFileName(f) != Tandem.Server.Blobs.FilesLocation.MarkerName).ToArray()
+            : [];
     }
 
     /// <summary>Deterministic pseudo-random stream of a fixed length that hashes as it is read.</summary>

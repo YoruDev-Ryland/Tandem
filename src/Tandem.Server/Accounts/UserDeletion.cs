@@ -1,3 +1,4 @@
+using Tandem.Server.Blobs;
 using Tandem.Server.Data;
 using Tandem.Server.Events;
 using Tandem.Server.Http;
@@ -8,7 +9,7 @@ using Microsoft.Extensions.Options;
 namespace Tandem.Server.Accounts;
 
 /// <summary>Deletes a user and everything they own (admin delete and self-delete share it).</summary>
-public sealed class UserDeletion(TandemDbContext db, MaintenanceLock maintenance, UserLocks locks, IOptions<ServerOptions> options,
+public sealed class UserDeletion(TandemDbContext db, MaintenanceLock maintenance, UserLocks locks, FilesLocation files,
     IEventHub hub, ILogger<UserDeletion> logger)
 {
     /// <summary>
@@ -28,7 +29,7 @@ public sealed class UserDeletion(TandemDbContext db, MaintenanceLock maintenance
             db.Users.Remove(user);
             await db.SaveChangesAsync(ct);
 
-            var dir = Path.Combine(options.Value.DataDirectory, "blobs", id.ToString("N"));
+            var dir = files.UserDir(id);
             try
             {
                 if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);

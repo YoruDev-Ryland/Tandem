@@ -104,7 +104,7 @@ public static class BackupDatabase
     /// REPEATABLE READ on Postgres, a deferred read transaction on SQLite), and lists the blobs those rows hold.
     /// Rows written by uploads after the snapshot started are simply not in it.
     /// </summary>
-    public static async Task<Export> ExportAsync(TandemDbContext db, string dir, Func<string, string, string>? redactSetting,
+    public static async Task<Export> ExportAsync(TandemDbContext db, string dir, Func<string, string, string?>? redactSetting,
         CancellationToken ct)
     {
         var provider = db.Database.IsNpgsql() ? "postgres" : "sqlite";
@@ -147,7 +147,7 @@ public static class BackupDatabase
     private static readonly MethodInfo ExportTableMethod =
         typeof(BackupDatabase).GetMethod(nameof(ExportTableAsync), BindingFlags.NonPublic | BindingFlags.Static)!;
 
-    private static async Task<long> ExportTableAsync<T>(TandemDbContext db, string path, Func<string, string, string>? redactSetting,
+    private static async Task<long> ExportTableAsync<T>(TandemDbContext db, string path, Func<string, string, string?>? redactSetting,
         CancellationToken ct) where T : class
     {
         await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous);
@@ -155,7 +155,12 @@ public static class BackupDatabase
         long rows = 0;
         await foreach (var row in db.Set<T>().AsNoTracking().AsAsyncEnumerable().WithCancellation(ct))
         {
-            if (row is ServerSetting s && redactSetting is not null) s.Value = redactSetting(s.Key, s.Value);
+            if (row is ServerSetting s && redactSetting is not null)
+            {
+                var value = redactSetting(s.Key, s.Value);
+                if (value is null) continue; // a setting that does not travel in a backup
+                s.Value = value;
+            }
             await writer.WriteAsync(JsonSerializer.Serialize(row, BackupFormat.RowJson));
             await writer.WriteAsync('\n');
             rows++;

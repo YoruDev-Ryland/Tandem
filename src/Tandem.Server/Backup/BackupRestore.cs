@@ -25,11 +25,11 @@ public static class BackupRestore
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
         var store = scope.ServiceProvider.GetRequiredService<IBlobStore>();
-        var blobRoot = Path.Combine(scope.ServiceProvider.GetRequiredService<IOptions<ServerOptions>>().Value.DataDirectory, "blobs");
+        var blobRoot = scope.ServiceProvider.GetRequiredService<FilesLocation>().DefaultRoot;
 
         if (await db.Users.AnyAsync(ct))
             throw new BackupException("This server already has users. Restore only into an empty database (a new data directory or database).");
-        if (Directory.Exists(blobRoot) && Directory.EnumerateFileSystemEntries(blobRoot).Any())
+        if (Directory.Exists(blobRoot) && Directory.EnumerateFileSystemEntries(blobRoot).Any(e => Path.GetFileName(e) != FilesLocation.MarkerName))
             throw new BackupException($"The blob directory {blobRoot} is not empty. Restore only into an empty data directory.");
 
         var magic = new byte[BackupCrypto.Magic.Length];

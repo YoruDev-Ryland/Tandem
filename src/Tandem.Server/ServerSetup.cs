@@ -38,6 +38,8 @@ public static class ServerSetup
         builder.Services.AddScoped<AccountService>();
         builder.Services.AddScoped<UserDeletion>();
         builder.Services.AddScoped<PairingService>();
+        builder.Services.AddSingleton<FilesLocation>();
+        builder.Services.AddHostedService<FilesLocationWatcher>();
         builder.Services.AddSingleton<IBlobStore, BlobStore>();
         builder.Services.AddScoped<BlobService>();
         builder.Services.AddSingleton<IDomainEvents, DomainEvents>();
@@ -115,6 +117,7 @@ public static class ServerSetup
         app.UseSecurityHeaders(WebHosting.IndexOf(app.Services));
 
         app.Services.MigrateDatabase();
+        FilesLocation.LoadAtStartup(app.Services);
         var dataDirectory = options.DataDirectory;
         WebEndpoints.SweepStaleUploads(dataDirectory);
         BackupService.SweepStaleTemps(dataDirectory);

@@ -60,6 +60,7 @@ public static class AdminCli
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
         if (FindCommand(args) is null) return Usage(Console.Error, args.Length == 0 ? null : args[0]);
         app.Services.MigrateDatabase();
+        Blobs.FilesLocation.LoadAtStartup(app.Services);
         return await RunAsync(args, app.Services, Console.Out, Console.Error, cancel.Token);
     }
 

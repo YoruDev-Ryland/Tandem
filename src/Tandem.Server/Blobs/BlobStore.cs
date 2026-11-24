@@ -30,12 +30,14 @@ public static partial class BlobHash
     }
 }
 
-public sealed class BlobStore(IOptions<ServerOptions> options) : IBlobStore
+public sealed class BlobStore(FilesLocation location) : IBlobStore
 {
     private string PathFor(Guid userId, string hash)
     {
         BlobHash.Require(hash);
-        return Path.Combine(options.Value.DataDirectory, "blobs", userId.ToString("N"), hash[..2], hash[2..4], hash);
+        if (!location.Available)
+            throw new ApiException(503, "files_unavailable", "The stored files folder is missing. Nothing is stored until it is back.");
+        return location.PathFor(userId, hash);
     }
 
     public async Task<long> PutAsync(Guid userId, string expectedHash, Stream content, CancellationToken ct)

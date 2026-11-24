@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Tandem.Protocol;
 using Tandem.Server.Auth;
+using Tandem.Server.Blobs;
 using Tandem.Server.Data;
 using Tandem.Server.Http;
 using Microsoft.EntityFrameworkCore;
@@ -84,9 +85,11 @@ public static class BackupSettings
     }
 
     /// <summary>The value of a server setting as it goes into a backup: the backup settings lose their secrets and are
-    /// disabled (a restored server must not start writing to, and pruning, the target it was restored from).</summary>
-    public static string RedactForExport(string key, string value)
+    /// disabled (a restored server must not start writing to, and pruning, the target it was restored from). The files
+    /// location is dropped (null): the folder belongs to the server it was set on.</summary>
+    public static string? RedactForExport(string key, string value)
     {
+        if (key == FilesLocation.Key) return null; // a restored server keeps its files in its own default folder
         if (key != Key) return value;
         var s = Parse(value);
         return JsonSerializer.Serialize(s with { Enabled = false, Passphrase = null, Encrypt = false, S3 = s.S3 is null ? null : s.S3 with { SecretKey = null } }, Json);
