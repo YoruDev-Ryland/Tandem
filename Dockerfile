@@ -6,13 +6,15 @@ ARG BUILDPLATFORM=linux/amd64
 # Build natively on the build machine and cross-publish for the target architecture (multi-arch without emulation).
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG TARGETARCH
+# The version /v1/server-info reports and backups record; the release workflow passes the tag's (v1.2.3 -> 1.2.3).
+ARG VERSION=0.1.0
 WORKDIR /src
 COPY Directory.Build.props Tandem.slnx ./
 COPY src/Tandem.Protocol/Tandem.Protocol.csproj src/Tandem.Protocol/
 COPY src/Tandem.Server/Tandem.Server.csproj src/Tandem.Server/
 RUN dotnet restore src/Tandem.Server/Tandem.Server.csproj -a "${TARGETARCH:-amd64}"
 COPY src/ src/
-RUN dotnet publish src/Tandem.Server/Tandem.Server.csproj -c Release -a "${TARGETARCH:-amd64}" --no-restore -o /out
+RUN dotnet publish src/Tandem.Server/Tandem.Server.csproj -c Release -a "${TARGETARCH:-amd64}" --no-restore -p:Version="${VERSION}" -o /out
 
 FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /web
@@ -24,7 +26,7 @@ RUN npm run build
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 LABEL org.opencontainers.image.title="Tandem" \
       org.opencontainers.image.description="Self-hosted server that syncs emulator saves, states and configs between Android handhelds." \
-      org.opencontainers.image.licenses="NOASSERTION"
+      org.opencontainers.image.licenses="GPL-3.0-only"
 WORKDIR /app
 COPY --from=build /out/ ./
 # The server serves WEB_ROOT, which defaults to wwwroot beside the app.
