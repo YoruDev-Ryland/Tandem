@@ -32,14 +32,20 @@ describe("moveLine", () => {
   });
   it("reports a failure and that nothing changed", () => {
     expect(moveLine({ ...base, phase: "Failed", error: "The disk is full." })).toEqual({ tone: "fault", text: "The disk is full. Nothing was changed." });
+    expect(moveLine({ ...base, phase: "Failed", error: null })).toEqual({ tone: "fault", text: "The move failed. Nothing was changed." });
+  });
+  it("does not say it twice when the server's message already does", () => {
+    const error = "Copying stopped: the disk is full. Nothing was changed.";
+    expect(moveLine({ ...base, phase: "Failed", error })).toEqual({ tone: "fault", text: error });
   });
 });
 
 // ---- The page ----
 
+const listeners: Record<string, (e: MessageEvent) => void> = {};
 class FakeEventSource {
   readyState = 0;
-  addEventListener() {}
+  addEventListener(name: string, f: (e: MessageEvent) => void) { listeners[name] = f; }
   close() {}
 }
 const reply = (status: number, body?: unknown) =>
@@ -50,14 +56,14 @@ type Handler = (body: any) => Response;
 
 const goodCheck: MoveCheckResult = {
   path: "/mnt/big", ok: true, bytesToCopy: 79 * MB, mountLine: null,
-  items: [{ name: "Absolute path", ok: true, problem: null }, { name: "Writable", ok: true, problem: null }],
+  items: [{ name: "absolute", ok: true, problem: null }, { name: "writable", ok: true, problem: null }],
 };
 const badCheck: MoveCheckResult = {
   path: "/srv/blobs", ok: false, bytesToCopy: 79 * MB,
   mountLine: "- /your/host/folder:/srv/blobs",
   items: [
-    { name: "Absolute path", ok: true, problem: null },
-    { name: "A real mount", ok: false, problem: "This folder is inside the container and would be lost on the next update. Mount a folder there first:" },
+    { name: "absolute", ok: true, problem: null },
+    { name: "mount", ok: false, problem: "This folder is inside the container and would be lost on the next update. Mount a folder there first:" },
   ],
 };
 
@@ -119,6 +125,8 @@ describe("moving the stored files", () => {
     await fireEvent.input(d.getByLabelText("New folder"), { target: { value: "/mnt/big" } });
     await fireEvent.click(d.getByRole("button", { name: "Check" }));
     expect(await d.findByText("Writable")).toBeTruthy();
+    expect(d.getByText("Absolute path")).toBeTruthy();
+    expect(d.queryByText("writable")).toBeNull();
     expect(d.getByText("79.0 MB to copy")).toBeTruthy();
     expect(calls).toContainEqual({ method: "POST", url: "/v1/admin/storage/move/check", body: { path: "/mnt/big" } });
     expect(move.disabled).toBe(false);
@@ -153,9 +161,39 @@ describe("moving the stored files", () => {
     expect((d.getByRole("button", { name: "Move" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("shows an unknown check as its id", async () => {
+    await show(withMove(null), { "POST /v1/admin/storage/move/check": () => reply(200, { ...goodCheck, items: [{ name: "inodes", ok: true, problem: null }] }) });
+    const d = await openDialog();
+    await fireEvent.input(d.getByLabelText("New folder"), { target: { value: "/mnt/big" } });
+    await fireEvent.click(d.getByRole("button", { name: "Check" }));
+    expect(await d.findByText("inodes")).toBeTruthy();
+  });
+
+  it("enables Move when the server normalised the path it was given", async () => {
+    await show(withMove(null), { "POST /v1/admin/storage/move/check": () => reply(200, goodCheck) });
+    const d = await openDialog();
+    await fireEvent.input(d.getByLabelText("New folder"), { target: { value: " /mnt/a/../big/ " } });
+    await fireEvent.click(d.getByRole("button", { name: "Check" }));
+    await d.findByText("Writable");
+    expect((d.getByRole("button", { name: "Move" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("disables Move again when the path is edited after a good check", async () => {
+    await show(withMove(null), { "POST /v1/admin/storage/move/check": () => reply(200, goodCheck) });
+    const d = await openDialog();
+    const input = d.getByLabelText("New folder");
+    await fireEvent.input(input, { target: { value: "/mnt/big/" } });
+    await fireEvent.click(d.getByRole("button", { name: "Check" }));
+    await d.findByText("Writable");
+    const move = d.getByRole("button", { name: "Move" }) as HTMLButtonElement;
+    expect(move.disabled).toBe(false);
+    await fireEvent.input(input, { target: { value: "/mnt/other" } });
+    expect(move.disabled).toBe(true);
+  });
+
   it("renders one or two items as they come", async () => {
     await show(withMove(null), {
-      "POST /v1/admin/storage/move/check": () => reply(200, { path: "data", ok: false, bytesToCopy: 0, mountLine: null, items: [{ name: "Absolute path", ok: false, problem: "Use a full path that starts with /." }] }),
+      "POST /v1/admin/storage/move/check": () => reply(200, { path: "data", ok: false, bytesToCopy: 0, mountLine: null, items: [{ name: "absolute", ok: false, problem: "Use a full path that starts with /." }] }),
     });
     const d = await openDialog();
     await fireEvent.input(d.getByLabelText("New folder"), { target: { value: "data" } });
@@ -216,16 +254,30 @@ describe("moving the stored files", () => {
     let removed = false;
     const calls = await show(withMove(done), {
       "POST /v1/admin/storage/move/remove-old": () => { removed = true; return reply(204); },
-      "GET /v1/admin/storage/move": () => reply(200, { ...done, oldLocation: null, oldBytes: 0, oldKept: removed ? 3 : 0 }),
+      "GET /v1/admin/storage/move": () => reply(200, { ...done, oldBytes: removed ? 2 * MB : done.oldBytes, oldKept: removed ? 3 : 0 }),
     });
     await fireEvent.click(await screen.findByRole("button", { name: "Remove old copy" }));
     const d = within(await screen.findByRole("dialog"));
     expect(d.getByText("Delete the old copy in /data/blobs? The files in /x are kept.")).toBeTruthy();
     await fireEvent.click(d.getByRole("button", { name: "Delete old copy" }));
     await waitFor(() => expect(calls.some((c) => c.url === "/v1/admin/storage/move/remove-old")).toBe(true));
-    expect(await screen.findByText("Files are now in /x.")).toBeTruthy();
     expect(await screen.findByText("3 files the new folder doesn't hold were kept in /data/blobs.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Remove old copy" })).toBeNull();
+    expect(screen.getByText("Files are now in /x. The old copy (2.0 MB) is still in /data/blobs.")).toBeTruthy();
+  });
+
+  it("still offers Remove old copy after a partial removal, and says what was kept", async () => {
+    await show(withMove({ ...done, oldKept: 3 }));
+    expect(await screen.findByText("3 files the new folder doesn't hold were kept in /data/blobs.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove old copy" })).toBeTruthy();
+  });
+
+  it("refreshes the Files block when the storage topic fires", async () => {
+    let phase: MoveStatus["phase"] = "Copying";
+    await show(withMove(base), { "GET /v1/settings/storage": () => reply(200, withMove({ ...base, phase })) });
+    expect(await screen.findByText(/Copying 48 of 148/)).toBeTruthy();
+    phase = "Holding";
+    listeners.changed!(new MessageEvent("changed", { data: JSON.stringify({ topic: "storage" }) }));
+    expect(await screen.findByText("Holding uploads, finishing…")).toBeTruthy();
   });
 
   it("shows the server's message when the old copy cannot be removed", async () => {

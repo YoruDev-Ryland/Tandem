@@ -4,7 +4,7 @@
   import { ApiError } from "../../../lib/api/http";
   import type { MoveCheckResult, MoveStatus } from "../../../lib/api/types";
   import { formatSize } from "../../../lib/format";
-  import { moveLine } from "../../../lib/storage/move";
+  import { checkLabel, moveLine } from "../../../lib/storage/move";
   import Button from "../../../lib/ui/Button.svelte";
   import Dialog from "../../../lib/ui/Dialog.svelte";
   import { describeError } from "../../../lib/ui/errors";
@@ -64,6 +64,8 @@
   let open = $state(false);
   let path = $state("");
   let checked = $state<MoveCheckResult | null>(null);
+  /** The path the check was asked about: the server answers with its normalised form, which can differ. */
+  let checkedPath = $state("");
   let checking = $state(false);
   let starting = $state(false);
   let dialogError = $state<string | null>(null);
@@ -71,7 +73,7 @@
   let copyNote = $state<string | null>(null);
 
   const trimmed = $derived(path.trim());
-  const canMove = $derived(checked !== null && checked.ok && checked.path === trimmed && !starting && !checking);
+  const canMove = $derived(checked !== null && checked.ok && checkedPath === trimmed && !starting && !checking);
 
   function openDialog() {
     path = "";
@@ -94,6 +96,7 @@
     dialogError = null;
     try {
       checked = await checkMove(trimmed);
+      checkedPath = trimmed;
     } catch (err) {
       checked = null;
       dialogError = describeError(err);
@@ -177,7 +180,7 @@
   {#if line && status}
     <p class={line.tone} role="status">{line.text}</p>
     {#if status.phase === "Done" && status.oldKept > 0}
-      <p class="ink">{status.oldKept} files the new folder doesn't hold were kept in {status.oldLocation ?? status.from}.</p>
+      <p class="ink">{status.oldKept} files the new folder doesn't hold were kept in {status.oldLocation}.</p>
     {/if}
     {#if lineError}<p class="fault" role="alert">{lineError}</p>{/if}
   {/if}
@@ -201,7 +204,7 @@
           <li class:bad={!it.ok}>
             <span class="mark" aria-hidden="true">{it.ok ? "✓" : "✕"}</span>
             <span class="what">
-              <span class="name">{it.name}</span>
+              <span class="name">{checkLabel(it.name)}</span>
               {#if !it.ok && it.problem}<span class="problem">{it.problem}</span>{/if}
             </span>
             <span class="sr">{it.ok ? "Ok" : "Problem"}</span>

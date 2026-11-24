@@ -124,19 +124,19 @@
   const checkOk: MoveCheckResult = {
     path: "/mnt/big/tandem", ok: true, bytesToCopy: 79 * MB, mountLine: null,
     items: [
-      { name: "Absolute path", ok: true, problem: null },
-      { name: "Outside the current folder", ok: true, problem: null },
-      { name: "Writable", ok: true, problem: null },
-      { name: "Free space", ok: true, problem: null },
-      { name: "A real mount", ok: true, problem: null },
-      { name: "Empty", ok: true, problem: null },
+      { name: "absolute", ok: true, problem: null },
+      { name: "outside", ok: true, problem: null },
+      { name: "writable", ok: true, problem: null },
+      { name: "space", ok: true, problem: null },
+      { name: "mount", ok: true, problem: null },
+      { name: "empty", ok: true, problem: null },
     ],
   };
   const checkBad: MoveCheckResult = {
     ...checkOk, path: "/srv/tandem", ok: false, mountLine: "- /your/host/folder:/srv/tandem",
-    items: checkOk.items.map((i) => i.name === "A real mount"
+    items: checkOk.items.map((i) => i.name === "mount"
       ? { ...i, ok: false, problem: "This folder is inside the container and would be lost on the next update. Mount a folder there first:" }
-      : i.name === "Free space" ? { ...i, ok: false, problem: "Only 40.0 MB is free there; the copy needs 79.0 MB and 1.0 GB is kept free." } : i),
+      : i.name === "space" ? { ...i, ok: false, problem: "Only 40.0 MB is free there; the copy needs 79.0 MB and 1.0 GB is kept free." } : i),
   };
   if (storageView && dialogKit) {
     onMount(() => {
