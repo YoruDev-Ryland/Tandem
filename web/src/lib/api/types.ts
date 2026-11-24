@@ -241,6 +241,8 @@ export interface Attention {
   silentDevices: Guid[];
   /** Admins only: the stored files folder is missing (an unmounted disk); nothing is stored until it is back. */
   filesMissing: boolean;
+  /** Admins only, while filesMissing: the folder that is missing (null when unknown). */
+  filesMissingPath: string | null;
 }
 export interface HomeResponse { continue: ContinueItem[]; devices: DeviceSummary[]; attention: Attention; recent: ActivityItem[] }
 export interface GameDeviceState { deviceId: Guid; deviceName: string; state: DeviceGameState }

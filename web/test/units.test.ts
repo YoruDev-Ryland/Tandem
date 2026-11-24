@@ -72,6 +72,13 @@ describe("attention", () => {
     });
     expect(attentionItems(home(0, { openConflicts: 0 }), [], [], now).some((i) => i.key === "files-missing")).toBe(false);
   });
+  it("names the missing stored files folder when the server says which", () => {
+    const items = attentionItems(home(0, { openConflicts: 0, filesMissing: true, filesMissingPath: "/mnt/nas/tandem" }), [], [], now);
+    expect(items[0]).toMatchObject({
+      key: "files-missing", tone: "fault",
+      text: "The stored files folder /mnt/nas/tandem is missing. Nothing is stored until it is back.",
+    });
+  });
   it("names failed deliveries and links to Activity", () => {
     const items = attentionItems(home(0, { openConflicts: 0, failedDeliveries24h: 3 }), [], [], now);
     expect(items[0]).toMatchObject({ text: "3 deliveries failed in the last day.", href: "/activity", tone: "fault" });

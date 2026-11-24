@@ -25,6 +25,8 @@
   });
   const line = $derived(status ? moveLine(status) : null);
   const running = $derived(status?.phase === "Copying" || status?.phase === "Holding");
+  // A second move would leave the last move's old copy behind, unlisted: the server refuses it (old_copy_pending).
+  const oldCopyPending = $derived(status?.phase === "Done" && !!status.oldLocation);
 
   let lineError = $state<string | null>(null);
 
@@ -190,7 +192,7 @@
     {:else if status?.phase === "Done" && status.oldLocation}
       <Button onclick={openRemove}>Remove old copy</Button>
     {/if}
-    {#if !running}<Button onclick={openDialog}>Move files…</Button>{/if}
+    {#if !running && !oldCopyPending}<Button onclick={openDialog}>Move files…</Button>{/if}
   </div>
 </div>
 

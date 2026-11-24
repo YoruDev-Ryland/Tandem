@@ -66,7 +66,7 @@ export function attentionItems(home: HomeResponse | undefined, games: GameRow[],
   if (a?.diskLow)
     out.push({ tab: "/settings", key: "disk", tone: "fault", text: "The server is almost out of disk space. New saves are refused until there is room.", href: "/settings?s=storage", action: "See storage" });
   if (a?.filesMissing)
-    out.push({ tab: "/settings", key: "files-missing", tone: "fault", text: "The stored files folder is missing. Nothing is stored until it is back.", href: "/settings?s=storage", action: "See storage" });
+    out.push({ tab: "/settings", key: "files-missing", tone: "fault", text: a.filesMissingPath ? `The stored files folder ${a.filesMissingPath} is missing. Nothing is stored until it is back.` : "The stored files folder is missing. Nothing is stored until it is back.", href: "/settings?s=storage", action: "See storage" });
   const conflicted = games.filter((g) => g.openConflict);
   if (conflicted.length === 1) {
     const g = conflicted[0]!;

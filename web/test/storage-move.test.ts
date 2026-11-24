@@ -265,6 +265,17 @@ describe("moving the stored files", () => {
     expect(screen.getByText("Files are now in /x. The old copy (2.0 MB) is still in /data/blobs.")).toBeTruthy();
   });
 
+  it("offers no new move while the last move's old copy is still there", async () => {
+    await show(withMove(done));
+    expect(await screen.findByRole("button", { name: "Remove old copy" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Move files…" })).toBeNull();
+  });
+
+  it("offers a new move once the old copy is gone", async () => {
+    await show(withMove({ ...done, oldLocation: null, oldBytes: 0 }));
+    expect(await screen.findByRole("button", { name: "Move files…" })).toBeTruthy();
+  });
+
   it("still offers Remove old copy after a partial removal, and says what was kept", async () => {
     await show(withMove({ ...done, oldKept: 3 }));
     expect(await screen.findByText("3 files the new folder doesn't hold were kept in /data/blobs.")).toBeTruthy();
@@ -281,7 +292,7 @@ describe("moving the stored files", () => {
   });
 
   it("shows the server's message when the old copy cannot be removed", async () => {
-    await show(withMove(done), { "POST /v1/admin/storage/move/remove-old": () => reply(409, { code: "files_unavailable", message: "The new folder is missing." }) });
+    await show(withMove(done), { "POST /v1/admin/storage/move/remove-old": () => reply(503, { code: "files_unavailable", message: "The new folder is missing." }) });
     await fireEvent.click(await screen.findByRole("button", { name: "Remove old copy" }));
     const d = within(await screen.findByRole("dialog"));
     await fireEvent.click(d.getByRole("button", { name: "Delete old copy" }));
