@@ -39,6 +39,8 @@ public static class ServerSetup
         builder.Services.AddScoped<UserDeletion>();
         builder.Services.AddScoped<PairingService>();
         builder.Services.AddSingleton<FilesLocation>();
+        builder.Services.AddSingleton<FilesGate>();
+        builder.Services.AddSingleton<IBlobPutHook, NoBlobPutHook>();
         builder.Services.AddHostedService<FilesLocationWatcher>();
         builder.Services.AddSingleton<IBlobStore, BlobStore>();
         builder.Services.AddScoped<BlobService>();

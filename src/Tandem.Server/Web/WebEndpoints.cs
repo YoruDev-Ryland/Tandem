@@ -57,7 +57,7 @@ public static class WebEndpoints
         web.MapGet("/configs", (HttpContext http, WebQueryService q, CancellationToken ct) =>
             q.ConfigsAsync(http.User.UserId(), ct));
 
-        web.MapPost("/saves/upload", UploadAsync).DisableAntiforgery().RequireStorage();
+        web.MapPost("/saves/upload", UploadAsync).DisableAntiforgery().RequireStorage().RequireNotHolding();
 
         // Lost & found: the saves of deleted games. A web session only, like deleting the game.
         var lost = web.MapGroup("/lost").RequireAuthorization(Auth.AuthSetup.WebSessionPolicy);

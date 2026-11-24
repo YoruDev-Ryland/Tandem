@@ -26,7 +26,7 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
 
     private sealed record ShizukuOff(Guid UserId, Guid DeviceId, string DeviceName);
     private sealed record Silent(Guid UserId, Guid DeviceId, string DeviceName, int Hours);
-    private sealed record StorageLow(long FreeBytes, long MinFreeBytes);
+    private sealed record StorageLow(long FreeBytes, long MinFreeBytes, string Path);
 
     /// <summary>The <see cref="ServerSetting"/> that marks the current low-storage episode as notified.</summary>
     public const string StorageLowNotifiedKey = "notify.storageLowNotified";
@@ -182,7 +182,7 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
         if (row is not null) return false;
         db.ServerSettings.Add(new ServerSetting { Key = StorageLowNotifiedKey, Value = time.GetUtcNow().ToString("O") });
         await db.SaveChangesAsync(ct);
-        await Enqueue(new StorageLow(storage.FreeBytes ?? 0, options.Value.MinFreeBytes));
+        await Enqueue(new StorageLow(storage.FreeBytes ?? 0, options.Value.MinFreeBytes, storage.LowDisk ?? ""));
         return true;
     }
 
@@ -240,7 +240,7 @@ public sealed class NotifyTriggers(IDomainEvents events, IServiceScopeFactory sc
             {
                 var admins = await db.Users.AsNoTracking().Where(u => u.IsAdmin).Select(u => u.Id).ToListAsync(ct);
                 var message = new NotifyMessage("Tandem: storage low",
-                    $"The server has {Megabytes(e.FreeBytes)} free in its data directory (the minimum is {Megabytes(e.MinFreeBytes)}). "
+                    $"The server has {Megabytes(e.FreeBytes)} free in {e.Path} (the minimum is {Megabytes(e.MinFreeBytes)}). "
                     + "Uploads are paused until space is freed.", NotifyEventNames.StorageLow);
                 foreach (var admin in admins) await SendAsync(admin, NotifyEventNames.StorageLow, "storage", message, ct);
                 break;

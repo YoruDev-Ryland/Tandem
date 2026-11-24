@@ -17,7 +17,14 @@ public class StorageGuardTests
     {
         public long? Free { get; set; } = 100L << 30;
         public int Calls { get; private set; }
-        public long? FreeBytes(string directory) { Calls++; return Free; }
+        /// <summary>Overrides <see cref="Free"/> for directories under this path (the files location).</summary>
+        public string? LowUnder { get; set; }
+        public long? LowFree { get; set; }
+        public long? FreeBytes(string directory)
+        {
+            Calls++;
+            return LowUnder is not null && directory.StartsWith(LowUnder, StringComparison.Ordinal) ? LowFree : Free;
+        }
     }
 
     private static (ServerFactory, FakeProbe) NewFactory()
@@ -72,6 +79,37 @@ public class StorageGuardTests
     }
 
     [Fact]
+    public async Task Low_space_on_the_files_disk_refuses_uploads()
+    {
+        var (f, probe) = NewFactory();
+        using var _ = f;
+        var (device, _) = await f.Register("a@example.com");
+        var files = f.Services.GetRequiredService<Tandem.Server.Blobs.FilesLocation>();
+        var monitor = f.Services.GetRequiredService<StorageMonitor>();
+        var other = Directory.CreateTempSubdirectory("tandem-files-").FullName;
+        try
+        {
+            // The files live on another disk (the data directory is fine, that one is not).
+            Tandem.Server.Blobs.FilesLocation.WriteMarker(other, Guid.NewGuid());
+            using (var scope = f.Services.CreateScope())
+                await files.SwitchAsync(scope.ServiceProvider.GetRequiredService<Tandem.Server.Data.TandemDbContext>(),
+                    other, Tandem.Server.Blobs.FilesLocation.ReadMarker(other)!.Value, default);
+            Assert.False(monitor.IsLow);
+
+            probe.LowUnder = other;
+            probe.LowFree = 10L << 20;
+            f.Time.Advance(StorageMonitor.CacheFor);
+
+            Assert.True(monitor.IsLow);
+            Assert.Equal(other, monitor.LowDisk);
+            var refused = await PutBlob(device, "two"u8.ToArray());
+            Assert.Equal((HttpStatusCode)507, refused.StatusCode);
+            Assert.Equal("storage_full", (await refused.ReadAsync<ErrorResponse>()).Code);
+        }
+        finally { Directory.Delete(other, true); }
+    }
+
+    [Fact]
     public async Task The_free_space_probe_is_cached_for_30_seconds()
     {
         var (f, probe) = NewFactory();
@@ -79,10 +117,10 @@ public class StorageGuardTests
         var (device, _) = await f.Register("a@example.com");
         var before = probe.Calls;
         for (var i = 0; i < 5; i++) await PutBlob(device, [(byte)i]);
-        Assert.True(probe.Calls - before <= 1);
+        Assert.True(probe.Calls - before <= 2); // one check probes the data directory and the files location
         f.Time.Advance(TimeSpan.FromSeconds(31));
         await PutBlob(device, [9]);
-        Assert.True(probe.Calls - before <= 2);
+        Assert.True(probe.Calls - before <= 4);
     }
 
     [Fact]

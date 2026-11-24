@@ -30,7 +30,7 @@ public static partial class BlobHash
     }
 }
 
-public sealed class BlobStore(FilesLocation location) : IBlobStore
+public sealed class BlobStore(FilesLocation location, FilesGate gate, IBlobPutHook putHook) : IBlobStore
 {
     private string PathFor(Guid userId, string hash)
     {
@@ -45,6 +45,7 @@ public sealed class BlobStore(FilesLocation location) : IBlobStore
         var path = PathFor(userId, expectedHash);
         var exists = File.Exists(path);
         var tmp = $"{path}.tmp-{Guid.NewGuid():N}";
+        string? staged = null; // a copy beside the final path, when a switch moved it while the body streamed
         var moved = false;
         FileStream? file = null;
         try
@@ -76,22 +77,40 @@ public sealed class BlobStore(FilesLocation location) : IBlobStore
             if (!string.Equals(Convert.ToHexStringLower(hasher.GetHashAndReset()), expectedHash, StringComparison.Ordinal))
                 throw new ApiException(400, "hash_mismatch", "Content does not match the hash.");
 
+            await putHook.BeforeCommitAsync(ct);
             if (!exists)
             {
-                File.Move(tmp, path, overwrite: true); // same directory: atomic; same content if racing
-                moved = true;
-                Durability.SyncDirectory(Path.GetDirectoryName(path)!); // and the rename itself survives a power cut
+                // Only the rename is under the write gate, never the body above: a slow client must not delay a move.
+                // The final path is worked out here, so a write that began before a switch lands in the new location.
+                using (await gate.EnterWriteAsync(ct))
+                {
+                    var finalPath = PathFor(userId, expectedHash);
+                    var dir = Path.GetDirectoryName(finalPath)!;
+                    Directory.CreateDirectory(dir);
+                    var source = tmp;
+                    if (!string.Equals(Path.GetDirectoryName(tmp), dir, StringComparison.Ordinal))
+                    {
+                        staged = source = $"{finalPath}.tmp-{Guid.NewGuid():N}";
+                        File.Copy(tmp, source, overwrite: true);
+                    }
+                    File.Move(source, finalPath, overwrite: true); // same directory: atomic; same content if racing
+                    if (staged is null) moved = true; else staged = null;
+                    Durability.SyncDirectory(dir); // and the rename itself survives a power cut
+                }
             }
             return total;
         }
         finally
         {
             if (file is not null) await file.DisposeAsync();
-            if (!moved)
-            {
-                try { File.Delete(tmp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
-            }
+            if (!moved) TryDelete(tmp);
+            if (staged is not null) TryDelete(staged);
         }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
     public Task<Stream?> OpenAsync(Guid userId, string hash, CancellationToken ct)
