@@ -88,7 +88,7 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, GameTdbSpineSour
             {
                 // Not a source saying no (for example a full disk): ask again in an hour, not on every request.
                 log.LogWarning(e, "Cover fetch for {Emulator} failed", request.EmulatorId);
-                try { store.RecordMiss(request.EmulatorId, ArtStore.KeyFor(request.Kind, request.GameKey), time.GetUtcNow() + RetryAfterFailure, transient: true); }
+                try { store.RecordMiss(request.EmulatorId, ArtStore.KeyFor(request.Kind, request.GameKey), time.GetUtcNow() + RetryAfterFailure, transient: true, basis: request.Basis); }
                 catch (Exception again) { log.LogDebug(again, "Couldn't record the failed cover fetch"); }
             }
             finally { Done(NameOf(request)); }
@@ -124,7 +124,7 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, GameTdbSpineSour
             }
         }
         var wait = unreachable ? RetryAfterFailure : TimeSpan.FromDays(Math.Max(1, o.ArtMissDays));
-        store.RecordMiss(request.EmulatorId, request.GameKey, time.GetUtcNow() + wait, transient: unreachable);
+        store.RecordMiss(request.EmulatorId, request.GameKey, time.GetUtcNow() + wait, transient: unreachable, basis: request.Basis);
     }
 
     /// <summary>
@@ -151,7 +151,7 @@ public sealed class ArtFetcher(IEnumerable<IArtSource> sources, GameTdbSpineSour
             return;
         }
         var wait = unreachable ? RetryAfterFailure : TimeSpan.FromDays(Math.Max(1, o.ArtMissDays));
-        store.RecordMiss(request.EmulatorId, key, time.GetUtcNow() + wait, transient: unreachable);
+        store.RecordMiss(request.EmulatorId, key, time.GetUtcNow() + wait, transient: unreachable, basis: request.Basis);
     }
 
     /// <summary>The image at [uri], or null; Failed is true when the source could not be reached rather than said no.</summary>

@@ -25,6 +25,7 @@ public abstract record ArtLookup
 public sealed class ArtStore(IOptions<ServerOptions> options, TimeProvider time, ILogger<ArtStore> log)
 {
     private const string TransientMark = "transient";
+    private const string BasisPrefix = "basis=";
     private static readonly TimeSpan StaleTemp = TimeSpan.FromHours(1);
     private static readonly TimeSpan MissSweepEvery = TimeSpan.FromDays(1);
     private readonly object _evictGate = new();
@@ -43,7 +44,9 @@ public sealed class ArtStore(IOptions<ServerOptions> options, TimeProvider time,
     public static string NameOf(string emulatorId, string gameKey) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(emulatorId + "\n" + gameKey)));
 
-    public ArtLookup TryGet(string emulatorId, string gameKey)
+    /// <summary>The image or a live miss for the key. With [basis], a miss recorded under a different basis (or none) is
+    /// <see cref="ArtLookup.Unknown"/>: what the lookup knew has changed, so it is worth making again.</summary>
+    public ArtLookup TryGet(string emulatorId, string gameKey, string? basis = null)
     {
         var name = NameOf(emulatorId, gameKey);
         foreach (var (ext, type) in new[] { (".png", "image/png"), (".jpg", "image/jpeg") })
@@ -64,7 +67,11 @@ public sealed class ArtStore(IOptions<ServerOptions> options, TimeProvider time,
                 if (lines.Length > 0
                     && DateTimeOffset.TryParse(lines[0].Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var until)
                     && time.GetUtcNow() < until)
+                {
+                    var recorded = lines.Skip(1).Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith(BasisPrefix, StringComparison.Ordinal))?[BasisPrefix.Length..];
+                    if (basis is not null && recorded != basis) return new ArtLookup.Unknown();
                     return new ArtLookup.Miss(until, lines.Skip(1).Any(l => l.Trim() == TransientMark));
+                }
                 File.Delete(miss);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log.LogDebug(e, "Couldn't read {File}", miss); }
@@ -88,12 +95,14 @@ public sealed class ArtStore(IOptions<ServerOptions> options, TimeProvider time,
     }
 
     /// <summary>Records that the sources have nothing until [until]; [transient] when one could not be reached.</summary>
-    public void RecordMiss(string emulatorId, string gameKey, DateTimeOffset until, bool transient = false)
+    public void RecordMiss(string emulatorId, string gameKey, DateTimeOffset until, bool transient = false, string? basis = null)
     {
         System.IO.Directory.CreateDirectory(Directory);
         var path = Path.Combine(Directory, NameOf(emulatorId, gameKey) + ".miss");
         var text = until.ToString("O", CultureInfo.InvariantCulture);
-        File.WriteAllText(path, transient ? text + "\n" + TransientMark : text);
+        if (transient) text += "\n" + TransientMark;
+        if (basis is not null && !basis.Contains('\n')) text += "\n" + BasisPrefix + basis;
+        File.WriteAllText(path, text);
     }
 
     /// <summary>Deletes temp files a crash left behind (older than an hour), here and under index/, and expired miss

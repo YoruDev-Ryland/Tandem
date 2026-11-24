@@ -43,11 +43,19 @@ public static class ArtEndpoints
                               join d in db.Devices.AsNoTracking() on r.DeviceId equals d.Id
                               where d.UserId == userId && d.RevokedUtc == null && r.EmulatorId == emulatorId && r.GameKey == key
                               orderby r.SeenUtc descending
-                              select new { r.DisplayName, r.System }).ToListAsync(ct);
+                              select new { r.DisplayName, r.System, r.GameId }).ToListAsync(ct);
         if (items.Count == 0 && installs.Count == 0) return Error(http, StatusCodes.Status404NotFound, "not_found", "No such game.", "no-store");
         if (!options.Value.EnableArt) return Error(http, StatusCodes.Status404NotFound, "no_art", "Cover art is turned off.", MissCache);
 
-        switch (store.TryGet(emulatorId, key))
+        var display = items.Select(i => i.DisplayName).Concat(installs.Select(r => r.DisplayName)).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n))
+                      ?? names.Resolve(emulatorId, key, null);
+        var heads = items.Where(i => i.HeadVersionId != null).Select(i => i.HeadVersionId!.Value).ToList();
+        var core = await db.SaveVersions.AsNoTracking().Where(v => heads.Contains(v.Id) && v.Core != "").Select(v => v.Core).FirstOrDefaultAsync(ct)
+                   ?? items.Select(i => i.Core).FirstOrDefault(c => c != "");
+        var request = new ArtRequest(emulatorId, key, display, core, installs.Select(r => r.System).FirstOrDefault(x => x is not null),
+            GameId: installs.Select(r => r.GameId).FirstOrDefault(x => x is not null));
+
+        switch (store.TryGet(emulatorId, key, request.Basis))
         {
             case ArtLookup.Image image:
                 byte[] bytes;
@@ -65,12 +73,7 @@ public static class ArtEndpoints
                     : Error(http, StatusCodes.Status404NotFound, "no_art", "No cover art was found for this game.", cache);
         }
 
-        var display = items.Select(i => i.DisplayName).Concat(installs.Select(r => r.DisplayName)).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n))
-                      ?? names.Resolve(emulatorId, key, null);
-        var heads = items.Where(i => i.HeadVersionId != null).Select(i => i.HeadVersionId!.Value).ToList();
-        var core = await db.SaveVersions.AsNoTracking().Where(v => heads.Contains(v.Id) && v.Core != "").Select(v => v.Core).FirstOrDefaultAsync(ct)
-                   ?? items.Select(i => i.Core).FirstOrDefault(c => c != "");
-        fetcher.Enqueue(new ArtRequest(emulatorId, key, display, core, installs.Select(r => r.System).FirstOrDefault(x => x is not null)));
+        fetcher.Enqueue(request);
         http.Response.Headers.RetryAfter = "3";
         return Error(http, StatusCodes.Status202Accepted, "art_pending", "Cover art is being fetched.", "no-store");
     }
@@ -98,7 +101,8 @@ public static class ArtEndpoints
         if (!SpineEligibility.Has(emulatorId, key, system, gameId, options.Value.EnableArt))
             return Error(http, StatusCodes.Status404NotFound, "no_spine", "This game has no case spine.", MissCache);
 
-        switch (store.TryGet(emulatorId, ArtStore.KeyFor(ArtKind.Spine, key)))
+        var spineRequest = new ArtRequest(emulatorId, key, null, null, reported, ArtKind.Spine, gameId);
+        switch (store.TryGet(emulatorId, ArtStore.KeyFor(ArtKind.Spine, key), spineRequest.Basis))
         {
             case ArtLookup.Image image:
                 byte[] bytes;
@@ -114,7 +118,7 @@ public static class ArtEndpoints
                     : Error(http, StatusCodes.Status404NotFound, "no_spine", "No case spine was found for this game.", cache);
         }
 
-        fetcher.Enqueue(new ArtRequest(emulatorId, key, null, null, reported, ArtKind.Spine, gameId));
+        fetcher.Enqueue(spineRequest);
         http.Response.Headers.RetryAfter = "3";
         return Error(http, StatusCodes.Status202Accepted, "spine_pending", "The case spine is being fetched.", "no-store");
     }
