@@ -230,4 +230,58 @@ public class StorageUsageTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains("bad_value", await response.Content.ReadAsStringAsync());
     }
+
+    [Fact]
+    public async Task Older_bytes_exclude_blobs_a_config_or_vault_also_holds()
+    {
+        using var f = NewFactory();
+        var (device, key) = await f.Register("a@example.com");
+        var head = await Blob(device, new string('h', 10));
+        var old = await Blob(device, new string('o', 20));
+        var inConfig = await Blob(device, new string('c', 40));
+        var inVault = await Blob(device, new string('v', 80));
+        await SeedItem(f, key.UserId, "G1", ItemKind.Save, [old, inConfig, inVault], [head]);
+        await InDb(f, async db =>
+        {
+            db.RawConfigUploads.Add(new RawConfigUpload { DeviceId = key.DeviceId, EmulatorId = "eden", ManifestJson = Manifests.ToJson([inConfig]) });
+            var vi = new VaultItem { Id = Guid.NewGuid(), UserId = key.UserId, Category = "bios", EmulatorId = "", Name = "b.bin" };
+            var vv = new VaultVersion { Id = Guid.NewGuid(), ItemId = vi.Id, Seq = 1, ReceivedUtc = f.Time.GetUtcNow(),
+                ManifestJson = Manifests.ToJson([inVault]), ManifestHash = Manifests.Hash([inVault]), TotalSize = inVault.Size };
+            vi.HeadVersionId = vv.Id;
+            db.VaultItems.Add(vi);
+            db.VaultVersions.Add(vv);
+            await db.SaveChangesAsync();
+        });
+
+        var usage = await Get(device);
+
+        Assert.Equal(20, usage.OlderBytes);
+    }
+
+    [Fact]
+    public async Task A_users_storage_never_includes_another_users_games_kinds_or_lost_items()
+    {
+        using var f = NewFactory();
+        var (device, key) = await f.Register("a@example.com");
+        var (other, otherKey) = await f.Register("b@example.com");
+        var mine = await Blob(device, new string('m', 10));
+        var theirs = await Blob(other, new string('t', 1000));
+        var theirLost = await Blob(other, new string('l', 2000));
+        await SeedItem(f, key.UserId, "Mine", ItemKind.Save, [mine]);
+        await SeedItem(f, otherKey.UserId, "Theirs", ItemKind.State, [theirs], [theirs, theirLost]);
+        await InDb(f, async db =>
+        {
+            db.LostItems.Add(new LostItem { Id = Guid.NewGuid(), UserId = otherKey.UserId, EmulatorId = "eden", Kind = ItemKind.Save, GameKey = "L",
+                ManifestJson = Manifests.ToJson([theirLost]), ManifestHash = Manifests.Hash([theirLost]), TotalSize = theirLost.Size,
+                Reason = LostItem.GameDeleted, LostUtc = f.Time.GetUtcNow() });
+            await db.SaveChangesAsync();
+        });
+
+        var usage = await Get(device);
+
+        Assert.Equal(10, usage.TotalBytes);
+        Assert.Equal("Mine", Assert.Single(usage.Games).GameKey);
+        Assert.Equal(new StorageKinds(10, 0, 0, 0, 0), usage.ByKind);
+        Assert.Equal(0, usage.OlderBytes);
+    }
 }

@@ -99,11 +99,12 @@ public static class RetentionEndpoints
             return new StorageViewDto(value is not null && StorageViews.Contains(value) ? value : DefaultStorageView);
         });
 
-        settings.MapPut("/storage-view", async (HttpContext http, TandemDbContext db, StorageViewDto? body, CancellationToken ct) =>
+        settings.MapPut("/storage-view", async (HttpContext http, TandemDbContext db, UserLocks locks, StorageViewDto? body, CancellationToken ct) =>
         {
             if (body?.View is not { } view || !StorageViews.Contains(view))
                 throw new ApiException(400, "bad_value", $"view must be one of: {string.Join(", ", StorageViews)}.");
             var userId = http.User.UserId();
+            using var _ = await locks.Acquire(userId, ct);
             var row = await db.UserSettings.FirstOrDefaultAsync(s => s.UserId == userId && s.Key == StorageViewKey, ct);
             if (row is null) db.UserSettings.Add(new UserSetting { UserId = userId, Key = StorageViewKey, Value = view });
             else row.Value = view;
@@ -147,7 +148,7 @@ public static class RetentionEndpoints
         var source = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(db.Database.GetConnectionString()).DataSource;
         if (string.IsNullOrEmpty(source) || source.Equals(":memory:", StringComparison.OrdinalIgnoreCase)) return null;
         var file = Path.GetFullPath(source);
-        long Length(string path) { try { return File.Exists(path) ? new FileInfo(path).Length : 0; } catch (IOException) { return 0; } }
+        long Length(string path) { try { return File.Exists(path) ? new FileInfo(path).Length : 0; } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; } }
         return Length(file) + Length(file + "-wal");
     }
 
@@ -155,6 +156,10 @@ public static class RetentionEndpoints
     /// Bytes of unique blobs (by hash) the user holds. Per emulator: the blobs of its save/state, config and vault
     /// versions and raw config uploads ("" = vault items not tied to an emulator). Per game: its save/state versions. Server is left null (the endpoint fills it for admins).
     /// A blob shared by two emulators or games counts once in each row, so rows can add up to more than the total.
+    /// <see cref="StorageUsage.OlderBytes"/> are the unique bytes only non-head save/state versions reference (a blob a
+    /// head, config, vault or lost item also holds would not be freed by retention). A game's own
+    /// <see cref="StorageGame.OlderBytes"/> only subtracts its own head versions, so it can count a blob another game's
+    /// head holds: the per-game values do not add up to the top-level figure.
     /// </summary>
     public static async Task<StorageUsage> StorageAsync(TandemDbContext db, Guid userId, CancellationToken ct)
     {
@@ -179,50 +184,50 @@ public static class RetentionEndpoints
 
         var lost = await db.LostItems.AsNoTracking().Where(l => l.UserId == userId).Select(l => l.ManifestJson).ToListAsync(ct);
 
-        var byEmulator = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        void AddTo<TKey>(Dictionary<TKey, HashSet<string>> map, TKey key, string json) where TKey : notnull
+        // Each manifest is parsed once; every set below is fed from its hash array.
+        static string[] Hashes(string json) => Manifests.FromJson(json).Select(e => e.Hash).ToArray();
+        static void AddTo<TKey>(Dictionary<TKey, HashSet<string>> map, TKey key, string[] hashes) where TKey : notnull
         {
             if (!map.TryGetValue(key, out var set)) map[key] = set = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var e in Manifests.FromJson(json)) set.Add(e.Hash);
+            set.UnionWith(hashes);
         }
-        foreach (var r in saves) AddTo(byEmulator, r.EmulatorId, r.ManifestJson);
-        foreach (var r in configs) AddTo(byEmulator, r.EmulatorId, r.ManifestJson);
-        foreach (var r in raw) AddTo(byEmulator, r.EmulatorId, r.ManifestJson);
-        foreach (var r in vault) AddTo(byEmulator, r.EmulatorId, r.ManifestJson);
+        static HashSet<string> NewSet() => new(StringComparer.Ordinal);
 
+        var byEmulator = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var byGame = new Dictionary<(string, string), HashSet<string>>();
         var currentByGame = new Dictionary<(string, string), HashSet<string>>();
         var versionsByGame = new Dictionary<(string, string), int>();
         var kindsByGame = new Dictionary<(string, string), SortedSet<string>>();
         var names = new Dictionary<(string, string), string>();
-        var saveHashes = new HashSet<string>(StringComparer.Ordinal);
-        var stateHashes = new HashSet<string>(StringComparer.Ordinal);
-        var headHashes = new HashSet<string>(StringComparer.Ordinal);
-        var allSaveStateHashes = new HashSet<string>(StringComparer.Ordinal);
+        var saveHashes = NewSet();
+        var stateHashes = NewSet();
+        var headHashes = NewSet();
+        var allSaveStateHashes = NewSet();
+        var configHashes = NewSet();
+        var vaultHashes = NewSet();
+        var lostHashes = NewSet();
         foreach (var r in saves)
         {
             var game = (r.EmulatorId, r.GameKey);
-            AddTo(byGame, game, r.ManifestJson);
+            var hashes = Hashes(r.ManifestJson);
+            AddTo(byEmulator, r.EmulatorId, hashes);
+            AddTo(byGame, game, hashes);
             versionsByGame[game] = versionsByGame.GetValueOrDefault(game) + 1;
             if (!kindsByGame.TryGetValue(game, out var kinds)) kindsByGame[game] = kinds = new SortedSet<string>(StringComparer.Ordinal);
             kinds.Add(r.Kind.ToString());
             if (r.DisplayName is not null) names[game] = r.DisplayName;
-            var hashes = Manifests.FromJson(r.ManifestJson).Select(e => e.Hash).ToList();
             allSaveStateHashes.UnionWith(hashes);
             (r.Kind == ItemKind.State ? stateHashes : saveHashes).UnionWith(hashes);
             if (r.IsHead)
             {
-                AddTo(currentByGame, game, r.ManifestJson);
+                AddTo(currentByGame, game, hashes);
                 headHashes.UnionWith(hashes);
             }
         }
-        var configHashes = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var r in configs.Select(c => c.ManifestJson).Concat(raw.Select(c => c.ManifestJson)))
-            foreach (var e in Manifests.FromJson(r)) configHashes.Add(e.Hash);
-        var vaultHashes = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var r in vault) foreach (var e in Manifests.FromJson(r.ManifestJson)) vaultHashes.Add(e.Hash);
-        var lostHashes = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var json in lost) foreach (var e in Manifests.FromJson(json)) lostHashes.Add(e.Hash);
+        foreach (var r in configs) { var h = Hashes(r.ManifestJson); AddTo(byEmulator, r.EmulatorId, h); configHashes.UnionWith(h); }
+        foreach (var r in raw) { var h = Hashes(r.ManifestJson); AddTo(byEmulator, r.EmulatorId, h); configHashes.UnionWith(h); }
+        foreach (var r in vault) { var h = Hashes(r.ManifestJson); AddTo(byEmulator, r.EmulatorId, h); vaultHashes.UnionWith(h); }
+        foreach (var json in lost) lostHashes.UnionWith(Hashes(json));
 
         long Sum(IEnumerable<string> hashes) => hashes.Sum(h => sizes.GetValueOrDefault(h));
         var emulators = byEmulator.Select(kv => new StorageRow(kv.Key, null, null, Sum(kv.Value)))
@@ -238,6 +243,6 @@ public static class RetentionEndpoints
         var topGames = gameRows.Take(TopGames).Select(g => new StorageRow(g.EmulatorId, g.GameKey, g.DisplayName, g.Bytes)).ToList();
         var kindBytes = new StorageKinds(Sum(saveHashes), Sum(stateHashes), Sum(configHashes), Sum(vaultHashes), Sum(lostHashes));
         return new StorageUsage(sizes.Values.Sum(), emulators, topGames, gameRows, kindBytes,
-            Sum(allSaveStateHashes.Where(h => !headHashes.Contains(h))), null);
+            Sum(allSaveStateHashes.Where(h => !headHashes.Contains(h) && !configHashes.Contains(h) && !vaultHashes.Contains(h) && !lostHashes.Contains(h))), null);
     }
 }
