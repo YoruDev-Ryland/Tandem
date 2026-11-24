@@ -73,6 +73,25 @@ public class FilesGateTests
     }
 
     [Fact]
+    public async Task A_hold_cancelled_while_draining_lets_writers_in()
+    {
+        var gate = new FilesGate();
+        var write = await gate.EnterWriteAsync(default);
+        using var cts = new CancellationTokenSource();
+        var hold = gate.HoldAsync(Soon, cts.Token);
+        var waiting = gate.EnterWriteAsync(default);
+        await Task.Delay(100);
+        Assert.False(waiting.IsCompleted);
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => hold);
+
+        Assert.False(gate.Holding);
+        using var proceeded = await waiting.WaitAsync(Soon);
+        write.Dispose();
+    }
+
+    [Fact]
     public async Task Blob_put_during_a_hold_is_503_server_moving_with_retry_after_15()
     {
         using var f = new ServerFactory();

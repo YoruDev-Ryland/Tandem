@@ -45,8 +45,8 @@ public sealed class BlobStore(FilesLocation location, FilesGate gate, IBlobPutHo
         var path = PathFor(userId, expectedHash);
         var exists = File.Exists(path);
         var tmp = $"{path}.tmp-{Guid.NewGuid():N}";
-        string? staged = null; // a copy beside the final path, when a switch moved it while the body streamed
-        var moved = false;
+        string? staged = null; // a copy made beside the final path when a switch moved the root; deleted unless renamed
+        var tmpRenamed = false; // tmp itself was renamed into place, so there is nothing of it to delete
         FileStream? file = null;
         try
         {
@@ -91,10 +91,10 @@ public sealed class BlobStore(FilesLocation location, FilesGate gate, IBlobPutHo
                     if (!string.Equals(Path.GetDirectoryName(tmp), dir, StringComparison.Ordinal))
                     {
                         staged = source = $"{finalPath}.tmp-{Guid.NewGuid():N}";
-                        File.Copy(tmp, source, overwrite: true);
+                        await CopyDurablyAsync(tmp, source, ct);
                     }
                     File.Move(source, finalPath, overwrite: true); // same directory: atomic; same content if racing
-                    if (staged is null) moved = true; else staged = null;
+                    if (ReferenceEquals(source, tmp)) tmpRenamed = true; else staged = null;
                     Durability.SyncDirectory(dir); // and the rename itself survives a power cut
                 }
             }
@@ -103,9 +103,21 @@ public sealed class BlobStore(FilesLocation location, FilesGate gate, IBlobPutHo
         finally
         {
             if (file is not null) await file.DisposeAsync();
-            if (!moved) TryDelete(tmp);
+            if (!tmpRenamed) TryDelete(tmp);
             if (staged is not null) TryDelete(staged);
         }
+    }
+
+    /// <summary>Copies to the disk, not just the OS cache, so the rename that follows never exposes a half-written blob.</summary>
+    private static async Task CopyDurablyAsync(string from, string to, CancellationToken ct)
+    {
+        await using var input = new FileStream(from, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using var output = new FileStream(to, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await input.CopyToAsync(output, ct);
+        await output.FlushAsync(ct);
+        output.Flush(flushToDisk: true);
     }
 
     private static void TryDelete(string path)

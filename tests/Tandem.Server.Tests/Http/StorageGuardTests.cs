@@ -17,6 +17,7 @@ public class StorageGuardTests
     {
         public long? Free { get; set; } = 100L << 30;
         public int Calls { get; private set; }
+        public long? TotalBytes(string directory) => 500L << 30;
         /// <summary>Overrides <see cref="Free"/> for directories under this path (the files location).</summary>
         public string? LowUnder { get; set; }
         public long? LowFree { get; set; }
@@ -107,6 +108,32 @@ public class StorageGuardTests
             Assert.Equal("storage_full", (await refused.ReadAsync<ErrorResponse>()).Code);
         }
         finally { Directory.Delete(other, true); }
+    }
+
+    [Fact]
+    public async Task A_hold_on_a_low_disk_answers_server_moving_not_storage_full()
+    {
+        var (f, probe) = NewFactory();
+        using var _ = f;
+        var (device, _) = await f.Register("a@example.com");
+        probe.Free = 10L << 20;
+        f.Time.Advance(StorageMonitor.CacheFor);
+        using var hold = await f.Services.GetRequiredService<Tandem.Server.Blobs.FilesGate>().HoldAsync(TimeSpan.FromSeconds(10), default);
+
+        var r = await PutBlob(device, "two"u8.ToArray());
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, r.StatusCode);
+        Assert.Equal("server_moving", (await r.ReadAsync<ErrorResponse>()).Code);
+    }
+
+    [Fact]
+    public void The_drive_probe_reports_total_and_free_space_and_fails_open()
+    {
+        var probe = new DriveFreeSpaceProbe();
+        var dir = Path.GetTempPath();
+        Assert.True(probe.TotalBytes(dir) > 0);
+        Assert.True(probe.TotalBytes(dir) >= probe.FreeBytes(dir));
+        Assert.Null(probe.TotalBytes("\0bad"));
     }
 
     [Fact]

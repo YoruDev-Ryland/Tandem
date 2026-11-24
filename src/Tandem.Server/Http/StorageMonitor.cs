@@ -8,6 +8,9 @@ public interface IFreeSpaceProbe
 {
     /// <summary>Free bytes available to this process, or null when it cannot be read.</summary>
     long? FreeBytes(string directory);
+
+    /// <summary>Total size of the volume that holds the directory, or null when it cannot be read.</summary>
+    long? TotalBytes(string directory);
 }
 
 public sealed class DriveFreeSpaceProbe : IFreeSpaceProbe
@@ -15,6 +18,12 @@ public sealed class DriveFreeSpaceProbe : IFreeSpaceProbe
     public long? FreeBytes(string directory)
     {
         try { return new DriveInfo(Path.GetFullPath(directory)).AvailableFreeSpace; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
+    }
+
+    public long? TotalBytes(string directory)
+    {
+        try { return new DriveInfo(Path.GetFullPath(directory)).TotalSize; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
     }
 }

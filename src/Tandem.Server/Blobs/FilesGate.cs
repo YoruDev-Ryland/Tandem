@@ -17,7 +17,8 @@ public sealed class FilesGate
     public bool Holding => _holding;
 
     /// <summary>A move is running (set by the move job; read by the pruner, backup and deletes).</summary>
-    public bool Moving { get; set; }
+    public bool Moving { get => _moving; set => _moving = value; }
+    private volatile bool _moving;
 
     private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -44,6 +45,7 @@ public sealed class FilesGate
     /// null (and the hold is dropped) when they do not finish within <paramref name="timeout"/>.</summary>
     public async Task<IDisposable?> HoldAsync(TimeSpan timeout, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Task drained;
         lock (_lock)
         {
