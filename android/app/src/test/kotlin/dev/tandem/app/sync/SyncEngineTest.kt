@@ -815,6 +815,30 @@ class SyncEngineTest {
         assertEquals(1, api.saves.size)
     }
 
+    @Test fun a_scan_that_hits_no_hold_clears_moving() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.moving = true
+        val e = engine()
+        e.fullScan()
+        assertTrue(e.serverMoving())
+        api.moving = false
+        File(root, "saves/GAME1").deleteRecursively()   // nothing left to upload
+        e.fullScan()
+        assertFalse(e.serverMoving())
+    }
+
+    @Test fun a_non_blob_success_during_a_hold_keeps_moving() = runBlocking {
+        put("saves/GAME2/a.sav", "world")
+        val e = engine()
+        e.fullScan()                                    // the server now holds the "world" blob
+        put("saves/GAME1/a.sav", "hello")               // needs a blob PUT: held
+        put("saves/GAME3/a.sav", "world")               // its blob is there: a manifest-only upload goes through
+        api.moving = true
+        e.fullScan()
+        assertTrue(api.saves.any { it.gameKey == "GAME3" })
+        assertTrue(e.serverMoving())
+    }
+
     @Test fun a_storage_event_clears_moving() = runBlocking {
         put("saves/GAME1/a.sav", "hello")
         api.moving = true

@@ -37,6 +37,12 @@ class WorkPlannerTest {
         assertEquals(listOf(SyncWork.FullScan), WorkPlanner(autoApply = true).storageEvent())
     }
 
+    @Test fun a_scan_that_hit_a_hold_is_retried_after_retry_after() {
+        val p = WorkPlanner(autoApply = false)
+        assertEquals(15_000L, p.afterScan(moving = true))
+        assertNull(p.afterScan(moving = false))
+    }
+
     @Test fun auto_apply_off_still_scans_on_reconnect() {
         val p = WorkPlanner(autoApply = false)
         assertEquals(listOf(SyncWork.FullScan), p.streamOpened(reconnect = true))

@@ -325,6 +325,18 @@ class SyncService : Service() {
         }
     }
 
+    private var rescanJob: kotlinx.coroutines.Job? = null
+
+    /** Queues one more full scan after [ms]; a scan already pending covers this one. */
+    @Synchronized
+    private fun rescanAfter(s: Session, ms: Long) {
+        if (rescanJob?.isActive == true) return
+        rescanJob = scope.launch {
+            delay(ms)
+            s.queue.offer(SyncWork.FullScan)
+        }
+    }
+
     /** Runs one work item. Everything but [FsUnavailableException] and cancellation is logged and swallowed. */
     private suspend fun handle(s: Session, w: SyncWork) {
         var error: Throwable? = null
@@ -360,6 +372,7 @@ class SyncService : Service() {
                 val ok = scanSucceeded(error, s.engine.queuedCount())
                 countScan(ok)
                 if (ok) AppGraph.synced(this)
+                s.planner.afterScan(s.engine.serverMoving())?.let { rescanAfter(s, it) }
             }
             if (w != SyncWork.Tick && w != SyncWork.Monitor && w != SyncWork.InstallUpdate) publish()
         }

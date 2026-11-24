@@ -119,6 +119,7 @@ class SyncEngine(
     /** Detects modules, reports status and installs, then uploads every changed item and idle config bundle. */
     suspend fun fullScan(): Unit = mutex.withLock {
         movingHitInScan = false
+        moving = false                 // the flag reflects this scan: a hold still on sets it again
         dropServerRecords(force = true)
         val found = LinkedHashMap<String, Pair<EmulatorModule, Detected>>()
         for (m in registry.all()) detectOne(m)?.let { found[m.emulatorId] = m to it }
@@ -302,7 +303,7 @@ class SyncEngine(
     /** Items and config bundles whose last upload failed on a server or network error (retried by the next scan). */
     fun queuedCount(): Int = synchronized(ev) { queued.size }
 
-    /** The server is moving its files and holds uploads: true after a 503 `server_moving` until an upload goes through or [storageChanged]. */
+    /** The server is moving its files and holds uploads: true when the last full scan met a 503 `server_moving`, until the next scan or [storageChanged]. */
     fun serverMoving(): Boolean = moving
 
     /** The server's `storage` event: a hold started or ended. Forget what was learned; the scan it plans finds out. */
@@ -472,7 +473,6 @@ class SyncEngine(
     /** Records whether the upload of [key] failed ([status] null from [apiCall]) for [queuedCount]. */
     private fun queueing(key: String, status: SaveUploadStatus?): SaveUploadStatus? {
         synchronized(ev) { if (status == null) queued += key else queued -= key }
-        if (status != null) moving = false
         return status
     }
 

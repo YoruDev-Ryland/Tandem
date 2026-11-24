@@ -142,6 +142,17 @@ class ApiClientTest {
         } finally { stream.stop() }
     }
 
+    @Test fun a_storage_event_calls_on_storage() {
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "text/event-stream")
+            .body("event: storage\ndata: {}\n\n").build())
+        val latch = CountDownLatch(1)
+        val stream = EventStream(OkHttpClient(), base(), "k", { fail("not a deliveries event") }, {}, onStorage = { latch.countDown() })
+        stream.start()
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS))
+        } finally { stream.stop() }
+    }
+
     @Test fun the_default_read_timeout_outlasts_two_missed_pings() {
         assertTrue(SSE_READ_TIMEOUT_MS in 60_000L..90_000L)
     }

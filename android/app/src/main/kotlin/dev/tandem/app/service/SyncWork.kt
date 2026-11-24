@@ -97,6 +97,12 @@ class WorkPlanner(private val autoApply: Boolean, private val flags: ApplyOnExit
     /** The server's `storage` event: a hold on uploads started or ended. Scans, which sends what was held. */
     fun storageEvent(): List<SyncWork> = listOf(SyncWork.FullScan)
 
+    /**
+     * How long to wait before rescanning after a full scan, or null for no rescan. A scan the server's hold turned
+     * away ([moving]) runs again after the server's `Retry-After` (a fixed [MOVING_RETRY_MS]).
+     */
+    fun afterScan(moving: Boolean): Long? = if (moving) MOVING_RETRY_MS else null
+
     /** The periodic delivery poll. */
     fun poll(): List<SyncWork> = applyIfAuto()
 
@@ -161,6 +167,8 @@ class WorkPlanner(private val autoApply: Boolean, private val flags: ApplyOnExit
     fun monitor(): List<SyncWork> = listOf(SyncWork.Monitor)
     fun periodicScan(): List<SyncWork> = listOf(SyncWork.FullScan)
     fun explicitScan(): List<SyncWork> = listOf(SyncWork.FullScan)
+
+    companion object { const val MOVING_RETRY_MS = 15_000L }
 
     private fun applyIfAuto(): List<SyncWork> = if (autoApply) listOf(SyncWork.ApplyAll) else emptyList()
 }
