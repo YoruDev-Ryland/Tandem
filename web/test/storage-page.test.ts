@@ -7,7 +7,8 @@ import { dispatch } from "../src/lib/input/actions";
 import { session } from "../src/lib/session.svelte";
 import { gamePath } from "../src/lib/api/paths";
 import type { StorageUsage } from "../src/lib/api/types";
-import { cycleView, diskRuler, gapLayout, kindRows, labelLines, olderLine, shade, tileTip, tipPlace, usedBytes } from "../src/lib/storage/page";
+import { cycleView, deepSpine, diskRuler, gapLayout, kindRows, labelLines, olderLine, shade, tileTip, tipPlace, usedBytes } from "../src/lib/storage/page";
+import { SPINES } from "../src/lib/spines";
 import { storageUsage } from "../src/pages/_storageFixture";
 
 const MB = 1024 * 1024;
@@ -50,10 +51,17 @@ describe("storage page helpers", () => {
     expect(tipPlace(700, 250, 800, 300)).toEqual({ left: 688, top: 238, flipX: true, flipY: true });
   });
 
-  it("shades a game from its emulator's colour, the first one unchanged", () => {
-    expect(shade("#44484E", 0)).toBe("#44484E");
-    expect(shade("#44484E", 1)).toBe("color-mix(in srgb, #44484E 93%, #fff)");
-    expect(shade("#44484E", 2)).toBe("color-mix(in srgb, #44484E 94%, #000)");
+  it("shades a game from its emulator's spine towards the spine's own ink, the first one unchanged", () => {
+    expect(shade("#44484E", "#F4F2EA", 0)).toBe("#44484E");
+    expect(shade("#44484E", "#F4F2EA", 1)).toBe("color-mix(in srgb, #44484E 92%, #F4F2EA)");
+    expect(shade("#D2CEC2", "#2A2925", 2)).toBe("color-mix(in srgb, #D2CEC2 97%, #2A2925)");
+  });
+
+  it("marks the spines that sink into the dark page", () => {
+    expect(deepSpine(SPINES.PSP![0])).toBe(true);
+    expect(deepSpine(SPINES.GC![0])).toBe(true);
+    expect(deepSpine(SPINES.SWITCH![0])).toBe(false);
+    expect(deepSpine(SPINES.DS![0])).toBe(false);
   });
 
   it("lays tiles out with a gap between them and none at the edges", () => {
@@ -92,7 +100,7 @@ const reply = (status: number, body?: unknown) =>
 interface Call { method: string; url: string; body?: any }
 let admin = true;
 
-function serve(usage: StorageUsage, view = "map"): Call[] {
+function serve(usage: StorageUsage, view = "map", failPut = false): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -102,7 +110,7 @@ function serve(usage: StorageUsage, view = "map"): Call[] {
       case "GET /v1/account": return reply(200, { id: "u1", email: "me@x.test", isAdmin: admin });
       case "GET /v1/settings/storage": return reply(200, admin ? usage : { ...usage, server: null });
       case "GET /v1/settings/storage-view": return reply(200, { view });
-      case "PUT /v1/settings/storage-view": return reply(204);
+      case "PUT /v1/settings/storage-view": return failPut ? reply(500, { code: "error", message: "no" }) : reply(204);
       case "GET /v1/server-info": return reply(200, { name: "Tandem", protocol: 1, registrationOpen: false, version: "1.2.3" });
     }
     return reply(404, { code: "not_found", message: "no" });
@@ -110,10 +118,10 @@ function serve(usage: StorageUsage, view = "map"): Call[] {
   return calls;
 }
 
-async function show(opts: { admin?: boolean; usage?: StorageUsage; view?: string } = {}) {
+async function show(opts: { admin?: boolean; usage?: StorageUsage; view?: string; failPut?: boolean } = {}) {
   admin = opts.admin ?? true;
   router.go("/settings?s=storage");
-  const calls = serve(opts.usage ?? storageUsage, opts.view);
+  const calls = serve(opts.usage ?? storageUsage, opts.view, opts.failPut);
   await session.check();
   render(Storage);
   return calls;
@@ -132,18 +140,47 @@ describe("Storage page", () => {
     expect(pressed()).toBe("Bars");
   });
 
-  it("switches views from the control and from L2/R2, saving each choice", async () => {
+  it("switches views from the control and from Y, saving each choice, and leaves L2/R2 alone", async () => {
     const calls = await show();
     await screen.findByRole("group", { name: "Storage map" });
     expect(pressed()).toBe("Map");
     await fireEvent.click(within(views()).getByRole("button", { name: "Blocks" }));
     expect(pressed()).toBe("Blocks");
-    expect(dispatch("r2")).toBe(true);
+    expect(dispatch("y")).toBe(true);
     await waitFor(() => expect(pressed()).toBe("Map"));
-    dispatch("l2");
-    await waitFor(() => expect(pressed()).toBe("Blocks"));
+    dispatch("y");
+    await waitFor(() => expect(pressed()).toBe("Bars"));
+    expect(dispatch("r2")).toBe(false);
+    expect(dispatch("l2")).toBe(false);
     const puts = calls.filter((c) => c.method === "PUT").map((c) => c.body.view);
-    expect(puts).toEqual(["blocks", "map", "blocks"]);
+    expect(puts).toEqual(["blocks", "map", "bars"]);
+    expect(within(views()).getByText("Y")).toBeTruthy();
+  });
+
+  it("says so quietly when the view can't be saved", async () => {
+    await show({ failPut: true });
+    await screen.findByRole("group", { name: "Storage map" });
+    await fireEvent.click(within(views()).getByRole("button", { name: "Bars" }));
+    const line = await screen.findByText("This view couldn't be saved for next time.");
+    expect(line.classList.contains("note")).toBe(true);
+    expect(pressed()).toBe("Bars");
+  });
+
+  it("shows the same total on every view", async () => {
+    const totals: string[] = [];
+    for (const view of ["map", "bars", "blocks"]) {
+      await show({ view });
+      await screen.findByRole("heading", { name: "By kind" });
+      const hero = document.querySelector(".hero")!;
+      totals.push(view === "blocks" ? hero.querySelector(".note")!.textContent!.split(" · ")[0]! : hero.querySelector("b")!.textContent!);
+      cleanup();
+    }
+    expect(totals).toEqual(["116.0 MB", "116.0 MB", "116.0 MB"]);
+  });
+
+  it("labels the disk ruler's Tandem mark as all accounts", async () => {
+    await show({ view: "bars" });
+    expect(await screen.findByText("All accounts 117.5 MB")).toBeTruthy();
   });
 
   it("zooms the map into an emulator, then back with B", async () => {
@@ -160,19 +197,35 @@ describe("Storage page", () => {
     expect(dispatch("b")).toBe(false);
   });
 
+  it("leaves the arrows to the page until the map has focus", async () => {
+    await show();
+    const map = await screen.findByRole("group", { name: "Storage map" });
+    expect(dispatch("right")).toBe(false);
+    expect(dispatch("a")).toBe(false);
+    within(views()).getByRole("button", { name: "Bars" }).focus();
+    expect(dispatch("left")).toBe(false);
+    within(map).getByRole("button", { name: /^Eden,/ }).focus();
+    expect(dispatch("right")).toBe(true);
+  });
+
   it("moves the cursor with the arrows and opens a game with A", async () => {
     await show();
     const map = await screen.findByRole("group", { name: "Storage map" });
     // The cursor starts on the largest tile, Eden; A zooms in and puts it on Eden's largest game.
     const eden = within(map).getByRole("button", { name: /^Eden,/ });
     expect(eden.classList.contains("cur")).toBe(true);
+    eden.focus();
     dispatch("a");
     const zelda = await within(map).findByRole("button", { name: /^The Legend of Zelda: Tears of the Kingdom,/ });
     expect(zelda.classList.contains("cur")).toBe(true);
+    // Focus follows the cursor onto the zoomed tiles, so the arrows stay with the map.
+    await waitFor(() => expect(document.activeElement).toBe(zelda));
     expect(dispatch("right") || dispatch("down")).toBe(true);
     await waitFor(() => expect(zelda.classList.contains("cur")).toBe(false));
     const cur = map.querySelector(".cur") as HTMLElement;
-    expect(screen.getByRole("tooltip").textContent).toContain(cur.getAttribute("aria-label")!.split(",")[0]);
+    const tip = screen.getByRole("tooltip");
+    expect(tip.textContent).toContain(cur.getAttribute("aria-label")!.split(",")[0]);
+    expect(cur.getAttribute("aria-describedby")).toBe(tip.id);
     dispatch("a");
     expect(router.path.startsWith("/games/eden/")).toBe(true);
   });
@@ -247,6 +300,24 @@ describe("Storage page", () => {
     expect(screen.getByText(/blocks with a notch/)).toBeTruthy();
   });
 
+  it("gives each block group a button, moved between with the arrows, with its tip linked", async () => {
+    await show({ view: "blocks" });
+    const card = await screen.findByRole("group", { name: "Storage blocks" });
+    const zelda = within(card).getByRole("button", { name: "The Legend of Zelda: Tears of the Kingdom, 18 blocks, 17.8 MB" });
+    expect(within(card).getByRole("button", { name: "Pokémon Platinum, 20 blocks, 20.3 MB" })).toBeTruthy();
+    // Only the cursor's group is in the tab order.
+    expect(zelda.tabIndex).toBe(0);
+    expect(dispatch("right")).toBe(false);
+    zelda.focus();
+    expect(dispatch("right")).toBe(true);
+    const trails = within(card).getByRole("button", { name: /^Trails in the Sky 1st Chapter, 17 blocks/ });
+    await waitFor(() => expect(trails.tabIndex).toBe(0));
+    expect(zelda.tabIndex).toBe(-1);
+    const tip = screen.getByRole("tooltip");
+    expect(tip.textContent).toContain("Trails in the Sky 1st Chapter");
+    expect(trails.getAttribute("aria-describedby")).toBe(tip.id);
+  });
+
   it("ranks games in Bars, ten at first, then all", async () => {
     await show({ view: "bars" });
     const games = await screen.findByRole("list", { name: "Largest games" });
@@ -260,7 +331,7 @@ describe("Storage page", () => {
 describe("Storage inside Settings", () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-  it("B zooms the map out before it leaves the page, and L2/R2 switch views not sections", async () => {
+  it("B zooms the map out before it leaves the page, and L2/R2 move between sections", async () => {
     admin = true;
     router.go("/settings?s=storage");
     serve(storageUsage);
@@ -272,8 +343,7 @@ describe("Storage inside Settings", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "All" })).toBeNull());
     expect(router.path).toBe("/settings");
     dispatch("r2");
-    await waitFor(() => expect(pressed()).toBe("Bars"));
-    expect(router.search).toBe("?s=storage");
+    await waitFor(() => expect(router.search).toBe("?s=notifications"));
   });
 
   it("the Retention link opens the Retention section", async () => {

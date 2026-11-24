@@ -76,14 +76,28 @@ export function tipPlace(x: number, y: number, boxW: number, boxH: number): { le
   return { left: flipX ? x - 12 : x + 12, top: flipY ? y - 12 : y + 12, flipX, flipY };
 }
 
-// Small steps lighter and darker, so a game stands apart from the next one in its emulator's colour.
-const STEPS = [0, 7, -6, 4, -10, 10, -3, 2];
+// Small steps towards the spine's own text colour, so a game stands apart from the next one in its emulator's colour.
+// The spine pair is the only source: no colour enters that the shelf doesn't already use.
+const STEPS = [0, 8, 3, 12, 5, 10, 1, 6];
 
-/** The k-th game's shade of its emulator's colour. */
-export function shade(colour: string, k: number): string {
+/** The k-th game's shade of its emulator's spine colour, mixed a little towards the spine's ink. */
+export function shade(colour: string, ink: string, k: number): string {
   const s = STEPS[k % STEPS.length]!;
-  if (s === 0) return colour;
-  return `color-mix(in srgb, ${colour} ${100 - Math.abs(s)}%, ${s > 0 ? "#fff" : "#000"})`;
+  return s === 0 ? colour : `color-mix(in srgb, ${colour} ${100 - s}%, ${ink})`;
+}
+
+/** Relative luminance (WCAG) of a "#rrggbb" colour. */
+function luminance(hex: string): number {
+  const lin = (i: number) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(1) + 0.7152 * lin(3) + 0.0722 * lin(5);
+}
+
+/** A spine so dark it sinks into the dark page (PSP, GameCube): its tiles and blocks get a stronger edge. */
+export function deepSpine(colour: string | undefined): boolean {
+  return !!colour && /^#[0-9a-f]{6}$/i.test(colour) && luminance(colour) < 0.045;
 }
 
 export interface Tip {

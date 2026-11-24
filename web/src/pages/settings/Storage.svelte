@@ -27,17 +27,22 @@
     );
   });
 
+  // The view still changes when saving it fails; the line says it won't be there next time.
+  let unsaved = $state(false);
   function choose(v: StorageView) {
     if (v === view) return;
     view = v;
-    setStorageView(v).catch(() => {});
+    setStorageView(v).then(
+      () => (unsaved = false),
+      () => (unsaved = true),
+    );
   }
 
-  // L2/R2 cycle the view here, ahead of the Settings sections.
+  // Y cycles the view; L2/R2 stay with the Settings sections.
   $effect(() =>
     onAction((a) => {
-      if ((a !== "l2" && a !== "r2") || !view || !usage.data || usage.data.totalBytes === 0) return false;
-      choose(cycleView(view, a === "r2" ? 1 : -1));
+      if (a !== "y" || !view || !usage.data || usage.data.totalBytes === 0) return false;
+      choose(cycleView(view, 1));
       return true;
     }),
   );
@@ -48,16 +53,17 @@
     <h2>Storage</h2>
     {#if usage.data && usage.data.totalBytes > 0 && view}
       <div class="views" role="group" aria-label="View">
-        {#if gamepad.connected}<Glyph action="l2" />{/if}
+        {#if gamepad.connected}<Glyph action="y" />{:else}<kbd aria-hidden="true">Y</kbd>{/if}
         <span class="seg">
           {#each VIEWS as v (v)}
             <button type="button" aria-pressed={v === view} onclick={() => choose(v)}>{VIEW_LABEL[v]}</button>
           {/each}
         </span>
-        {#if gamepad.connected}<Glyph action="r2" />{/if}
       </div>
     {/if}
   </div>
+
+  {#if unsaved}<p class="note">This view couldn't be saved for next time.</p>{/if}
 
   {#if usage.error && !usage.data}
     <ErrorLine error={usage.error} />
@@ -88,6 +94,16 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+  kbd {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 6px;
+    border: 1.5px solid var(--rule2);
+    border-radius: 3px;
+    color: var(--ink2);
+    font: 600 12px/1 "Barlow", system-ui, sans-serif;
   }
   .seg {
     display: inline-flex;

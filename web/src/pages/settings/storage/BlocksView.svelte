@@ -6,7 +6,8 @@
   import { onAction } from "../../../lib/input/actions";
   import { router } from "../../../lib/router.svelte";
   import { blockGroups, blockLayout } from "../../../lib/storage/blocks";
-  import { tileTip } from "../../../lib/storage/page";
+  import { tick } from "svelte";
+  import { deepSpine, tileTip, usedBytes } from "../../../lib/storage/page";
   import type { Tile } from "../../../lib/storage/tiles";
   import StorageTip from "./StorageTip.svelte";
 
@@ -20,7 +21,6 @@
   const blocks = $derived(blockLayout(laid.groups.map((g) => ({ id: g.tile.id, bytes: g.tile.value, olderBytes: g.tile.olderBytes ?? 0 })), unit));
   const free = $derived((COLS - (blocks.length % COLS)) % COLS);
   const notched = $derived(blocks.filter((b) => b.notched).length);
-  const bytes = $derived(laid.groups.reduce((s, g) => s + g.tile.value, 0));
 
   interface Key { id: string; label: string; kind: Tile["kind"]; colour?: string; emulatorId?: string; count: number }
   const keys = $derived.by(() => {
@@ -38,71 +38,102 @@
     return [...out.values()];
   });
 
-  let cursor = $state(0);
-  // The cursor shows once the keys or the pointer are on the card.
+  // The cursor is on a group (one game, an emulator's small games, the rest, art, the database), not on a block.
+  const order = $derived([...new Set(blocks.map((b) => b.group))]);
+  const firstOf = $derived.by(() => {
+    const m = new Map<string, number>();
+    blocks.forEach((b, i) => {
+      if (!m.has(b.group)) m.set(b.group, i);
+    });
+    return m;
+  });
+  const countOf = (id: string) => blocks.filter((b) => b.group === id).length;
+  let cursorId = $state<string | null>(null);
+  const cursor = $derived(cursorId && firstOf.has(cursorId) ? cursorId : (order[0] ?? null));
+  const focusKey = $derived(cursor ? groupOf.get(cursor)?.key : undefined);
+
+  // The card shows its cursor, and takes the arrows and A, only while someone is on it: focus inside, or keys or the
+  // pointer lit it.
   let lit = $state(false);
-  const at = $derived(Math.min(cursor, Math.max(0, blocks.length - 1)));
-  const focusKey = $derived(blocks[at] ? groupOf.get(blocks[at].group)?.key : undefined);
+  let focusIn = $state(false);
+  const engaged = () => lit || !!grid?.contains(document.activeElement);
+  const uid = $props.id();
+  const tipId = `${uid}-tip`;
 
   let grid = $state<HTMLDivElement>();
-  let tip = $state<{ i: number; x: number; y: number } | null>(null);
+  let tip = $state<{ id: string; x: number; y: number } | null>(null);
   let box = $state({ w: 600, h: 300 });
 
-  function place(i: number, x?: number, y?: number) {
+  function place(id: string, x?: number, y?: number) {
     if (!grid) return;
-    const el = grid.children[i] as HTMLElement | undefined;
     const g = grid.getBoundingClientRect();
     box = { w: g.width || 600, h: g.height || 300 };
     if (x === undefined || y === undefined) {
-      const r = el?.getBoundingClientRect();
+      const r = (grid.children[firstOf.get(id) ?? 0] as HTMLElement | undefined)?.getBoundingClientRect();
       x = r ? r.left - g.left + r.width / 2 : 0;
       y = r ? r.top - g.top + r.height / 2 : 0;
     }
-    tip = { i, x, y };
+    tip = { id, x, y };
   }
 
   function pointerMove(e: PointerEvent) {
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-i]");
     if (!el || !grid) return;
-    const i = Number(el.dataset.i);
-    cursor = i;
+    const b = blocks[Number(el.dataset.i)];
+    if (!b) return;
+    cursorId = b.group;
     lit = true;
     const g = grid.getBoundingClientRect();
-    place(i, e.clientX - g.left, e.clientY - g.top);
+    place(b.group, e.clientX - g.left, e.clientY - g.top);
   }
 
-  function open(i: number) {
-    const t = blocks[i] ? groupOf.get(blocks[i].group)?.tile : undefined;
+  function open(id: string) {
+    const t = groupOf.get(id)?.tile;
     if (t?.kind === "game") router.go(gamePath(t.emulatorId!, t.gameKey!));
+  }
+
+  /** The group the arrow leads to: the next or previous group, or the first other group a row up or down. */
+  function step(from: string, a: "up" | "down" | "left" | "right"): string | null {
+    if (a === "left" || a === "right") return order[order.indexOf(from) + (a === "right" ? 1 : -1)] ?? null;
+    const d = a === "down" ? COLS : -COLS;
+    for (let i = firstOf.get(from)! + d; i >= 0 && i < blocks.length; i += d) if (blocks[i]!.group !== from) return blocks[i]!.group;
+    return null;
+  }
+
+  async function focusCursor() {
+    await tick();
+    if (grid?.contains(document.activeElement)) grid.querySelector<HTMLElement>("button[tabindex='0']")?.focus({ preventScroll: true });
   }
 
   $effect(() =>
     onAction((a) => {
-      if (!blocks.length) return false;
-      const step = a === "left" ? -1 : a === "right" ? 1 : a === "up" ? -COLS : a === "down" ? COLS : 0;
-      if (step) {
+      if (!cursor || !engaged()) return false;
+      if (a === "up" || a === "down" || a === "left" || a === "right") {
         lit = true;
-        const to = at + step;
-        if (to >= 0 && to < blocks.length) cursor = to;
-        place(cursor === to ? to : at);
+        const to = step(cursor, a);
+        if (to) {
+          cursorId = to;
+          void focusCursor();
+        }
+        place(to ?? cursor);
         return true;
       }
       if (a === "a") {
-        open(at);
+        open(cursor);
         return true;
       }
       return false;
     }),
   );
 
-  const tipTile = $derived(tip && blocks[tip.i] ? groupOf.get(blocks[tip.i].group)?.tile : undefined);
+  const tipTile = $derived(tip ? groupOf.get(tip.id)?.tile : undefined);
   const tipFor = (t: Tile) => {
     const base = tileTip(t, u);
-    const n = blocks.filter((b) => b.group === t.id).length;
+    const n = countOf(t.id);
     return { title: base.title, lines: [...base.lines, `${n} ${n === 1 ? "block" : "blocks"}`] };
   };
   const heroNote = $derived(
-    [`${formatSize(bytes)}`, `1 block = ${unit} MB`, ...(isAdmin && u.server?.diskFreeBytes != null ? [`${formatSize(u.server.diskFreeBytes)} free on the disk`] : [])].join(" · "),
+    [formatSize(usedBytes(u, isAdmin)), `1 block = ${unit} MB`, ...(isAdmin && u.server?.diskFreeBytes != null ? [`${formatSize(u.server.diskFreeBytes)} free on the disk`] : [])].join(" · "),
   );
   const swatch = (k: { kind: Tile["kind"]; colour?: string }) => (k.colour ? `background: ${k.colour}` : "");
 </script>
@@ -117,35 +148,62 @@
 
 <div class="side">
   <div class="wrap">
-    <div class="card" class:lit role="group" aria-label="Storage blocks" bind:this={grid} onpointermove={pointerMove} onpointerleave={() => {
+    <div
+      class="card"
+      class:lit={lit || focusIn}
+      role="group"
+      aria-label="Storage blocks"
+      bind:this={grid}
+      onpointermove={pointerMove}
+      onpointerleave={() => {
         tip = null;
         lit = false;
-      }}>
+      }}
+      onfocusin={() => (focusIn = true)}
+      onfocusout={(e) => (focusIn = !!grid?.contains(e.relatedTarget as Node | null))}
+    >
       {#each blocks as b, i (i)}
         {@const g = groupOf.get(b.group)!}
-        <i
-          data-i={i}
-          class={g.tile.kind}
-          class:notch={b.notched}
-          class:cur={lit && i === at}
-          class:act={g.tile.kind === "game"}
-          style:background={g.tile.colour}
-          onclick={() => {
-            cursor = i;
-            open(i);
-          }}
-          aria-hidden="true"
-        ></i>
+        {#if firstOf.get(b.group) === i}
+          <button
+            type="button"
+            data-i={i}
+            class={g.tile.kind}
+            class:notch={b.notched}
+            class:on={b.group === cursor}
+            class:deep={deepSpine(g.tile.colour)}
+            class:act={g.tile.kind === "game"}
+            style:background={g.tile.colour}
+            tabindex={b.group === cursor ? 0 : -1}
+            aria-label="{tipFor(g.tile).title}, {countOf(b.group)} {countOf(b.group) === 1 ? 'block' : 'blocks'}, {formatSize(g.tile.value)}"
+            aria-describedby={tip && tip.id === b.group ? tipId : undefined}
+            onclick={() => {
+              cursorId = b.group;
+              open(b.group);
+            }}
+          ></button>
+        {:else}
+          <i
+            data-i={i}
+            class={g.tile.kind}
+            class:notch={b.notched}
+            class:on={b.group === cursor}
+            class:deep={deepSpine(g.tile.colour)}
+            class:act={g.tile.kind === "game"}
+            style:background={g.tile.colour}
+            aria-hidden="true"
+          ></i>
+        {/if}
       {/each}
       {#each { length: free }, i (i)}<i class="free" aria-hidden="true"></i>{/each}
     </div>
     {#if tip && tipTile}
-      <StorageTip tip={tipFor(tipTile)} x={tip.x} y={tip.y} boxW={box.w} boxH={box.h} />
+      <StorageTip id={tipId} tip={tipFor(tipTile)} x={tip.x} y={tip.y} boxW={box.w} boxH={box.h} />
     {/if}
   </div>
   <ul class="key" aria-label="Key">
     {#each keys as k (k.id)}
-      <li class:focus={lit && k.id === focusKey}>
+      <li class:focus={(lit || focusIn) && k.id === focusKey}>
         <i class={k.kind} style={swatch(k)}></i>
         <span class="name">{k.label}</span>
         <span class="mono">{k.count}</span>
@@ -203,23 +261,35 @@
     grid-template-columns: repeat(20, 1fr);
     gap: 4px;
   }
-  .card i {
+  .card > i,
+  .card > button {
     display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
     aspect-ratio: 1;
     border-radius: 1px;
     box-shadow: inset 0 0 0 1px var(--rule2);
+    font: inherit;
   }
-  .card i.act {
+  .card > .deep {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent);
+  }
+  .card > .act {
     cursor: pointer;
   }
-  .card i.free {
+  .card > i.free {
     box-shadow: inset 0 0 0 1px var(--rule);
     background: none;
   }
-  .card i.notch {
+  .card > .notch {
     clip-path: polygon(0 0, 70% 0, 100% 30%, 100% 100%, 0 100%);
   }
-  .card i.cur {
+  /* While someone is on the card, the cursor's group stays and the others step back. */
+  .card.lit > :not(.on):not(.free) {
+    opacity: 0.35;
+  }
+  .card > button:focus-visible {
     outline: 2px solid var(--ink);
     outline-offset: 1px;
     clip-path: none;
@@ -290,6 +360,9 @@
   @media (prefers-reduced-motion: no-preference) {
     .key li {
       transition: background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+    .card > * {
+      transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1);
     }
     .link {
       transition: color 150ms cubic-bezier(0.23, 1, 0.32, 1);

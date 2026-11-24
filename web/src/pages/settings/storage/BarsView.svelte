@@ -4,7 +4,7 @@
   import { emulatorName } from "../../../lib/emulators";
   import { formatSize } from "../../../lib/format";
   import { spineColour } from "../../../lib/spines";
-  import { diskRuler, kindRows, SYSTEMS, usedBytes, type KindRow } from "../../../lib/storage/page";
+  import { deepSpine, diskRuler, kindRows, SYSTEMS, usedBytes, type KindRow } from "../../../lib/storage/page";
   import { EMULATOR_SYSTEM } from "../../../lib/storage/tiles";
   import { bareKey } from "../../../lib/systems";
 
@@ -63,7 +63,7 @@
 
 {#if ruler && server}
   <div class="disk">
-    <span class="lab {markAnchor}" style:left={pct(ruler.tandem)}>Tandem {formatSize(ruler.tandemBytes)}</span>
+    <span class="lab {markAnchor}" style:left={pct(ruler.tandem)}>All accounts {formatSize(ruler.tandemBytes)}</span>
     {#if ruler.tandem <= 0.7}<span class="lab" style:right="0">{formatSize(server.minFreeBytes)} kept free</span>{/if}
     <div class="track" aria-hidden="true">
       <div class="others" style:width={pct(ruler.others)}></div>
@@ -86,7 +86,7 @@
     {@const system = EMULATOR_SYSTEM[r.emulatorId] ?? null}
     <li>
       <span class="who">{emulatorName(r.emulatorId)}{#if SYSTEMS[r.emulatorId]}<small>{SYSTEMS[r.emulatorId]}</small>{/if}</span>
-      <span class="bar"><i style:width={share(r.bytes, emulatorMax)} style:background={spineColour(system)}></i></span>
+      <span class="bar"><i class:deep={deepSpine(spineColour(system))} style:width={share(r.bytes, emulatorMax)} style:background={spineColour(system)}></i></span>
       <span class="mono">{formatSize(r.bytes)}</span>
       <a class="link" href={exportZipUrl(r.emulatorId)} download aria-label="Export {emulatorName(r.emulatorId)}">Export</a>
     </li>
@@ -298,6 +298,9 @@
     min-width: 2px;
     height: 100%;
     box-shadow: inset 0 0 0 1px var(--rule2);
+  }
+  .bar i.deep {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent);
   }
   .bars .mono {
     text-align: right;

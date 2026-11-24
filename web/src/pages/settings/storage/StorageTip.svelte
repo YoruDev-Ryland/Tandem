@@ -2,11 +2,11 @@
   import { tipPlace, type Tip } from "../../../lib/storage/page";
 
   /** A tip beside the point (x, y) of a box boxW by boxH, flipped so it stays inside. */
-  let { tip, x, y, boxW, boxH }: { tip: Tip; x: number; y: number; boxW: number; boxH: number } = $props();
+  let { id, tip, x, y, boxW, boxH }: { id: string; tip: Tip; x: number; y: number; boxW: number; boxH: number } = $props();
   const at = $derived(tipPlace(x, y, boxW, boxH));
 </script>
 
-<div class="tip" class:fx={at.flipX} class:fy={at.flipY} role="tooltip" style:left="{at.left}px" style:top="{at.top}px">
+<div {id} class="tip" class:fx={at.flipX} class:fy={at.flipY} role="tooltip" style:left="{at.left}px" style:top="{at.top}px">
   <b>{tip.title}</b>
   {#each tip.lines as l, i (i)}<small>{l}</small>{/each}
 </div>

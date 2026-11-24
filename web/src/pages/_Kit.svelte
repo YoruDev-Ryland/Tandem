@@ -1,6 +1,7 @@
 <script lang="ts">
   // Dev-only page that renders every UI kit component. ?theme=light|dark forces a theme; ?pad=1 fakes a gamepad; ?dialog=1 opens the dialog.
-  // ?storage=map|bars|blocks shows that Storage view with a real server's numbers instead (&user=1: as a non-admin).
+  // ?storage=map|bars|blocks shows the Storage section, opened on that view, with a real server's numbers instead
+  // (&user=1: as a non-admin). Its calls are answered here, so no server is needed.
   import { onMount } from "svelte";
   import { ApiError } from "../lib/api/http";
   import type { DeviceSummary, FileDiff } from "../lib/api/types";
@@ -19,10 +20,8 @@
   import Empty from "../lib/ui/Empty.svelte";
   import ErrorLine from "../lib/ui/ErrorLine.svelte";
   import Field from "../lib/ui/Field.svelte";
-  import MapView from "./settings/storage/MapView.svelte";
-  import BarsView from "./settings/storage/BarsView.svelte";
-  import BlocksView from "./settings/storage/BlocksView.svelte";
-  import StorageLower from "./settings/storage/StorageLower.svelte";
+  import Storage from "./settings/Storage.svelte";
+  import { session } from "../lib/session.svelte";
   import { storageUsage } from "./_storageFixture";
   import "./settings/settings.css";
 
@@ -103,20 +102,25 @@
   let compare = $state("v6");
 
   const storageView = params.get("storage");
-  const storageAdmin = params.get("user") !== "1";
-  const storageData = storageAdmin ? storageUsage : { ...storageUsage, server: null };
+  if (storageView) {
+    const admin = params.get("user") !== "1";
+    const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+    const real = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/v1/account")) return json({ id: "kit", email: "kit@example.test", isAdmin: admin });
+      if (url.endsWith("/v1/settings/storage")) return json(admin ? storageUsage : { ...storageUsage, server: null });
+      if (url.endsWith("/v1/settings/storage-view")) return method === "GET" ? json({ view: storageView }) : new Response(null, { status: 204 });
+      return real(input, init);
+    };
+    void session.check();
+  }
 </script>
 
 {#if storageView}
   <main class="storage-kit">
-    <div class="sec wide">
-      <h2>Storage</h2>
-      {#if storageView === "bars"}<BarsView usage={storageData} isAdmin={storageAdmin} />
-      {:else if storageView === "blocks"}<BlocksView usage={storageData} isAdmin={storageAdmin} />
-      {:else}<MapView usage={storageData} isAdmin={storageAdmin} />
-      {/if}
-      <StorageLower usage={storageData} isAdmin={storageAdmin} />
-    </div>
+    {#if session.account}<Storage />{/if}
   </main>
 {:else}
 

@@ -5,7 +5,7 @@
   import { formatSize } from "../../../lib/format";
   import { onAction } from "../../../lib/input/actions";
   import { router } from "../../../lib/router.svelte";
-  import { diskNote, gapLayout, labelLines, shade, tileTip, usedBytes } from "../../../lib/storage/page";
+  import { deepSpine, diskNote, gapLayout, labelLines, shade, tileTip, usedBytes } from "../../../lib/storage/page";
   import { gameTiles, nestedGameTiles, topTiles, type Tile } from "../../../lib/storage/tiles";
   import { neighbour, type Rect } from "../../../lib/storage/treemap";
   import StorageTip from "./StorageTip.svelte";
@@ -49,7 +49,7 @@
       const t = byId.get(r.id)!;
       if (t.kind !== "emulator") continue;
       const games = nestedGameTiles(u, t.id, mapTotal);
-      out.set(t.id, gapLayout(games, r.w, r.h, GAP).map((rect, k) => ({ tile: games.find((g) => g.id === rect.id)!, rect, shade: shade(t.colour!, k), head: k === 0 })));
+      out.set(t.id, gapLayout(games, r.w, r.h, GAP).map((rect, k) => ({ tile: games.find((g) => g.id === rect.id)!, rect, shade: shade(t.colour!, t.ink!, k), head: k === 0 })));
     }
     return out;
   });
@@ -63,6 +63,10 @@
   let cursorId = $state<string | null>(null);
   // The cursor's outline shows once the keys or the pointer are on the map, not on a map nobody is using.
   let lit = $state(false);
+  const uid = $props.id();
+  const tipId = `${uid}-tip`;
+  // The map takes the arrows and A only while someone is on it: focus inside, or keys or the pointer lit it.
+  const engaged = () => lit || !!box?.contains(document.activeElement);
   const cursor = $derived(cursorId && byId.has(cursorId) ? cursorId : (rects[0]?.id ?? null));
 
   // The tip follows the pointer over a tile, or sits on the cursor's tile after a key moves it.
@@ -74,17 +78,19 @@
     tip = r ? { id, x: r.x + r.w / 2, y: r.y + r.h / 2 } : null;
   }
 
-  async function focusCursor() {
+  // Focus follows the cursor when it was on the map, including on a tile a zoom just took away.
+  async function focusCursor(had = !!box?.contains(document.activeElement)) {
     await tick();
-    if (box?.contains(document.activeElement)) box.querySelector<HTMLElement>(".cur")?.focus({ preventScroll: true });
+    if (had || box?.contains(document.activeElement)) box?.querySelector<HTMLElement>(".cur")?.focus({ preventScroll: true });
   }
 
   function zoomTo(id: string | null) {
+    const had = !!box?.contains(document.activeElement);
     const from = zoomed?.id;
     zoomId = id;
     tip = null;
     cursorId = id ? null : (from ?? null);
-    void focusCursor();
+    void focusCursor(had);
   }
 
   function activate(t: Tile) {
@@ -111,6 +117,11 @@
   $effect(() =>
     onAction((a) => {
       if (!cursor) return false;
+      if (a === "b" && zoomed) {
+        zoomTo(null);
+        return true;
+      }
+      if (!engaged()) return false;
       if (a === "up" || a === "down" || a === "left" || a === "right") {
         lit = true;
         const next = neighbour(rects, cursor, a);
@@ -124,10 +135,6 @@
       if (a === "a") {
         const t = byId.get(cursor);
         if (t) activate(t);
-        return true;
-      }
-      if (a === "b" && zoomed) {
-        zoomTo(null);
         return true;
       }
       return false;
@@ -193,6 +200,7 @@
     <button
       type="button"
       class="tile {t.kind}"
+      class:deep={!kids && deepSpine(t.colour)}
       class:cur={r.id === cursor}
       class:act={t.kind === "emulator" || t.kind === "game"}
       tabindex={r.id === cursor ? 0 : -1}
@@ -200,17 +208,19 @@
       style:top="{r.y}px"
       style:width="{r.w}px"
       style:height="{r.h}px"
-      style:background={kids ? "transparent" : t.colour && zoomed ? shade(t.colour, i) : t.colour}
+      style:background={kids ? "transparent" : t.colour && zoomed ? shade(t.colour, t.ink!, i) : t.colour}
       style:color={t.ink}
       data-tile={t.id}
       data-tip={kids ? undefined : t.id}
       aria-label="{t.label}, {formatSize(t.value)}"
+      aria-describedby={tip && tipTile && r.id === cursor ? tipId : undefined}
       onclick={(e) => click(e, t)}
     >
       {#if kids}
         {#each kids as k (k.tile.id)}
           <span
             class="tile inner"
+            class:deep={deepSpine(t.colour)}
             data-tip={k.tile.id}
             style:left="{k.rect.x}px"
             style:top="{k.rect.y}px"
@@ -227,7 +237,7 @@
     </button>
   {/each}
   {#if tip && tipTile}
-    <StorageTip tip={tileTip(tipTile, u)} x={tip.x} y={tip.y} boxW={width} boxH={H} />
+    <StorageTip id={tipId} tip={tileTip(tipTile, u)} x={tip.x} y={tip.y} boxW={width} boxH={H} />
   {/if}
 </div>
 
@@ -319,6 +329,10 @@
   }
   .tile.act {
     cursor: pointer;
+  }
+  /* A spine as dark as the page (PSP, GameCube) needs a firmer edge to stand off it. */
+  .tile.deep {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent);
   }
   .lit .tile.cur {
     outline: 2px solid var(--ink);
