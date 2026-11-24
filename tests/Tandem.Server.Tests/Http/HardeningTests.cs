@@ -179,6 +179,27 @@ public class HardeningTests
     }
 
     [Fact]
+    public async Task A_chain_of_known_proxies_forwards_the_client_address()
+    {
+        // Cloudflare (10.0.0.5 here) in front of Traefik (172.18.0.3): "client, cloudflare-edge".
+        using var f = ProxyFactory("172.18.0.3");
+        Assert.Equal(HttpStatusCode.Unauthorized, await LoginFrom(f, "203.0.113.1, 10.0.0.5"));
+        Assert.Equal(HttpStatusCode.Unauthorized, await LoginFrom(f, "203.0.113.1, 10.0.0.5"));
+        Assert.Equal(HttpStatusCode.TooManyRequests, await LoginFrom(f, "203.0.113.1, 10.0.0.5"));
+        Assert.Equal(HttpStatusCode.Unauthorized, await LoginFrom(f, "203.0.113.2, 10.0.0.5")); // its own bucket, not the edge's
+    }
+
+    [Fact]
+    public async Task A_client_cannot_spoof_an_address_past_the_first_unknown_hop()
+    {
+        using var f = ProxyFactory("172.18.0.3");
+        // The client (198.51.100.7, not a known proxy) made up the first entry: its own address is the one counted.
+        Assert.Equal(HttpStatusCode.Unauthorized, await LoginFrom(f, "203.0.113.1, 198.51.100.7"));
+        Assert.Equal(HttpStatusCode.Unauthorized, await LoginFrom(f, "203.0.113.2, 198.51.100.7"));
+        Assert.Equal(HttpStatusCode.TooManyRequests, await LoginFrom(f, "203.0.113.3, 198.51.100.7"));
+    }
+
+    [Fact]
     public async Task Any_other_sender_cannot_spoof_the_client_address()
     {
         using var f = ProxyFactory("192.168.1.50"); // a LAN host, not the proxy

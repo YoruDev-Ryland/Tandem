@@ -102,6 +102,10 @@ public static class ServerSetup
             var forwarded = new ForwardedHeadersOptions
             {
                 ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost,
+                // With known proxies, walk back through every hop that is one (Cloudflare in front of Traefik gives
+                // "client, edge"), stopping at the first address that isn't: a client can't get past its own hop. Trusting
+                // every sender (TrustForwardedHeaders alone) keeps the default single hop, or anyone could pick an address.
+                ForwardLimit = known.Count > 0 ? null : 1,
             };
             forwarded.KnownIPNetworks.Clear();
             forwarded.KnownProxies.Clear();

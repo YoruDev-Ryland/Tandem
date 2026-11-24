@@ -185,6 +185,11 @@ tandem.example.com {
 }
 ```
 
+Behind **Cloudflare's proxy** as well, list Cloudflare's ranges ([cloudflare.com/ips](https://www.cloudflare.com/ips))
+in `KNOWN_PROXIES` next to your proxy's address, so rate limits count each client rather than each Cloudflare edge.
+Tandem's live updates send a heartbeat every 25 seconds, well inside Cloudflare's 100-second idle limit; on the free
+plan a single upload is capped at 100 MB, which is above every save and state Tandem has met so far.
+
 Run **one replica only**: the locks that keep uploads consistent live inside the server process.
 
 ## Server settings
