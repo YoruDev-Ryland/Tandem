@@ -35,6 +35,7 @@ export interface ErrorResponse { code: string; message: string }
 export interface ServerInfo { name: string; protocol: number; registrationOpen: boolean; version: string }
 export interface WebSessionRequest { email?: string | null; password?: string | null; pairingCode?: string | null; deviceName?: string | null }
 export interface PairingCodeResponse { code: string; qrPayload: string; expiresUtc: IsoDate }
+export interface ChangeEmailRequest { newEmail: string; password: string }
 export interface AccountInfo { id: Guid; email: string; isAdmin: boolean }
 export interface ChangePasswordRequest { current: string; new: string }
 export interface UserInfo { id: Guid; email: string; isAdmin: boolean; createdUtc: IsoDate; deviceCount: number }
@@ -118,7 +119,62 @@ export interface SendVaultResponse { deliveryId: Guid; versionId: Guid }
 // ---- Settings ----
 export interface RetentionSettingsDto { saveVersions: number; configVersions: number; vaultVersions: number; stateMaxAgeDays?: number }
 export interface StorageRow { emulatorId: string; gameKey: string | null; displayName: string | null; bytes: number }
-export interface StorageUsage { totalBytes: number; byEmulator: StorageRow[]; topGames: StorageRow[] }
+/** One game's stored bytes: unique blobs across its versions, split into the heads' (current) and only older versions'. */
+export interface StorageGame {
+  emulatorId: string;
+  gameKey: string;
+  displayName: string | null;
+  bytes: number;
+  currentBytes: number;
+  olderBytes: number;
+  versions: number;
+  /** "Save" and/or "State". */
+  kinds: string[];
+}
+/** Unique bytes each kind references; a blob shared between kinds counts in each. */
+export interface StorageKinds { saves: number; states: number; configs: number; vault: number; lostAndFound: number }
+export type MovePhase = "Copying" | "Holding" | "Done" | "Failed";
+export interface MoveStatus {
+  phase: MovePhase;
+  from: string;
+  to: string;
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+  error: string | null;
+  /** The old copy a finished move left behind, until removed; null and 0 otherwise. */
+  oldLocation: string | null;
+  oldBytes: number;
+  startedUtc: string;
+  /** Files of the old copy a removal left because the new folder does not hold them. */
+  oldKept: number;
+}
+export interface MoveCheckItem { name: string; ok: boolean; problem: string | null }
+export interface MoveCheckResult { path: string; ok: boolean; bytesToCopy: number; items: MoveCheckItem[]; mountLine: string | null }
+/** Server-wide figures, admins only. databaseBytes is null for Postgres. */
+export interface StorageServer {
+  filesBytes: number;
+  diskTotalBytes: number | null;
+  diskFreeBytes: number | null;
+  minFreeBytes: number;
+  artBytes: number;
+  databaseBytes: number | null;
+  filesLocation: string;
+  defaultLocation: boolean;
+  move: MoveStatus | null;
+  lowDisk: string | null;
+}
+export type StorageView = "map" | "bars" | "blocks";
+export interface StorageUsage {
+  totalBytes: number;
+  byEmulator: StorageRow[];
+  topGames: StorageRow[];
+  games: StorageGame[];
+  byKind: StorageKinds;
+  olderBytes: number;
+  server: StorageServer | null;
+}
 /**
  * token is write-only (PUT); tokenSet is returned by GET. GET returns `url` masked as "scheme://host/…"; a PUT that sends
  * the masked value back unchanged keeps the stored address.

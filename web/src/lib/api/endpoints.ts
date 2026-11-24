@@ -17,6 +17,9 @@ export const signIn = (req: T.WebSessionRequest) => api<T.AccountInfo>("POST", "
 export const signOut = () => api<void>("DELETE", "/v1/web/session");
 export const getAccount = () => api<T.AccountInfo>("GET", "/v1/account");
 export const changePassword = (req: T.ChangePasswordRequest) => api<void>("POST", "/v1/account/password", req);
+/** 403 bad_password; 409 email_taken; 400 invalid_email; 429 throttled. Answers the account with its new email. */
+export const changeEmail = (newEmail: string, password: string) =>
+  api<T.AccountInfo>("POST", "/v1/account/email", { newEmail, password } satisfies T.ChangeEmailRequest);
 /** 204 and the session cookie cleared; 403 bad_password; 409 last_admin. */
 export const deleteAccount = (password: string) => api<void>("DELETE", "/v1/account", { password } satisfies T.DeleteAccountRequest);
 
@@ -137,6 +140,10 @@ export const getActivity = (filter: T.ActivityFilter = {}) =>
 export const getRetention = () => api<T.RetentionSettingsDto>("GET", "/v1/settings/retention");
 export const putRetention = (req: T.RetentionSettingsDto) => api<T.RetentionSettingsDto>("PUT", "/v1/settings/retention", req);
 export const getStorage = () => api<T.StorageUsage>("GET", "/v1/settings/storage");
+export const getStorageView = async () => (await api<{ view: T.StorageView }>("GET", "/v1/settings/storage-view")).view;
+export const setStorageView = async (view: T.StorageView) => {
+  await api<unknown>("PUT", "/v1/settings/storage-view", { view });
+};
 export const getNotifications = () => api<T.NotifySettingsDto>("GET", "/v1/settings/notifications");
 export const putNotifications = (req: T.NotifySettingsDto) => api<T.NotifySettingsDto>("PUT", "/v1/settings/notifications", req);
 export const testNotifications = () => api<T.NotifyTestResult[]>("POST", "/v1/settings/notifications/test");
@@ -147,6 +154,15 @@ export const createUser = (req: T.CreateUserRequest) => api<T.CreatedUserRespons
 export const deleteUser = (id: string) => api<void>("DELETE", `/v1/admin/users/${enc(id)}`);
 /** A new generated password, shown once; the user's web sessions are signed out. */
 export const resetUserPassword = (id: string) => api<T.ResetPasswordResponse>("POST", `/v1/admin/users/${enc(id)}/reset-password`);
+/** The move-target rules' results; items may hold one or two entries when the path is not absolute or is inside the current folder. */
+export const checkMove = (path: string) => api<T.MoveCheckResult>("POST", "/v1/admin/storage/move/check", { path });
+/** 202. 400 bad_path (the body is a MoveCheckResult, not an ErrorResponse); 409 move_running. */
+export const startMove = (path: string) => api<void>("POST", "/v1/admin/storage/move", { path });
+/** The last or running move, or undefined when there has been none. */
+export const getMove = async () => (await api<T.MoveStatus | null>("GET", "/v1/admin/storage/move")) ?? null;
+export const cancelMove = () => api<void>("POST", "/v1/admin/storage/move/cancel");
+/** 204; 409 or 503 when the old copy cannot be removed now. */
+export const removeOldCopy = () => api<void>("POST", "/v1/admin/storage/move/remove-old");
 export const getAdminSettings = () => api<T.AdminSettings>("GET", "/v1/admin/settings");
 export const putAdminSettings = (req: T.AdminSettings) => api<T.AdminSettings>("PUT", "/v1/admin/settings", req);
 export const getBackup = () => api<T.BackupSettingsResponse>("GET", "/v1/admin/backup");
