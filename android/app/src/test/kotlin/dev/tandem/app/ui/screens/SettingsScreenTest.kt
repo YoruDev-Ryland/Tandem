@@ -371,6 +371,7 @@ class SettingsScreenTest {
         compose.onNodeWithText("Diagnostics").assertDoesNotExist()
         r2(4)   // Sync › Emulators › Appearance › Account › About
         compose.onNodeWithText("1.2.3").assertIsDisplayed()
+        repeat(2) { compose.key(KeyEvent.KEYCODE_DPAD_DOWN) }   // past the version and the update switch
         compose.key(KeyEvent.KEYCODE_BUTTON_A)
         compose.onNodeWithText("Barlow — SIL Open Font License 1.1").assertIsDisplayed()
         compose.key(KeyEvent.KEYCODE_BUTTON_B)

@@ -40,6 +40,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.job
+import kotlinx.coroutines.sync.Mutex
+import dev.tandem.app.update.AppUpdates
+import dev.tandem.app.update.CheckSchedule
 
 /**
  * The specialUse foreground service that runs the sync while Shizuku is ready.
@@ -65,6 +72,8 @@ class SyncService : Service() {
         private const val FULL_SCAN_MS = 15 * 60_000L
         private const val RESTART_DELAY_MS = 5_000L
         private const val BIND_TIMEOUT_MS = 30_000L
+        /** How often a ready app update looks for idle sync. */
+        private const val UPDATE_INSTALL_POLL_MS = 30_000L
 
         /**
          * Runs [start], logging instead of throwing when Android refuses it: from Android 12 a foreground-service start
@@ -112,6 +121,10 @@ class SyncService : Service() {
     private class SentStatus(val url: String, val key: String, val req: DeviceStatusRequest)
     @Volatile private var lastStatus: SentStatus? = null
     @Volatile private var destroyed = false
+    /** Held by a sync session from its bind to its end: an app update outside a session installs only without it. */
+    private val syncLock = Mutex()
+    /** The last reason an app update waited, so the log says it once. */
+    @Volatile private var updateWait: String? = null
 
     private lateinit var notifier: Notifier
     private lateinit var store: StateStore
@@ -129,6 +142,7 @@ class SyncService : Service() {
         goForeground()
         log("service started (app ${BuildConfig.VERSION_NAME})")
         AppGraph.sessions.start(scope) { supervise() }   // joins a previous instance's supervisor first
+        scope.launch { updates() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -215,6 +229,8 @@ class SyncService : Service() {
             publish()
             awaitCancellation()
         }
+        syncLock.lock()   // released when this session ends, however it ends
+        coroutineContext.job.invokeOnCompletion { syncLock.unlock() }
         val shell = try {
             withContext(Dispatchers.Main) { withTimeout(BIND_TIMEOUT_MS) { gate.bind() } }
         } catch (e: TimeoutCancellationException) {
@@ -285,6 +301,7 @@ class SyncService : Service() {
                 launch { every(SyncConfig.pollMillis) { offer(planner.pollTick(events.healthy, android.os.SystemClock.elapsedRealtime())) } }
                 launch { every(FULL_SCAN_MS) { offer(planner.periodicScan()) } }
                 offer(planner.sessionStarted())
+                AppUpdates.checkSoon(this@SyncService, sessionStart = true)
                 events.start()
                 awaitCancellation()
             } finally {
@@ -325,7 +342,7 @@ class SyncService : Service() {
                         log("deliveries: ${r.applied} applied, ${r.skipped} skipped, ${r.failed} failed, ${r.waitingForEmulator} waiting")
                 }
                 SyncWork.Monitor -> monitor(s)
-                SyncWork.InstallUpdate -> {}
+                SyncWork.InstallUpdate -> installUpdate(s)
             }
         } catch (e: CancellationException) {
             error = e
@@ -343,8 +360,54 @@ class SyncService : Service() {
                 countScan(ok)
                 if (ok) AppGraph.synced(this)
             }
-            if (w != SyncWork.Tick && w != SyncWork.Monitor) publish()
+            if (w != SyncWork.Tick && w != SyncWork.Monitor && w != SyncWork.InstallUpdate) publish()
         }
+    }
+
+    // ---- app updates ----
+
+    /**
+     * Checks for an app update when one is due (every [CheckSchedule.POLL_MS]; a session start checks too), and
+     * installs a ready one once sync is idle: through the live session's queue ([installUpdate]), or at once while no
+     * session runs (nothing syncs then). Install now nudges it at once.
+     */
+    private suspend fun updates(): Unit = coroutineScope {
+        val u = AppUpdates.updater(this@SyncService)
+        launch {
+            while (true) {
+                u.check()
+                delay(CheckSchedule.POLL_MS)
+            }
+        }
+        val ticks = flow { while (true) { emit(Unit); delay(UPDATE_INSTALL_POLL_MS) } }
+        merge(ticks, AppUpdates.installNudges.map { }).collect {
+            if (!u.wantsInstall()) return@collect
+            val s = session
+            when {
+                s != null -> s.queue.offer(SyncWork.InstallUpdate)
+                syncLock.tryLock() -> try {
+                    log("installing the app update: no sync session is running")
+                    u.install(AppUpdates.installer(this@SyncService))
+                } finally {
+                    syncLock.unlock()
+                }
+                else -> {}   // a session is starting: its queue takes it once it runs
+            }
+        }
+    }
+
+    /** In the queue's consumer, so nothing else runs: installs the ready update unless sync has work in hand. */
+    private suspend fun installUpdate(s: Session) {
+        val u = AppUpdates.updater(this)
+        if (!u.wantsInstall()) return
+        val blocker = installBlocker(SyncActivity(s.queue.waiting(), s.engine.queuedCount(), s.planner.awaitingExit(), AppGraph.waiting.value.size))
+        if (blocker != null) {
+            if (blocker != updateWait) log("the app update waits: $blocker")
+            updateWait = blocker
+            return
+        }
+        updateWait = null
+        u.install(AppUpdates.installer(this))
     }
 
     /**

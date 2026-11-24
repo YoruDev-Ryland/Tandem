@@ -43,7 +43,9 @@ class SettingsScreenshotTest {
         VariantLine("vita3k", "Vita3K", null, "Not installed", active = false, first = true),
     )
 
-    private fun ui(section: SettingsSection) = SettingsUi(
+    private fun ui(section: SettingsSection, update: dev.tandem.app.update.UpdateUi = dev.tandem.app.update.UpdateUi()) = SettingsUi(
+        update = update,
+        appVersion = "0.2.0",
         section = section,
         autoApply = true,
         romDirs = listOf("/sdcard/Roms", "/storage/1A2B-3C4D/Games"),
@@ -64,14 +66,21 @@ class SettingsScreenshotTest {
     @Config(qualifiers = DEVICE_SIZE) @Test fun deviceAppearanceDark() = shoot(ThemeMode.Dark, SettingsSection.Appearance, "robo-settings-appearance-dark.png", HAPTICS_COPY)
     @Config(qualifiers = DEVICE_SIZE) @Test fun deviceAppearanceLight() = shoot(ThemeMode.Light, SettingsSection.Appearance, "robo-settings-appearance-light.png", HAPTICS_COPY)
 
+    private val ready = dev.tandem.app.update.UpdateUi(dev.tandem.app.update.UpdatePhase.Ready("0.3.0"), installQueued = true, canInstall = true)
+    private val failed = dev.tandem.app.update.UpdateUi(dev.tandem.app.update.UpdatePhase.Failed("0.3.0 wasn't installed: it is signed with another key"))
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceAboutDark() =
+        shoot(ThemeMode.Dark, SettingsSection.About, "robo-settings-about-dark.png", "0.3.0 is ready: it installs when sync is idle", ready)
+    @Config(qualifiers = DEVICE_SIZE) @Test fun deviceAboutLight() =
+        shoot(ThemeMode.Light, SettingsSection.About, "robo-settings-about-light.png", AUTO_UPDATE_COPY, failed)
+
     @Test fun emulatorsDark() = shoot(ThemeMode.Dark, SettingsSection.Emulators, "settings-emulators-dark.png", "dev.igawa6.edenduo")
 
-    private fun shoot(mode: ThemeMode, section: SettingsSection, name: String, expect: String) {
+    private fun shoot(mode: ThemeMode, section: SettingsSection, name: String, expect: String, update: dev.tandem.app.update.UpdateUi = dev.tandem.app.update.UpdateUi()) {
         val status = TopStatus("Thor", ServerConn.Connected, ShizukuState.Ready, signedIn = true)
         compose.setContent {
             EmuTheme(mode) {
                 Chrome {
-                    SettingsScreen(ui(section), top = {
+                    SettingsScreen(ui(section, update), top = {
                         TopBar(listOf("This device", "Activity", "Conflicts", "Settings"), 3, {}, status, {})
                     }, actions = SettingsActions())
                 }

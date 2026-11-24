@@ -75,6 +75,10 @@ import dev.tandem.app.ui.state.insecureUrl
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.launch
+import dev.tandem.app.update.UpdatePhase
+import dev.tandem.app.update.UpdateUi
+import java.time.Instant
+import java.time.ZoneId
 
 /** What the tab asks its host to do. */
 class SettingsActions(
@@ -101,6 +105,10 @@ class SettingsActions(
     val clearServerChange: () -> Unit = {},
     /** About › Open-source licences: the bundled font licences and the dependency list, as text. */
     val licences: () -> String = { "" },
+    /** About › Check now, Install now and Install updates automatically (see SettingsViewModel). */
+    val checkUpdate: () -> Unit = {},
+    val installUpdate: () -> Unit = {},
+    val setAutoInstall: (Boolean) -> Unit = {},
     val back: () -> Unit = {},
 )
 
@@ -109,7 +117,8 @@ fun SettingsViewModel.actions(diagnostics: (() -> Unit)?, setUp: () -> Unit, bac
     setOverride = ::setOverride, chooseVariant = ::chooseVariant, consumeFocus = ::consumeFocus, setTheme = ::setTheme,
     setHaptics = ::setHaptics, setSounds = ::setSounds, signOut = ::signOut,
     diagnostics = diagnostics, setUp = setUp, requestPermission = ::requestPermission, changeServer = ::changeServer,
-    clearServerChange = ::clearServerChange, licences = licences, back = back,
+    clearServerChange = ::clearServerChange, licences = licences, checkUpdate = ::checkUpdate,
+    installUpdate = ::installUpdate, setAutoInstall = ::setAutoInstall, back = back,
 )
 
 const val AUTO_APPLY_COPY = "Apply arriving saves automatically when the emulator is closed"
@@ -124,6 +133,10 @@ const val CHANGE_SERVER_COPY =
         "device before it switches, and keeps everything it knows; nothing syncs again from scratch."
 const val INSECURE_CONFIRM = "Press A again to switch anyway."
 const val LICENCES = "Open-source licences"
+const val AUTO_UPDATE_COPY = "Install updates automatically"
+const val AUTO_UPDATE_DETAIL = "When sync is idle; otherwise Tandem asks first"
+const val CHECK_NOW = "Check now"
+const val INSTALL_NOW = "Install now"
 const val REMOVE_ROM_COPY = "Games found only in this folder stop receiving saves on this device."
 const val SIGN_OUT_COPY = "This device stops syncing until you sign in again. Nothing on it is deleted."
 
@@ -178,6 +191,43 @@ private sealed interface LookRow {
 private fun lookRows(ui: SettingsUi): List<LookRow> =
     THEMES.map { (m, meta) -> LookRow.Theme(m, meta) } + LookRow.Haptics(ui.haptics) + LookRow.Sounds(ui.sounds)
 
+/** A row of Settings › About: the version with the update state, the automatic-install switch, the licences. */
+private sealed interface AboutRow {
+    val key: String
+    data object Version : AboutRow { override val key = "version" }
+    data class AutoInstall(val on: Boolean) : AboutRow { override val key = "auto-update" }
+    data object Licences : AboutRow { override val key = "licences" }
+}
+
+/** A debug build doesn't update itself: no switch for it. */
+private fun aboutRows(ui: SettingsUi): List<AboutRow> =
+    listOfNotNull(AboutRow.Version, if (ui.update.phase == UpdatePhase.Off) null else AboutRow.AutoInstall(ui.update.autoInstall), AboutRow.Licences)
+
+/** Check now is offered unless updates are off or a check, download or install is under way. */
+private fun canCheck(u: UpdateUi) = when (u.phase) {
+    UpdatePhase.Off, UpdatePhase.Checking, is UpdatePhase.Downloading, is UpdatePhase.Installing -> false
+    else -> true
+}
+
+private fun canInstallNow(u: UpdateUi) = u.canInstall && u.phase !is UpdatePhase.Installing
+
+/**
+ * The updater's state in one line after the version, and its tone: amber while an update waits (for idle sync or
+ * for the user), red when something failed.
+ */
+fun updateLine(u: UpdateUi, now: Instant, zone: ZoneId = ZoneId.systemDefault()): Pair<String, Tone> = when (val p = u.phase) {
+    UpdatePhase.Off -> "Updates are off in debug builds" to Tone.Ink3
+    UpdatePhase.Unchecked -> "Not checked yet" to Tone.Ink3
+    UpdatePhase.Checking -> "Checking for updates…" to Tone.Ink2
+    UpdatePhase.UpToDate ->
+        (u.lastCheckAt?.let { "Up to date · checked " + activityTime(Instant.ofEpochMilli(it).toString(), now, zone) } ?: "Up to date") to Tone.Ink2
+    is UpdatePhase.Downloading -> "Downloading ${p.version}…" to Tone.Ink2
+    is UpdatePhase.Ready ->
+        (if (u.installQueued) "${p.version} is ready: it installs when sync is idle" else "${p.version} is ready to install") to Tone.Wait
+    is UpdatePhase.Installing -> "Installing ${p.version}…" to Tone.Wait
+    is UpdatePhase.Failed -> p.message to Tone.Fault
+}
+
 /**
  * The Settings tab. Its sections are sub-tabs (L2/R2): Sync, Emulators (which installed variant each emulator syncs),
  * Appearance, Account and Diagnostics. Every section is a cursor list or a single action, with its buttons in the
@@ -189,6 +239,8 @@ fun SettingsScreen(
     top: @Composable RowScope.() -> Unit,
     actions: SettingsActions,
     now: () -> Long = { SystemClock.uptimeMillis() },
+    /** Wall-clock ms, for "checked 2 h ago". */
+    wallClock: () -> Long = System::currentTimeMillis,
 ) {
     // A release build has no diagnostics screen, so no Diagnostics section either.
     val sections = SettingsSection.entries.filter { it != SettingsSection.Diagnostics || actions.diagnostics != null }
@@ -196,6 +248,7 @@ fun SettingsScreen(
     var syncAt by remember { mutableIntStateOf(0) }
     var emuAt by remember { mutableIntStateOf(0) }
     var themeAt by remember { mutableIntStateOf(ui.theme.ordinal) }
+    var aboutAt by remember { mutableIntStateOf(0) }
 
     // Y on This device: the cursor goes to that emulator's first row.
     LaunchedEffect(ui.focus) {
@@ -239,6 +292,16 @@ fun SettingsScreen(
             is LookRow.Theme -> actions.setTheme(r.mode)
             is LookRow.Haptics -> actions.setHaptics(!r.on)
             is LookRow.Sounds -> actions.setSounds(!r.on)
+        }
+    }
+
+    val abouts = aboutRows(ui)
+    val about = abouts.getOrNull(aboutAt.coerceIn(0, abouts.lastIndex))
+    fun openAbout(r: AboutRow) {
+        when (r) {
+            AboutRow.Version -> if (canCheck(ui.update)) actions.checkUpdate()
+            is AboutRow.AutoInstall -> actions.setAutoInstall(!r.on)
+            AboutRow.Licences -> sheet = Sheet.Licences
         }
     }
 
@@ -295,7 +358,16 @@ fun SettingsScreen(
                 )
                 else if (ui.signedIn) listOf(Hint(Action.A, "Sign out") { sheet = Sheet.SignOut }, back)
                 else listOf(Hint(Action.A, SET_UP, actions.setUp), back)
-            SettingsSection.About -> listOf(Hint(Action.A, LICENCES) { sheet = Sheet.Licences }, back)
+            SettingsSection.About -> when (about) {
+                AboutRow.Version -> listOfNotNull(
+                    if (canCheck(ui.update)) Hint(Action.A, CHECK_NOW, actions.checkUpdate) else null,
+                    if (canInstallNow(ui.update)) Hint(Action.X, INSTALL_NOW, actions.installUpdate) else null,
+                    back,
+                )
+                is AboutRow.AutoInstall -> listOf(Hint(Action.A, if (about.on) "Turn off" else "Turn on") { openAbout(about) }, back)
+                AboutRow.Licences -> listOf(Hint(Action.A, "Open") { sheet = Sheet.Licences }, back)
+                null -> listOf(back)
+            }
             SettingsSection.Diagnostics -> listOfNotNull(actions.diagnostics?.let { Hint(Action.A, "Open", it) }, back)
         }
     }
@@ -342,7 +414,30 @@ fun SettingsScreen(
                         }
                     }
                     SettingsSection.Account -> Account(ui, actions.setUp, ::openServer) { sheet = Sheet.SignOut }
-                    SettingsSection.About -> About(ui) { sheet = Sheet.Licences }
+                    SettingsSection.About -> CursorList(
+                        abouts, key = { it.key }, selected = aboutAt, onSelect = { aboutAt = it },
+                        onOpen = ::openAbout, modifier = Modifier.weight(1f, fill = false),
+                    ) { r, _ ->
+                        when (r) {
+                            AboutRow.Version -> {
+                                val (text, tone) = updateLine(ui.update, Instant.ofEpochMilli(wallClock()))
+                                Cell("Tandem", Modifier.width(120.dp), style = EmuType.rowPrimary)
+                                // 120 + 146 + the row's 14 dp gap: the update line starts under the switch's detail.
+                                Cell(ui.appVersion.ifEmpty { "—" }, Modifier.width(146.dp), tone = Tone.Ink2, style = EmuType.mono)
+                                Cell(text, Modifier.weight(1f), tone = tone, style = EmuType.meta)
+                            }
+                            is AboutRow.AutoInstall -> {
+                                Cell(AUTO_UPDATE_COPY, Modifier.width(280.dp), style = EmuType.rowPrimary)
+                                Cell(AUTO_UPDATE_DETAIL, Modifier.weight(1f), tone = Tone.Ink2, style = EmuType.meta)
+                                Cell(if (r.on) "On" else "Off", tone = Tone.Ink2, style = EmuType.meta)
+                            }
+                            AboutRow.Licences -> {
+                                Cell("$LICENCES…", Modifier.weight(1f), style = EmuType.rowPrimary)
+                                Glyph(Action.A, inverted = LocalRowFocused.current)
+                                Cell("Open", tone = Tone.Ink2, style = EmuType.meta)
+                            }
+                        }
+                    }
                     SettingsSection.Diagnostics -> actions.diagnostics?.let { Diagnostics(it) }
                 }
             }
@@ -463,14 +558,6 @@ private fun Account(ui: SettingsUi, setUp: () -> Unit, changeServer: () -> Unit,
                 EmuButton(SET_UP, glyph = Action.A, onClick = setUp)
             }
         }
-    }
-}
-
-@Composable
-private fun About(ui: SettingsUi, licences: () -> Unit) {
-    Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Facts(listOf(Fact("Tandem", ui.appVersion.ifEmpty { "—" }, mono = true)), Modifier.padding(bottom = 16.dp))
-        EmuButton(LICENCES, glyph = Action.A, onClick = licences)
     }
 }
 

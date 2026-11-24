@@ -15,6 +15,8 @@ import androidx.compose.runtime.produceState
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import dev.tandem.app.service.ACTION_INSTALL_UPDATE
+import dev.tandem.app.update.AppUpdates
 import dev.tandem.app.ui.feedback.AndroidCuePlayer
 import dev.tandem.app.ui.feedback.CueSettings
 import dev.tandem.app.ui.feedback.LocalCuePlayer
@@ -110,6 +112,17 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) { vm.permissions.requests.collect(::ask) }
         }
+        if (savedInstanceState == null) handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** The update notification (automatic installs off): install the ready update once sync is idle. */
+    private fun handleIntent(intent: Intent?) {
+        if (intent?.action == ACTION_INSTALL_UPDATE) AppUpdates.installNow(this)
     }
 
     /** Bumped on every resume: what depends on other apps (Shizuku installed meanwhile) is read again. */

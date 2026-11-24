@@ -14,6 +14,8 @@ import dev.tandem.app.ui.screens.ActivityViewModel
 import dev.tandem.app.ui.screens.ConflictsViewModel
 import dev.tandem.app.ui.screens.DeviceViewModel
 import dev.tandem.app.ui.screens.SettingsViewModel
+import dev.tandem.app.ui.screens.UpdateControls
+import dev.tandem.app.update.AppUpdates
 import dev.tandem.app.ui.screens.receivedLine
 import dev.tandem.app.ui.feedback.Notices
 import kotlinx.coroutines.launch
@@ -109,6 +111,14 @@ class AppViewModel(app: Application, handle: SavedStateHandle) : AndroidViewMode
         anon = { url -> ApiClient(url, null) },
         keyed = { url -> ApiClient(url, store.deviceKey) },
         appVersion = dev.tandem.app.BuildConfig.VERSION_NAME,
+        updates = AppUpdates.updater(app).let { u ->
+            UpdateControls(
+                state = u.ui,
+                check = { AppUpdates.checkNow(app) },
+                install = { AppUpdates.installNow(app) },
+                setAutoInstall = u::setAutoInstall,
+            )
+        },
     )
 
     /** The first-run setup flow; its place and choices live in [handle], so process death resumes it. */
