@@ -167,9 +167,13 @@ class RetroArchModule(private val internalRoot: String = "/storage/emulated/0") 
         val systems = HashMap<String, String>()
         // Archives a playlist opens inside ("x.zip#inner.gba"): RetroArch names their saves after the inner file, so
         // the archive itself is not a second game when the ROM folders are walked.
-        val opened = HashSet<String>()
-        for (p in playlists(fs, d)) {
-            archiveSep.findAll(p.path).lastOrNull()?.let { opened += Paths.canonical(p.path.substring(0, it.range.last).replace('\\', '/')) }
+        // A history entry for the bare archive (opened once from the file browser) is not a second game either.
+        val entries = playlists(fs, d)
+        val opened = entries.mapNotNullTo(HashSet()) { p ->
+            archiveSep.findAll(p.path).lastOrNull()?.let { Paths.canonical(p.path.substring(0, it.range.last).replace('\\', '/')) }
+        }
+        for (p in entries) {
+            if (Paths.canonical(p.path.replace('\\', '/')) in opened) continue
             val b = contentBase(p.path)
             if (b.isEmpty()) continue
             val k = keyPrefix + b

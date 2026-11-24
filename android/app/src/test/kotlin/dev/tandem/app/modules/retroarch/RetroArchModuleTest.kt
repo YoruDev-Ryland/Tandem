@@ -123,6 +123,17 @@ class RetroArchModuleTest {
         assertEquals(listOf("retroarch/Pokemon - Emerald Version (USA)", "retroarch/Unlisted"), keys)
     }
 
+    @Test fun a_history_entry_for_the_bare_archive_is_not_a_second_game() {
+        withCfg()
+        put(ra("playlists/Nintendo - Game Boy Advance.lpl"), """{"items":[
+            {"path":"/sd/gba/Pokemon - Emerald Version.zip#Pokemon - Emerald Version (USA).gba"}]}""")
+        // Opened once straight from the file browser: RetroArch's history lists the archive itself.
+        put(ra("playlists/builtin/content_history.lpl"), """{"items":[
+            {"path":"/sd/gba/Pokemon - Emerald Version.zip"},{"path":"/sd/gba/Other.zip"}]}""")
+        val keys = m().installedGames(fs(), detect(), none).map { it.gameKey }
+        assertEquals(listOf("retroarch/Other", "retroarch/Pokemon - Emerald Version (USA)"), keys)
+    }
+
     @Test fun systems_from_names() {
         assertEquals("GBA", RetroArchSystems.fromDb("Nintendo - Game Boy Advance.lpl"))
         assertEquals(null, RetroArchSystems.fromDb("content_history.lpl"))
