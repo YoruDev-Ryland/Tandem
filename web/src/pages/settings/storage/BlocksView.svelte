@@ -9,6 +9,7 @@
   import { tick } from "svelte";
   import { deepSpine, nothingFocused, tileTip, usedBytes } from "../../../lib/storage/page";
   import type { Tile } from "../../../lib/storage/tiles";
+  import type { Tip } from "../../../lib/storage/page";
   import StorageTip from "./StorageTip.svelte";
 
   let { usage: u, isAdmin }: { usage: StorageUsage; isAdmin: boolean } = $props();
@@ -47,7 +48,13 @@
     });
     return m;
   });
-  const countOf = (id: string) => blocks.filter((b) => b.group === id).length;
+  // Blocks per group and each group's tip, worked out once per layout.
+  const counts = $derived.by(() => {
+    const m = new Map<string, number>();
+    for (const b of blocks) m.set(b.group, (m.get(b.group) ?? 0) + 1);
+    return m;
+  });
+  const countOf = (id: string) => counts.get(id) ?? 0;
   let cursorId = $state<string | null>(null);
   const cursor = $derived(cursorId && firstOf.has(cursorId) ? cursorId : (order[0] ?? null));
   const focusKey = $derived(cursor ? groupOf.get(cursor)?.key : undefined);
@@ -135,12 +142,25 @@
     }),
   );
 
-  const tipTile = $derived(tip ? groupOf.get(tip.id)?.tile : undefined);
-  const tipFor = (t: Tile) => {
-    const base = tileTip(t, u);
-    const n = countOf(t.id);
-    return { title: base.title, lines: [...base.lines, `${n} ${n === 1 ? "block" : "blocks"}`] };
-  };
+  const blocksWord = (n: number) => `${n} ${n === 1 ? "block" : "blocks"}`;
+  const tips = $derived.by(() => {
+    const m = new Map<string, Tip>();
+    for (const g of laid.groups) {
+      const base = tileTip(g.tile, u);
+      m.set(g.tile.id, { title: base.title, lines: [...base.lines, blocksWord(countOf(g.tile.id))] });
+    }
+    return m;
+  });
+  const tipShown = $derived(tip ? tips.get(tip.id) : undefined);
+
+  // One click handler for the card: any block of a game opens it, as its first block (the group's button) does.
+  function click(e: MouseEvent) {
+    const el = (e.target as HTMLElement).closest<HTMLElement>("[data-i]");
+    const b = el ? blocks[Number(el.dataset.i)] : undefined;
+    if (!b) return;
+    cursorId = b.group;
+    open(b.group);
+  }
   const heroNote = $derived(
     [formatSize(usedBytes(u, isAdmin)), `1 block = ${unit} MB`, ...(isAdmin && u.server?.diskFreeBytes != null ? [`${formatSize(u.server.diskFreeBytes)} free on the disk`] : [])].join(" · "),
   );
@@ -157,6 +177,8 @@
 
 <div class="side">
   <div class="wrap">
+    <!-- The card's click is the pointer's way to any block; keys reach every group by its own button. -->
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
     <div
       class="card"
       class:lit={lit || focusIn}
@@ -164,6 +186,7 @@
       aria-label="Storage blocks"
       bind:this={grid}
       onpointermove={pointerMove}
+      onclick={click}
       onpointerleave={() => {
         tip = null;
         lit = false;
@@ -184,12 +207,8 @@
             class:act={g.tile.kind === "game"}
             style:background={g.tile.colour}
             tabindex={b.group === cursor ? 0 : -1}
-            aria-label="{tipFor(g.tile).title}, {countOf(b.group)} {countOf(b.group) === 1 ? 'block' : 'blocks'}, {formatSize(g.tile.value)}"
+            aria-label="{tips.get(b.group)?.title}, {blocksWord(countOf(b.group))}, {formatSize(g.tile.value)}"
             aria-describedby={tip && tip.id === b.group ? tipId : undefined}
-            onclick={() => {
-              cursorId = b.group;
-              open(b.group);
-            }}
           ></button>
         {:else}
           <i
@@ -206,8 +225,8 @@
       {/each}
       {#each { length: free }, i (i)}<i class="free" aria-hidden="true"></i>{/each}
     </div>
-    {#if tip && tipTile}
-      <StorageTip id={tipId} tip={tipFor(tipTile)} x={tip.x} y={tip.y} boxW={box.w} boxH={box.h} />
+    {#if tip && tipShown}
+      <StorageTip id={tipId} tip={tipShown} x={tip.x} y={tip.y} boxW={box.w} boxH={box.h} />
     {/if}
   </div>
   <ul class="key" aria-label="Key">
@@ -294,10 +313,8 @@
   .card > .notch {
     clip-path: polygon(0 0, 70% 0, 100% 30%, 100% 100%, 0 100%);
   }
-  /* While someone is on the card, the cursor's group stays and the others step back. */
-  .card.lit > :not(.on):not(.free) {
-    opacity: 0.35;
-  }
+  /* The cursor's group is marked on its first block, as the mockup marks a block: an outline. */
+  .card.lit > button.on,
   .card > button:focus-visible {
     outline: 2px solid var(--ink);
     outline-offset: 1px;
@@ -369,9 +386,6 @@
   @media (prefers-reduced-motion: no-preference) {
     .key li {
       transition: background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
-    }
-    .card > * {
-      transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1);
     }
     .link {
       transition: color 150ms cubic-bezier(0.23, 1, 0.32, 1);

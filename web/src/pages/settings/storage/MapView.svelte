@@ -222,7 +222,7 @@
       data-tile={t.id}
       data-tip={kids ? undefined : t.id}
       aria-label="{t.label}, {formatSize(t.value)}"
-      aria-describedby={tip && tipTile && r.id === cursor ? tipId : undefined}
+      aria-describedby={tip && tipTile && tip.id === r.id ? tipId : undefined}
       onclick={(e) => click(e, t)}
     >
       {#if kids}

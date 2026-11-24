@@ -260,6 +260,19 @@ describe("Storage page", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
+  it("links the tip only to the tile it describes", async () => {
+    await show();
+    const map = await screen.findByRole("group", { name: "Storage map" });
+    const eden = within(map).getByRole("button", { name: /^Eden,/ });
+    // A nested game's tip at the top level describes the game, not Eden's button.
+    await fireEvent.pointerMove(map.querySelector('[data-tip="eden/0100A7A013C42000"]')!, { clientX: 20, clientY: 20 });
+    expect(screen.getByRole("tooltip").textContent).toContain("Trails in the Sky 1st Chapter");
+    expect(eden.getAttribute("aria-describedby")).toBeNull();
+    const art = within(map).getByRole("button", { name: /^Cover art,/ });
+    await fireEvent.pointerMove(art, { clientX: 500, clientY: 20 });
+    expect(art.getAttribute("aria-describedby")).toBe(screen.getByRole("tooltip").id);
+  });
+
   it("opens a game from its zoomed tile", async () => {
     await show();
     const map = await screen.findByRole("group", { name: "Storage map" });
@@ -314,6 +327,16 @@ describe("Storage page", () => {
     expect(within(key).getByText("Eden")).toBeTruthy();
     expect(within(key).getByRole("link", { name: "Export Eden" })).toBeTruthy();
     expect(screen.getByText(/blocks with a notch/)).toBeTruthy();
+  });
+
+  it("clicking_any_block_of_a_game_opens_it", async () => {
+    await show({ view: "blocks" });
+    const card = await screen.findByRole("group", { name: "Storage blocks" });
+    // Zelda's blocks run 0 to 17; block 0 is its button, the rest are plain blocks.
+    const later = card.querySelector<HTMLElement>('[data-i="9"]')!;
+    expect(later.tagName).toBe("I");
+    await fireEvent.click(later);
+    expect(router.path).toBe(gamePath("eden", "0100F2C0115B6000"));
   });
 
   it("the_d_pad_enters_the_blocks_when_nothing_is_focused", async () => {
