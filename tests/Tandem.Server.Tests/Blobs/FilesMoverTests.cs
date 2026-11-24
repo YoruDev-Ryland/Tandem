@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -435,7 +436,7 @@ public class FilesMoverTests : IDisposable
         File.Delete(Path.Combine(target, FilesLocation.MarkerName)); // an unmounted disk
 
         var r = await s.Admin.PostAsync("/v1/admin/storage/move/remove-old", null);
-        Assert.Equal(HttpStatusCode.Conflict, r.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, r.StatusCode);
         Assert.Equal("files_unavailable", (await r.ReadAsync<ErrorResponse>()).Code);
         Assert.Contains(hash, Blobs(oldRoot));
     }
@@ -922,6 +923,224 @@ public class FilesMoverTests : IDisposable
             await s.Files.SwitchAsync(scope.ServiceProvider.GetRequiredService<TandemDbContext>(), NewDir("gone"), Guid.NewGuid(), default);
         s.Files.CheckPresent();
         Assert.True((await s.Admin.GetOk<HomeResponse>("/v1/web/home")).Attention.FilesMissing);
+    }
+
+    [Fact]
+    public async Task Home_attention_names_a_files_folder_lost_while_idle_for_admins_only()
+    {
+        using var s = await Start(allowRegistration: true);
+        await s.Factory.Register("user@example.com");
+        var user = await s.Factory.WebLogin("user@example.com");
+        var folder = NewDir("nas");
+        var id = Guid.NewGuid();
+        FilesLocation.WriteMarker(folder, id);
+        using (var scope = s.Factory.Services.CreateScope())
+            await s.Files.SwitchAsync(scope.ServiceProvider.GetRequiredService<TandemDbContext>(), folder, id, default);
+        var present = (await s.Admin.GetOk<HomeResponse>("/v1/web/home")).Attention;
+        Assert.False(present.FilesMissing);
+        Assert.Null(present.FilesMissingPath);
+
+        File.Delete(Path.Combine(folder, FilesLocation.MarkerName)); // the NAS is lost while nothing reads a blob
+
+        var missing = (await s.Admin.GetOk<HomeResponse>("/v1/web/home")).Attention;
+        Assert.True(missing.FilesMissing);
+        Assert.Equal(folder, missing.FilesMissingPath);
+        var theirs = (await user.GetOk<HomeResponse>("/v1/web/home")).Attention;
+        Assert.False(theirs.FilesMissing);
+        Assert.Null(theirs.FilesMissingPath);
+    }
+
+    /// <summary>Throws on the "storage" event once armed: a failure in what runs after the switch.</summary>
+    private sealed class ThrowingHub(IEventHub inner) : IEventHub
+    {
+        public volatile bool Armed;
+        public void NotifyAll(string type, string? topic = null)
+        {
+            if (Armed && type == "storage") throw new InvalidOperationException("event stream broke");
+            inner.NotifyAll(type, topic);
+        }
+        public void NotifyDevice(Guid deviceId) => inner.NotifyDevice(deviceId);
+        public void NotifyUser(Guid userId, string topic) => inner.NotifyUser(userId, topic);
+        public void CloseDevice(Guid deviceId) => inner.CloseDevice(deviceId);
+        public void CloseUser(Guid userId) => inner.CloseUser(userId);
+        public IEventSubscription Subscribe(Guid userId, Guid? deviceId, CancellationToken ct) => inner.Subscribe(userId, deviceId, ct);
+    }
+
+    [Fact]
+    public async Task A_throw_after_the_switch_keeps_the_move_done_and_the_new_files()
+    {
+        ThrowingHub? hub = null;
+        using var s = await Start(services =>
+        {
+            services.RemoveAll<IEventHub>();
+            services.AddSingleton<IEventHub>(sp => hub = new ThrowingHub(
+                new EventHub(sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<IOptions<ServerOptions>>())));
+        });
+        var hash = await PutBlob(s.Device, "after the switch");
+        var target = NewDir();
+        s.Hooks.SaveSwitch = async save =>
+        {
+            await save();
+            hub!.Armed = true; // the hold's release event now throws
+        };
+
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        var status = await WaitFinished(s.Admin);
+        hub!.Armed = false;
+
+        Assert.Equal(MovePhase.Done, status.Phase);
+        Assert.Null(status.Error);
+        Assert.Equal(target, s.Files.Root);
+        Assert.Contains(hash, Blobs(target));
+        var setting = JsonSerializer.Deserialize<FilesLocationSetting>((await StoredSetting(s.Factory, FilesLocation.Key))!,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(setting.Id, FilesLocation.ReadMarker(target));
+        Assert.Contains("\"done\"", await StoredSetting(s.Factory, FilesMover.Key), StringComparison.OrdinalIgnoreCase);
+        Assert.False(s.Gate.Moving);
+        Assert.False(s.Gate.Holding);
+        Assert.Equal("after the switch", await GetBlob(s.Device, hash));
+    }
+
+    [Fact]
+    public async Task A_second_move_while_the_old_copy_is_pending_is_409_old_copy_pending()
+    {
+        using var s = await Start();
+        await PutBlob(s.Device, "first move");
+        var first = NewDir("first");
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, first)).StatusCode);
+        Assert.Equal(MovePhase.Done, (await WaitFinished(s.Admin)).Phase);
+        var second = NewDir("second");
+
+        var r = await StartMove(s.Admin, second);
+        Assert.Equal(HttpStatusCode.Conflict, r.StatusCode);
+        var error = await r.ReadAsync<ErrorResponse>();
+        Assert.Equal("old_copy_pending", error.Code);
+        Assert.Equal("Remove the old copy from the last move first.", error.Message);
+        Assert.False(Directory.Exists(second));
+        Assert.Equal(first, s.Files.Root);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await s.Admin.PostAsync("/v1/admin/storage/move/remove-old", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, second)).StatusCode);
+        Assert.Equal(MovePhase.Done, (await WaitFinished(s.Admin)).Phase);
+    }
+
+    [Fact]
+    public async Task Restart_after_a_switch_stored_behind_the_jobs_back_reports_the_old_copys_size()
+    {
+        using var s = await Start();
+        await PutBlob(s.Device, "twelve bytes");
+        var target = NewDir();
+        s.Hooks.SaveSwitch = async _ =>
+        {
+            await StoreLocation(s.Factory, target); // committed; the stored move record stays the running one
+            throw new IOException("connection reset after commit");
+        };
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        Assert.Equal(MovePhase.Done, (await WaitFinished(s.Admin)).Phase);
+
+        var restarted = ActivatorUtilities.CreateInstance<FilesMover>(s.Factory.Services);
+        await ((IHostedService)restarted).StartAsync(CancellationToken.None);
+
+        Assert.Equal(MovePhase.Done, restarted.Status!.Phase);
+        Assert.Equal(12, restarted.Status.OldBytes);
+        Assert.Equal(1, restarted.Status.FilesTotal);
+    }
+
+    [Fact]
+    public async Task No_move_starts_before_the_restart_check_has_run()
+    {
+        using var s = await Start();
+        await PutBlob(s.Device, "x");
+        var fresh = ActivatorUtilities.CreateInstance<FilesMover>(s.Factory.Services); // StartAsync not run yet
+        var target = NewDir();
+
+        var refused = Assert.Throws<Tandem.Server.Http.ApiException>(() => fresh.TryStart(target, out _));
+        Assert.Equal(409, refused.Status);
+        Assert.Equal("move_running", refused.Code);
+        Assert.False(Directory.Exists(target));
+
+        await ((IHostedService)fresh).StartAsync(CancellationToken.None);
+        Assert.True(fresh.TryStart(target, out _));
+        await fresh.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>The stored move record's id.</summary>
+    private static async Task<Guid> StoredMoveId(ServerFactory f) =>
+        JsonNode.Parse((await StoredSetting(f, FilesMover.Key))!)!["id"]!.GetValue<Guid>();
+
+    private static async Task WriteSetting(ServerFactory f, string key, string value)
+    {
+        using var scope = f.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+        var row = await db.ServerSettings.FirstOrDefaultAsync(x => x.Key == key);
+        if (row is null) db.ServerSettings.Add(new ServerSetting { Key = key, Value = value });
+        else row.Value = value;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>What the server does at startup: loads files.location, then runs the move's restart check.</summary>
+    private static async Task<FilesMover> Restart(Server s)
+    {
+        using (var scope = s.Factory.Services.CreateScope())
+            await s.Files.LoadAsync(scope.ServiceProvider.GetRequiredService<TandemDbContext>(), default);
+        var restarted = ActivatorUtilities.CreateInstance<FilesMover>(s.Factory.Services);
+        await ((IHostedService)restarted).StartAsync(CancellationToken.None);
+        return restarted;
+    }
+
+    [Fact]
+    public async Task Restart_after_a_failed_move_whose_switch_committed_late_goes_back_to_the_old_folder()
+    {
+        using var s = await Start();
+        var before = await PutBlob(s.Device, "before the move");
+        var oldRoot = s.Files.Root;
+        var target = NewDir();
+        s.Hooks.SaveSwitch = _ => throw new IOException("timeout");
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        Assert.Equal(MovePhase.Failed, (await WaitFinished(s.Admin)).Phase);
+        Assert.False(Directory.Exists(target)); // the copy was removed
+        var after = await PutBlob(s.Device, "after the failure"); // only in the old folder
+
+        // The switch's save commits after the move gave up (Postgres can), naming the cleaned folder.
+        await WriteSetting(s.Factory, FilesLocation.Key, JsonSerializer.Serialize(
+            new FilesLocationSetting(target, await StoredMoveId(s.Factory)), new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        var restarted = await Restart(s);
+
+        Assert.Equal(MovePhase.Failed, restarted.Status!.Phase);
+        Assert.Equal(oldRoot, s.Files.Root);
+        Assert.True(s.Files.CheckPresent());
+        Assert.Null(await StoredSetting(s.Factory, FilesLocation.Key)); // the default folder again
+        Assert.Equal("before the move", await GetBlob(s.Device, before));
+        Assert.Equal("after the failure", await GetBlob(s.Device, after));
+        Assert.False(Directory.Exists(target));
+    }
+
+    [Fact]
+    public async Task Restart_after_a_failed_move_whose_switch_committed_late_adopts_an_intact_target()
+    {
+        using var s = await Start();
+        var hash = await PutBlob(s.Device, "intact");
+        var oldRoot = s.Files.Root;
+        var target = NewDir();
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        Assert.Equal(MovePhase.Done, (await WaitFinished(s.Admin)).Phase);
+        // The record says failed, but the switch is stored and the target holds its marker and every file.
+        var record = JsonNode.Parse((await StoredSetting(s.Factory, FilesMover.Key))!)!;
+        record["status"]!["phase"] = "Failed";
+        record["status"]!["error"] = "The move failed: timeout Nothing was changed.";
+        record["status"]!["oldLocation"] = null;
+        await WriteSetting(s.Factory, FilesMover.Key, record.ToJsonString());
+
+        var restarted = await Restart(s);
+
+        Assert.Equal(MovePhase.Done, restarted.Status!.Phase);
+        Assert.Null(restarted.Status.Error);
+        Assert.Equal(oldRoot, restarted.Status.OldLocation);
+        Assert.Equal(target, s.Files.Root);
+        Assert.True(s.Files.CheckPresent());
+        Assert.Equal("intact", await GetBlob(s.Device, hash));
+        Assert.Contains("\"done\"", await StoredSetting(s.Factory, FilesMover.Key), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

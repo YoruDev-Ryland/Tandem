@@ -57,8 +57,11 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
         var backupOff = isAdmin && !(await Backup.BackupSettings.LoadAsync(db, ct)).Enabled;
         var silent = (await Notify.NotifyTriggers.SilentDevicesAsync(db, userId, options.Value.SilentDeviceHours, time.GetUtcNow(), ct))
             .OrderBy(d => d.CreatedUtc).Select(d => d.Id).ToList();
+        // One File.Exists on the marker: a folder lost while nothing read a blob shows here too.
+        var filesMissing = isAdmin && !files.CheckPresent();
+        var missingPath = filesMissing && files.Root.Length > 0 ? files.Root : null;
         return new HomeResponse(cont, devices, new Attention(concurrent, firstSync, shizuku, failed, configConflicts, storage.IsLow,
-            backupOff, silent, isAdmin && !files.Available), recent);
+            backupOff, silent, filesMissing, missingPath), recent);
     }
 
     public async Task<List<DeviceSummary>> DevicesAsync(Guid userId, Guid? current, CancellationToken ct)

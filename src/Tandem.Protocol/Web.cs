@@ -12,8 +12,11 @@ public sealed record ContinueItem(Guid ItemId, string EmulatorId, string GameKey
 /// <param name="SilentDevices">Active devices not seen for the server's SilentDeviceHours (default 72).</param>
 /// <param name="FilesMissing">Only ever true for an admin: the stored files folder is missing (an unmounted disk); nothing is
 /// stored until it is back.</param>
+/// <param name="FilesMissingPath">Only for an admin, and only while <paramref name="FilesMissing"/>: the folder that is
+/// missing (null when the files are present, or the folder is unknown).</param>
 public sealed record Attention(int OpenConflicts, int FirstSyncReviews, IReadOnlyList<Guid> ShizukuOffDevices, int FailedDeliveries24h,
-    int ConfigConflicts, bool DiskLow, bool BackupNotConfigured, IReadOnlyList<Guid> SilentDevices, bool FilesMissing);
+    int ConfigConflicts, bool DiskLow, bool BackupNotConfigured, IReadOnlyList<Guid> SilentDevices, bool FilesMissing,
+    string? FilesMissingPath);
 
 public sealed record HomeResponse(IReadOnlyList<ContinueItem> Continue, IReadOnlyList<DeviceSummary> Devices, Attention Attention,
     IReadOnlyList<ActivityItem> Recent);

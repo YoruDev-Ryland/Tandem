@@ -144,14 +144,16 @@ public sealed class MoveTargetCheck(FilesLocation files, IFreeSpaceProbe probe, 
     private static MoveCheckResult Result(string path, long bytes, string? mountLine, params MoveCheckItem[] items) =>
         new(path, items.All(i => i.Ok), bytes, items, mountLine);
 
-    /// <summary>Not inside the current location, not holding it, and not inside the data directory unless it is the default location.</summary>
+    /// <summary>Not inside the current location, not holding it, and not inside the data directory unless it is the default
+    /// location. Compared by where each path really points, so a symlink into the current folder is refused too.</summary>
     private bool Outside(string full)
     {
-        var current = Trim(Path.GetFullPath(files.Root));
-        if (IsInside(full, current, orSame: true) || IsInside(current, full, orSame: false)) return false;
-        var data = Trim(Path.GetFullPath(options.Value.DataDirectory));
-        var isDefault = string.Equals(full, Trim(Path.GetFullPath(files.DefaultRoot)), StringComparison.Ordinal);
-        return isDefault || !IsInside(full, data, orSame: true);
+        var real = Resolve(full);
+        var current = Resolve(Trim(Path.GetFullPath(files.Root)));
+        if (IsInside(real, current, orSame: true) || IsInside(current, real, orSame: false)) return false;
+        var data = Resolve(Trim(Path.GetFullPath(options.Value.DataDirectory)));
+        var isDefault = string.Equals(real, Resolve(Trim(Path.GetFullPath(files.DefaultRoot))), StringComparison.Ordinal);
+        return isDefault || !IsInside(real, data, orSame: true);
     }
 
     /// <summary>True when <paramref name="path"/> lies below <paramref name="dir"/> (or is it, with <paramref name="orSame"/>); compared with a trailing separator.</summary>

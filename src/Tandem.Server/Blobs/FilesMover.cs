@@ -110,6 +110,8 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
     private Job? _job;
     private bool _removing;
     private volatile MoveRecord? _record;
+    /// <summary>Set once <see cref="StartAsync"/> has dealt with a move a restart cut short; no move starts before.</summary>
+    private volatile bool _recovered;
     /// <summary>Per checked folder, the topmost folder a successful check created for it (cleanup removes it if empty).</summary>
     private readonly Dictionary<string, string> _checkCreated = new(StringComparer.Ordinal);
 
@@ -132,13 +134,18 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
     }
 
     /// <summary>Checks the folder and starts the move in the background. False (with the failed check) when the folder
-    /// is refused; 409 move_running when a move (or the removal of an old copy) is running.</summary>
+    /// is refused; 409 move_running when a move (or the removal of an old copy, or the startup check of the last move) is
+    /// running; 409 old_copy_pending while the last move's old copy is still there (a second move would orphan it).</summary>
     public bool TryStart(string path, out MoveCheckResult check)
     {
         lock (_sync)
         {
+            if (!_recovered)
+                throw new ApiException(409, "move_running", "The server is still checking the last move. Try again in a moment.");
             if (_job is not null || _removing)
                 throw new ApiException(409, "move_running", "A move of the stored files is already running.");
+            if (_record is { Status: { Phase: MovePhase.Done, OldLocation: not null } })
+                throw new ApiException(409, "old_copy_pending", "Remove the old copy from the last move first.");
             RequireSourcePresent();
             var from = files.Root;
             var createdDir = TopmostMissing(path);
@@ -172,7 +179,8 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
     }
 
     /// <summary>Deletes the old copy a finished move left (see <see cref="DeleteOldCopy"/>: never a blob a user still
-    /// holds that the current folder lacks). 503 server_moving while a move runs; 409 when there is no old copy or the current folder is missing.</summary>
+    /// holds that the current folder lacks). 503 server_moving while a move runs; 409 when there is no old copy; 503
+    /// files_unavailable while the current folder is missing.</summary>
     public async Task RemoveOldAsync(CancellationToken ct)
     {
         MoveRecord record;
@@ -192,7 +200,7 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
             if (!SafeToRemove(old))
                 throw new ApiException(409, "no_old_copy", "The old folder holds the current files or the server's data; it is left alone.");
             if (!files.CheckPresent())
-                throw new ApiException(409, "files_unavailable", "The new files folder is missing. The old copy is kept until it is back.");
+                throw new ApiException(503, "files_unavailable", "The new files folder is missing. The old copy is kept until it is back.");
             var current = files.Root;
             var missing = await Task.Run(() => MissingFromCurrent(old, current), ct);
             var referenced = await ReferencedAsync(missing, ct);
@@ -221,7 +229,9 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
     private async Task RunAsync(Job job)
     {
         var ct = job.Cts.Token;
-        MoveRecord final;
+        MoveRecord? final = null;
+        // Once the switch is stored the new folder is the current one: nothing after it may run the failure cleanup.
+        var switched = false;
         try
         {
             await PersistAsync(_record!, ct);
@@ -252,6 +262,7 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
                 SyncCreatedDirectories(job);
                 ct.ThrowIfCancellationRequested(); // the last point a cancel is taken
                 final = await SwitchAsync(job);
+                switched = true;
             }
             finally
             {
@@ -262,6 +273,13 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
             TryDeleteFile(Path.Combine(job.Target, JournalName));
             logger.LogInformation("Moved the stored files from {From} to {To}", job.From, job.Target);
         }
+        catch (Exception ex) when (switched)
+        {
+            // The move is done and stored; only a step after it failed (an event, closing or deleting the journal).
+            logger.LogError(ex, "The stored files moved to {To}, but a step after the switch failed", job.Target);
+            CloseJournal(job);
+            TryDeleteFile(Path.Combine(job.Target, JournalName)); // else the next start removes it
+        }
         catch (Exception ex)
         {
             final = await FailAsync(job, ex);
@@ -270,11 +288,12 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
         gate.Moving = false;
         lock (_sync)
         {
-            _record = final;
+            _record = final!;
             _job = null;
         }
         job.Cts.Dispose();
-        hub.NotifyAll("changed", "storage");
+        try { hub.NotifyAll("changed", "storage"); }
+        catch (Exception ex) { logger.LogError(ex, "Could not announce the end of the move"); }
     }
 
     private async Task<MoveRecord> FailAsync(Job job, Exception ex)
@@ -524,9 +543,18 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
 
     // ---- restart ----
 
-    /// <summary>A move stored as running did not finish: when its switch was stored it is done; otherwise its partial copy
-    /// is deleted and it is marked failed. A finished move's status (and old copy) is loaded.</summary>
+    /// <summary>A move stored as running did not finish: when its switch was stored it is done (the old copy measured
+    /// again); otherwise its partial copy is deleted and it is marked failed. A failed move whose switch was
+    /// stored anyway (a commit that landed after the move gave up) is made done when the new folder still holds its
+    /// marker and every file of the old one; otherwise files.location goes back to the old folder, so it never names a
+    /// folder the cleanup emptied. A finished move's status (and old copy) is loaded. No move starts before this ran.</summary>
     public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        try { await RecoverAsync(cancellationToken); }
+        finally { _recovered = true; }
+    }
+
+    private async Task RecoverAsync(CancellationToken cancellationToken)
     {
         MoveRecord? record;
         try
@@ -544,10 +572,10 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
         }
         if (record?.Status is not { } status) return;
 
-        var unfinished = status.Phase is MovePhase.Copying or MovePhase.Holding || status.Phase == MovePhase.Failed && !record.Cleaned;
-        if (!unfinished)
+        var running = status.Phase is MovePhase.Copying or MovePhase.Holding;
+        if (status.Phase == MovePhase.Done)
         {
-            if (status.Phase == MovePhase.Done && string.Equals(files.Root, status.To, StringComparison.Ordinal))
+            if (string.Equals(files.Root, status.To, StringComparison.Ordinal))
                 TryDeleteFile(Path.Combine(status.To, JournalName)); // left if the server stopped right after the switch
             _record = record;
             return;
@@ -555,23 +583,68 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
 
         switch (await SwitchStoredAsync(status.To, record.Id))
         {
-            case true:
+            // Running: the switch was stored and uploads may have gone to the new folder since, so it is the current one
+            // even if it is missing now (an unmounted disk is waited for, never replaced by the stale old copy). Failed:
+            // uploads went on in the old folder, so the new one is used only if it is whole.
+            case true when running || FilesLocation.ReadMarker(status.To) == record.Id && HoldsEvery(status.To, status.From):
                 TryDeleteFile(Path.Combine(status.To, JournalName));
+                var (count, bytes) = Measure(status.From, status.FilesTotal, status.BytesTotal);
                 record = record with { Status = status with { Phase = MovePhase.Done, Error = null, OldLocation = status.From,
-                    OldBytes = status.BytesTotal, FilesDone = status.FilesTotal, BytesDone = status.BytesTotal }, Cleaned = true };
+                    OldBytes = bytes, FilesTotal = count, FilesDone = count, BytesTotal = bytes, BytesDone = bytes, OldKept = 0 }, Cleaned = true };
+                if (!running) logger.LogWarning("A failed move of the stored files to {To} was stored after all; it is done", status.To);
                 break;
+            case true:
+                // A failed move stored after all, but the new folder is not whole (its cleanup ran, or uploads went on in
+                // the old one): the old folder, which has every file, is the current one again.
+                record = record with { Cleaned = record.Cleaned || Cleanup(status.To, record.Id, record.CreatedDir, logger) };
+                await RevertLocationAsync(record, status.From);
+                logger.LogWarning("A move of the stored files to {To} was stored but the folder is not whole; the files stay in {From}",
+                    status.To, status.From);
+                return;
+            case false when !running && record.Cleaned:
+                _record = record; // an ordinary failed move
+                return;
             case false:
                 var cleaned = Cleanup(status.To, record.Id, record.CreatedDir, logger);
-                record = record with { Status = status with { Phase = MovePhase.Failed, Error = status.Phase == MovePhase.Failed ? status.Error : RestartedError },
+                record = record with { Status = status with { Phase = MovePhase.Failed, Error = running ? RestartedError : status.Error },
                     Cleaned = cleaned };
                 logger.LogWarning("A move of the stored files to {To} did not finish; its partial copy was removed", status.To);
                 break;
             default:
-                _record = record with { Status = status with { Phase = MovePhase.Failed, Error = RestartedError } };
+                _record = running ? record with { Status = status with { Phase = MovePhase.Failed, Error = RestartedError } } : record;
                 return; // nothing is deleted while the stored location cannot be read
         }
         _record = record;
         await PersistAsync(record, CancellationToken.None);
+    }
+
+    /// <summary>Points files.location back at the old folder (no setting for the default one) and stores the failed
+    /// record, in one save; then reloads the location.</summary>
+    private async Task RevertLocationAsync(MoveRecord record, string from)
+    {
+        _record = record;
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+        await files.StageAsync(db, from, CancellationToken.None);
+        await TrackAsync(db, record, CancellationToken.None);
+        await db.SaveChangesAsync(CancellationToken.None);
+        await files.LoadAsync(db, CancellationToken.None);
+    }
+
+    /// <summary>Every blob of <paramref name="other"/> is in <paramref name="root"/> at the same relative path.</summary>
+    private static bool HoldsEvery(string root, string other) =>
+        EnumerateBlobs(other).All(b => File.Exists(Path.Combine(root, b.Rel)));
+
+    /// <summary>The blobs a folder holds (count and bytes); the fallback when it is not there.</summary>
+    private static (int Count, long Bytes) Measure(string root, int fallbackCount, long fallbackBytes)
+    {
+        if (!Directory.Exists(root)) return (fallbackCount, fallbackBytes);
+        try
+        {
+            var blobs = EnumerateBlobs(root);
+            return (blobs.Count, blobs.Sum(b => b.Size));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return (fallbackCount, fallbackBytes); }
     }
 
     /// <summary>A running move is cancelled and cleaned up (as a restart would) before the server stops.</summary>

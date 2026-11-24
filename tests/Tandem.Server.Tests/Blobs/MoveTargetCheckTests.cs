@@ -248,6 +248,27 @@ public class MoveTargetCheckTests : IDisposable
     }
 
     [Fact]
+    public void Check_refuses_a_symlink_that_points_into_the_current_location()
+    {
+        Directory.CreateDirectory(_files.Root);
+        var link = Path.Combine(_tmp, "into-current");
+        Directory.CreateSymbolicLink(link, _files.Root);
+        var r = Run(Path.Combine(link, "sub"));
+        Assert.False(Item(r, "outside").Ok);
+        Assert.False(r.Ok);
+        Assert.False(Directory.Exists(Path.Combine(_files.Root, "sub")));
+    }
+
+    [Fact]
+    public void Check_refuses_a_symlink_that_points_into_the_data_directory()
+    {
+        Directory.CreateDirectory(_options.DataDirectory);
+        var link = Path.Combine(_tmp, "into-data");
+        Directory.CreateSymbolicLink(link, _options.DataDirectory);
+        Assert.False(Item(Run(Path.Combine(link, "elsewhere")), "outside").Ok);
+    }
+
+    [Fact]
     public void Check_answers_a_path_with_a_null_character_as_not_absolute()
     {
         var r = Run("/mnt/a\0b");

@@ -64,6 +64,21 @@ public sealed class FilesLocation
         _current = new Current(path, id, true);
     }
 
+    /// <summary>Stages (without saving) files.location naming <paramref name="path"/> with the id its marker holds now; for
+    /// the default folder the setting is removed. The caller saves, then calls <see cref="LoadAsync"/>.</summary>
+    public async Task StageAsync(TandemDbContext db, string path, CancellationToken ct)
+    {
+        var row = await db.ServerSettings.FirstOrDefaultAsync(s => s.Key == Key, ct);
+        if (string.Equals(path, _defaultRoot, StringComparison.Ordinal))
+        {
+            if (row is not null) db.ServerSettings.Remove(row);
+            return;
+        }
+        var text = JsonSerializer.Serialize(new FilesLocationSetting(path, ReadMarker(path) ?? Guid.Empty), Json);
+        if (row is null) db.ServerSettings.Add(new ServerSetting { Key = Key, Value = text });
+        else row.Value = text;
+    }
+
     /// <summary>Makes a location already stored in the setting the current one, without writing (the move's save
     /// reported an error, but reading the setting back shows it was stored).</summary>
     public void UseStored(string path, Guid id) => _current = new Current(path, id, true);
