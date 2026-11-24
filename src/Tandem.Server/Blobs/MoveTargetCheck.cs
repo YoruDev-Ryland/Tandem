@@ -24,9 +24,14 @@ public sealed class ProcMountTable : IMountTable
         string[] lines;
         try { lines = File.ReadAllLines("/proc/self/mountinfo"); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        return MountPointOf(lines, path);
+    }
 
+    internal static string? MountPointOf(IEnumerable<string> lines, string path)
+    {
         var full = Path.GetFullPath(path);
         string? best = null;
+        var bestPersistent = true;
         foreach (var line in lines)
         {
             // id parent major:minor root mount-point options ...: the mount point is field 5, octal-escaped.
@@ -34,9 +39,22 @@ public sealed class ProcMountTable : IMountTable
             if (fields.Length < 5) continue;
             var mount = Unescape(fields[4]);
             if (!MoveTargetCheck.IsInside(full, mount, orSame: true)) continue;
-            if (best is null || mount.Length > best.Length) best = mount;
+            if (best is not null && mount.Length <= best.Length) continue;
+            best = mount;
+            bestPersistent = !NonPersistent.Contains(FsType(fields));
         }
-        return best;
+        // A memory-backed or container-layer filesystem is lost like the container's own root.
+        return best is not null && !bestPersistent ? "/" : best;
+    }
+
+    private static readonly HashSet<string> NonPersistent =
+        ["tmpfs", "proc", "sysfs", "devtmpfs", "devpts", "mqueue", "cgroup", "cgroup2", "overlay"];
+
+    /// <summary>The filesystem type: the field after the " - " separator that ends the optional fields.</summary>
+    private static string FsType(string[] fields)
+    {
+        var dash = Array.IndexOf(fields, "-", 6);
+        return dash >= 0 && dash + 1 < fields.Length ? fields[dash + 1] : "";
     }
 
     private static bool IsOctal(string s, int at) => s.AsSpan(at, 3).IndexOfAnyExceptInRange('0', '7') < 0;
@@ -91,7 +109,12 @@ public sealed class MoveTargetCheck(FilesLocation files, IFreeSpaceProbe probe, 
     {
         if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
             return Result(path ?? "", bytesToCopy, null, new MoveCheckItem("absolute", false, AbsoluteProblem));
-        var full = Trim(Path.GetFullPath(path));
+        string full;
+        try { full = Trim(Path.GetFullPath(path)); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return Result(path, bytesToCopy, null, new MoveCheckItem("absolute", false, AbsoluteProblem));
+        }
         var absolute = new MoveCheckItem("absolute", true, null);
 
         var outside = Outside(full)
@@ -174,8 +197,9 @@ public sealed class MoveTargetCheck(FilesLocation files, IFreeSpaceProbe probe, 
             Directory.CreateDirectory(full);
             File.WriteAllText(probeFile, "probe");
             File.Move(probeFile, renamed);
-            if (!Directory.EnumerateFileSystemEntries(full).Contains(renamed)) return bad;
+            var listed = Directory.EnumerateFileSystemEntries(full).Contains(renamed);
             File.Delete(renamed);
+            if (!listed) return bad;
             return new MoveCheckItem("writable", true, null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -199,7 +223,7 @@ public sealed class MoveTargetCheck(FilesLocation files, IFreeSpaceProbe probe, 
     {
         mountLine = null;
         if (!mounts.InContainer) return new MoveCheckItem("mount", true, null);
-        var point = mounts.MountPointOf(full);
+        var point = mounts.MountPointOf(Resolve(full));
         if (point is not null && point != "/") return new MoveCheckItem("mount", true, null);
         mountLine = $"- /your/host/folder:{full}";
         return new MoveCheckItem("mount", false, MountProblem);
@@ -211,6 +235,23 @@ public sealed class MoveTargetCheck(FilesLocation files, IFreeSpaceProbe probe, 
         string? missing = null;
         for (var d = full; d is not null && !Directory.Exists(d); d = Path.GetDirectoryName(d)) missing = d;
         return missing;
+    }
+
+    /// <summary>The real path: every existing component that is a symlink is replaced by where it points.</summary>
+    private static string Resolve(string full)
+    {
+        try
+        {
+            var cur = Path.GetPathRoot(full) ?? "/";
+            foreach (var part in full[cur.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                cur = Path.Combine(cur, part);
+                var info = new DirectoryInfo(cur);
+                if (info.Exists && info.ResolveLinkTarget(returnFinalTarget: true) is { } target) cur = Trim(target.FullName);
+            }
+            return cur;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return full; }
     }
 
     private static void TryDelete(string dir)

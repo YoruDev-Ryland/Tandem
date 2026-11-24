@@ -27,7 +27,8 @@ public class MoveTargetCheckTests : IDisposable
     {
         public bool InContainer { get; set; }
         public string? Mount { get; set; } = "/mnt/nas";
-        public string? MountPointOf(string path) => Mount;
+        public Func<string, string?>? ByPath { get; set; }
+        public string? MountPointOf(string path) => ByPath is null ? Mount : ByPath(path);
     }
 
     private sealed class FakeProbe : IFreeSpaceProbe
@@ -186,6 +187,81 @@ public class MoveTargetCheckTests : IDisposable
     public void Check_refuses_a_folder_inside_the_data_directory_other_than_the_default_location()
     {
         Assert.False(Item(Run(Path.Combine(_options.DataDirectory, "elsewhere")), "outside").Ok);
+    }
+
+    private const string Overlay = "10 1 0:50 / / rw - overlay overlay rw";
+    private static string Bind(string mount, string fs = "ext4") => $"20 10 8:1 /x {mount} rw,relatime - {fs} /dev/sda1 rw";
+
+    [Fact]
+    public void Mounts_overlay_root_only_gives_the_root() =>
+        Assert.Equal("/", ProcMountTable.MountPointOf([Overlay], "/data/files"));
+
+    [Fact]
+    public void Mounts_a_bind_beats_the_overlay_root() =>
+        Assert.Equal("/data/files", ProcMountTable.MountPointOf([Overlay, Bind("/data/files")], "/data/files/a/b"));
+
+    [Fact]
+    public void Mounts_an_escaped_space_in_a_mount_point_is_read() =>
+        Assert.Equal("/mnt/my files", ProcMountTable.MountPointOf([Overlay, Bind("/mnt/my\\040files")], "/mnt/my files/x"));
+
+    [Fact]
+    public void Mounts_the_longest_of_nested_mounts_wins() =>
+        Assert.Equal("/data/files/deep", ProcMountTable.MountPointOf(
+            [Overlay, Bind("/data"), Bind("/data/files/deep"), Bind("/data/files")], "/data/files/deep/x"));
+
+    [Fact]
+    public void Mounts_a_sibling_with_the_same_prefix_is_not_inside() =>
+        Assert.Equal("/", ProcMountTable.MountPointOf([Overlay, Bind("/data/files")], "/data/files2"));
+
+    [Fact]
+    public void Mounts_short_or_garbage_lines_are_skipped() =>
+        Assert.Equal("/", ProcMountTable.MountPointOf(["", "garbage", "1 2 3", Overlay, "\\0\\1 x y z \\777"], "/data"));
+
+    [Fact]
+    public void Mounts_no_containing_mount_gives_null() =>
+        Assert.Null(ProcMountTable.MountPointOf([Bind("/data/files")], "/other"));
+
+    [Theory]
+    [InlineData("tmpfs")]
+    [InlineData("proc")]
+    [InlineData("sysfs")]
+    [InlineData("devtmpfs")]
+    [InlineData("devpts")]
+    [InlineData("mqueue")]
+    [InlineData("cgroup")]
+    [InlineData("cgroup2")]
+    [InlineData("overlay")]
+    public void Mounts_a_non_persistent_filesystem_counts_as_the_root(string fs) =>
+        Assert.Equal("/", ProcMountTable.MountPointOf([Overlay, Bind("/data/files", fs)], "/data/files/x"));
+
+    [Fact]
+    public void Check_judges_a_symlinked_target_by_where_it_points()
+    {
+        _mounts.InContainer = true;
+        _mounts.ByPath = p => p.StartsWith(Path.Combine(_tmp, "real")) ? "/" : "/mnt/nas";
+        Directory.CreateDirectory(Path.Combine(_tmp, "real"));
+        var link = Path.Combine(_tmp, "link");
+        Directory.CreateSymbolicLink(link, Path.Combine(_tmp, "real"));
+        var r = Run(Path.Combine(link, "sub"));
+        Assert.False(Item(r, "mount").Ok);
+        Assert.False(Directory.Exists(Path.Combine(_tmp, "real", "sub")));
+    }
+
+    [Fact]
+    public void Check_answers_a_path_with_a_null_character_as_not_absolute()
+    {
+        var r = Run("/mnt/a\0b");
+        Assert.False(r.Ok);
+        Assert.Equal("Use a full path, starting with /.", Item(r, "absolute").Problem);
+    }
+
+    [Fact]
+    public void Free_space_probe_answers_null_for_a_missing_folder()
+    {
+        var probe = new DriveFreeSpaceProbe();
+        var missing = Path.Combine(_tmp, "nope", "deeper");
+        Assert.Null(probe.FreeBytes(missing));
+        Assert.Null(probe.TotalBytes(missing));
     }
 
     [Theory]
