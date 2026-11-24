@@ -161,8 +161,8 @@ Once you trust the setup, turn on **auto-apply** so incoming saves are written w
   backups and account settings.
 - **Storage.** Settings › Storage shows what Tandem holds, by emulator, game and kind, in three views: **Map**
   (a treemap you can zoom into an emulator), **Bars** (ranked bars and a disk ruler) and **Blocks** (a grid where one
-  block is a fixed number of MB). Switch with the control beside the heading, with `{` and `}` on a keyboard, or with
-  **Y** on a controller; the choice is remembered per account. Everyone sees their own data; admins also see the files
+  block is a fixed number of MB). Switch with the control beside the heading, or with **Y** on a keyboard or a
+  controller; the choice is remembered per account. Everyone sees their own data; admins also see the files
   location and the free space on its disk.
 
 Tandem never writes into an emulator's files while that emulator is running, and it backs up what it overwrites.
@@ -191,11 +191,13 @@ Then enter `/files2` in the dialog. The move goes in steps:
    and send what they held once it's over.
 4. **Switch.** Tandem starts using the new folder. The old copy stays where it was.
 
-**Remove old copy** deletes the old files, only when you ask. If a move fails or you cancel it, the old location is
-unchanged and the partial copy is removed.
+**Remove old copy** deletes the old files, only when you ask. A file the new folder lacks but a user still holds (the
+only copy of a save) is kept in the old folder, and the Storage page says how many were kept and where; Remove old copy
+stays offered for them. Until the old copy is removed, a further move is not offered. If a move fails or you cancel
+it, the old location is unchanged and the partial copy is removed.
 
 If the folder later goes missing (an unmounted NAS, say), Tandem does not create an empty one in its place. Uploads and
-downloads of files are refused, Home shows a red line naming the folder, and Tandem checks again every minute.
+downloads of files are refused, Home shows admins a red line naming the folder, and Tandem checks again every minute.
 Restore the mount and it carries on.
 
 ### Changing your email
