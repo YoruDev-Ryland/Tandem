@@ -51,7 +51,12 @@ function serve(world: Partial<World> = {}) {
           totalBytes: 3 * 1024 ** 3,
           byEmulator: [{ emulatorId: "eden", gameKey: null, displayName: null, bytes: 2 * 1024 ** 3 }],
           topGames: [{ emulatorId: "eden", gameKey: "0100ABC", displayName: "Zelda", bytes: 512 * 1024 ** 2 }],
+          games: [{ emulatorId: "eden", gameKey: "0100ABC", displayName: "Zelda", bytes: 512 * 1024 ** 2, currentBytes: 512 * 1024 ** 2, olderBytes: 0, versions: 1, kinds: ["Save"] }],
+          byKind: { saves: 3 * 1024 ** 3, states: 0, configs: 0, vault: 0, lostAndFound: 0 },
+          olderBytes: 0,
+          server: null,
         });
+      case "GET /v1/settings/storage-view": return reply(200, { view: "bars" });
       case "GET /v1/settings/notifications": return reply(200, notify);
       case "PUT /v1/settings/notifications": return reply(200, notify);
       case "POST /v1/settings/notifications/test":
@@ -170,10 +175,11 @@ describe("Settings", () => {
 
   it("lists storage in mono", async () => {
     await open("Storage");
-    const total = await screen.findByText("3.0 GB");
-    expect(total.classList.contains("mono")).toBe(true);
-    expect(screen.getByText("Zelda")).toBeTruthy();
-    expect(screen.getByText("512.0 MB")).toBeTruthy();
+    const games = await screen.findByRole("list", { name: "Largest games" });
+    expect(within(games).getByText("Zelda")).toBeTruthy();
+    expect(within(games).getByText("512.0 MB").classList.contains("mono")).toBe(true);
+    const saves = within(screen.getByRole("heading", { name: "By kind" }).parentElement!).getByText("3.0 GB");
+    expect(saves.classList.contains("mono")).toBe(true);
   });
 
   it("never renders the token, and saving without touching it sends token null", async () => {

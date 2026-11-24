@@ -1,5 +1,6 @@
 <script lang="ts">
   // Dev-only page that renders every UI kit component. ?theme=light|dark forces a theme; ?pad=1 fakes a gamepad; ?dialog=1 opens the dialog.
+  // ?storage=map|bars|blocks shows that Storage view with a real server's numbers instead (&user=1: as a non-admin).
   import { onMount } from "svelte";
   import { ApiError } from "../lib/api/http";
   import type { DeviceSummary, FileDiff } from "../lib/api/types";
@@ -18,6 +19,12 @@
   import Empty from "../lib/ui/Empty.svelte";
   import ErrorLine from "../lib/ui/ErrorLine.svelte";
   import Field from "../lib/ui/Field.svelte";
+  import MapView from "./settings/storage/MapView.svelte";
+  import BarsView from "./settings/storage/BarsView.svelte";
+  import BlocksView from "./settings/storage/BlocksView.svelte";
+  import StorageLower from "./settings/storage/StorageLower.svelte";
+  import { storageUsage } from "./_storageFixture";
+  import "./settings/settings.css";
 
   const params = new URLSearchParams(location.search);
   onMount(() => {
@@ -94,7 +101,24 @@
   let deviceName = $state("Odin 3");
   let otherName = $state("From Odin 3");
   let compare = $state("v6");
+
+  const storageView = params.get("storage");
+  const storageAdmin = params.get("user") !== "1";
+  const storageData = storageAdmin ? storageUsage : { ...storageUsage, server: null };
 </script>
+
+{#if storageView}
+  <main class="storage-kit">
+    <div class="sec wide">
+      <h2>Storage</h2>
+      {#if storageView === "bars"}<BarsView usage={storageData} isAdmin={storageAdmin} />
+      {:else if storageView === "blocks"}<BlocksView usage={storageData} isAdmin={storageAdmin} />
+      {:else}<MapView usage={storageData} isAdmin={storageAdmin} />
+      {/if}
+      <StorageLower usage={storageData} isAdmin={storageAdmin} />
+    </div>
+  </main>
+{:else}
 
 <div class="page">
   <TopBar tabs={[...PAGE_TABS]} active="/configs" {devices} waitingDeviceIds={["thor"]} />
@@ -186,6 +210,8 @@
   />
 </div>
 
+{/if}
+
 <Dialog bind:open={dialogOpen} title="Rename device">
   <Field label="Name" bind:value={deviceName} />
   <div class="buttons dialog-buttons">
@@ -195,6 +221,9 @@
 </Dialog>
 
 <style>
+  .storage-kit {
+    padding: 32px 40px;
+  }
   .page {
     min-height: 100vh;
     display: flex;

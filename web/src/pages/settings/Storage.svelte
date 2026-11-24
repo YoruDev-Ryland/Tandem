@@ -1,94 +1,127 @@
 <script lang="ts">
-  import { getStorage } from "../../lib/api/endpoints";
-  import { exportZipUrl } from "../../lib/api/paths";
+  import { onMount } from "svelte";
+  import { getStorage, getStorageView, setStorageView } from "../../lib/api/endpoints";
   import { resource } from "../../lib/api/resource.svelte";
-  import type { StorageRow } from "../../lib/api/types";
-  import { emulatorName } from "../../lib/emulators";
-  import { formatSize } from "../../lib/format";
+  import type { StorageView } from "../../lib/api/types";
+  import { onAction } from "../../lib/input/actions";
+  import { gamepad } from "../../lib/input/gamepad.svelte";
+  import { session } from "../../lib/session.svelte";
+  import { cycleView, VIEW_LABEL, VIEWS } from "../../lib/storage/page";
   import Empty from "../../lib/ui/Empty.svelte";
   import ErrorLine from "../../lib/ui/ErrorLine.svelte";
+  import Glyph from "../../lib/ui/Glyph.svelte";
+  import BarsView from "./storage/BarsView.svelte";
+  import BlocksView from "./storage/BlocksView.svelte";
+  import MapView from "./storage/MapView.svelte";
+  import StorageLower from "./storage/StorageLower.svelte";
 
-  const usage = resource(getStorage, ["saves", "configs", "vault"]);
-  const label = (r: StorageRow) => r.displayName ?? (r.emulatorId ? emulatorName(r.emulatorId) : "Vault, no emulator");
+  const usage = resource(getStorage, ["saves", "configs", "vault", "lost", "storage"]);
+  const isAdmin = $derived(session.account?.isAdmin === true);
+
+  // The account's saved view; until it arrives the page waits rather than flash the map first. Unreadable is the map.
+  let view = $state<StorageView | null>(null);
+  onMount(() => {
+    getStorageView().then(
+      (v) => (view ??= VIEWS.includes(v) ? v : "map"),
+      () => (view ??= "map"),
+    );
+  });
+
+  function choose(v: StorageView) {
+    if (v === view) return;
+    view = v;
+    setStorageView(v).catch(() => {});
+  }
+
+  // L2/R2 cycle the view here, ahead of the Settings sections.
+  $effect(() =>
+    onAction((a) => {
+      if ((a !== "l2" && a !== "r2") || !view || !usage.data || usage.data.totalBytes === 0) return false;
+      choose(cycleView(view, a === "r2" ? 1 : -1));
+      return true;
+    }),
+  );
 </script>
 
-<div class="sec wide">
-  <h2>Storage</h2>
+<div class="sec wide storage">
+  <div class="head">
+    <h2>Storage</h2>
+    {#if usage.data && usage.data.totalBytes > 0 && view}
+      <div class="views" role="group" aria-label="View">
+        {#if gamepad.connected}<Glyph action="l2" />{/if}
+        <span class="seg">
+          {#each VIEWS as v (v)}
+            <button type="button" aria-pressed={v === view} onclick={() => choose(v)}>{VIEW_LABEL[v]}</button>
+          {/each}
+        </span>
+        {#if gamepad.connected}<Glyph action="r2" />{/if}
+      </div>
+    {/if}
+  </div>
+
   {#if usage.error && !usage.data}
     <ErrorLine error={usage.error} />
-  {:else if !usage.data}
+  {:else if !usage.data || !view}
     <p class="note" aria-busy="true">— — —</p>
+  {:else if usage.data.totalBytes === 0}
+    <Empty text="Nothing is stored yet." />
+    {#if isAdmin && usage.data.server}<StorageLower usage={usage.data} {isAdmin} filesOnly />{/if}
   {:else}
     {@const u = usage.data}
-    <p class="note">Used in total <span class="mono">{formatSize(u.totalBytes)}</span></p>
-    <div class="export">
-      <a class="btn" href={exportZipUrl()} download>Export everything</a>
-      <span class="note">A zip of every current save, state and config, in each emulator's own folders.</span>
-    </div>
-    {#if u.byEmulator.length === 0}
-      <Empty text="Nothing is stored yet." />
-    {:else}
-      <h3>By emulator</h3>
-      <ul class="rows">
-        {#each u.byEmulator as r (r.emulatorId)}
-          <li>
-            <span class="grow">{label(r)}</span>
-            <span class="mono">{formatSize(r.bytes)}</span>
-            {#if r.emulatorId}<a class="link" href={exportZipUrl(r.emulatorId)} download aria-label="Export {label(r)}">Export</a>{/if}
-          </li>
-        {/each}
-      </ul>
-      <h3>Largest games</h3>
-      <ul class="rows">
-        {#each u.topGames as r (`${r.emulatorId}/${r.gameKey}`)}
-          <li>
-            <span class="grow">{label(r)}</span>
-            <span class="ink2">{emulatorName(r.emulatorId)}</span>
-            <span class="mono">{formatSize(r.bytes)}</span>
-          </li>
-        {/each}
-      </ul>
+    {#if view === "map"}<MapView usage={u} {isAdmin} />
+    {:else if view === "bars"}<BarsView usage={u} {isAdmin} />
+    {:else}<BlocksView usage={u} {isAdmin} />
     {/if}
+    <StorageLower usage={u} {isAdmin} />
   {/if}
 </div>
 
 <style>
-  .export {
+  .head {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
     flex-wrap: wrap;
-    align-items: center;
-    gap: 10px 16px;
   }
-  .btn {
+  .views {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .seg {
     display: inline-flex;
-    align-items: center;
-    height: 40px;
-    padding: 0 16px;
-    border-radius: 3px;
     border: 1.5px solid var(--rule2);
-    color: var(--ink);
-    font: 600 14px "Barlow", system-ui, sans-serif;
-    text-decoration: none;
-    transition: border-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    border-radius: 3px;
   }
-  .btn:hover {
-    border-color: var(--ink3);
-  }
-  .link {
-    width: 56px;
-    text-align: right;
+  .seg button {
+    height: 30px;
+    padding: 0 14px;
+    border: 0;
+    background: none;
     color: var(--ink2);
-    font-size: 14px;
-    text-underline-offset: 3px;
+    font: 600 13px "Barlow", system-ui, sans-serif;
+    cursor: pointer;
   }
-  .link:hover {
+  .seg button + button {
+    border-left: 1.5px solid var(--rule2);
+  }
+  .seg button:hover {
     color: var(--ink);
   }
-  .grow {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .seg button[aria-pressed="true"] {
+    background: var(--ink);
+    color: var(--bg);
+  }
+  .seg button:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .seg button {
+      transition:
+        color 150ms cubic-bezier(0.23, 1, 0.32, 1),
+        background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
   }
 </style>

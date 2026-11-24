@@ -43,6 +43,12 @@
   // A non-admin who lands on an admin section (a stale link) gets Account.
   const current = $derived(visible.find((s) => s.id === section)?.id ?? "account");
 
+  // A link inside a section (Storage's "Retention") moves to another section through the URL.
+  $effect(() => {
+    const s = new URLSearchParams(router.search).get("s");
+    if (s) section = s;
+  });
+
   function select(path: string) {
     section = new URL(path, location.origin).searchParams.get("s") ?? "account";
     router.go(path, { replace: true });

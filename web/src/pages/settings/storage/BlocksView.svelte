@@ -1,0 +1,298 @@
+<script lang="ts">
+  import { exportZipUrl, gamePath } from "../../../lib/api/paths";
+  import type { StorageUsage } from "../../../lib/api/types";
+  import { emulatorName } from "../../../lib/emulators";
+  import { formatSize } from "../../../lib/format";
+  import { onAction } from "../../../lib/input/actions";
+  import { router } from "../../../lib/router.svelte";
+  import { blockGroups, blockLayout } from "../../../lib/storage/blocks";
+  import { tileTip } from "../../../lib/storage/page";
+  import type { Tile } from "../../../lib/storage/tiles";
+  import StorageTip from "./StorageTip.svelte";
+
+  let { usage: u, isAdmin }: { usage: StorageUsage; isAdmin: boolean } = $props();
+
+  const COLS = 20;
+
+  const laid = $derived(blockGroups(u, isAdmin));
+  const unit = $derived(laid.unit);
+  const groupOf = $derived(new Map(laid.groups.map((g) => [g.tile.id, g])));
+  const blocks = $derived(blockLayout(laid.groups.map((g) => ({ id: g.tile.id, bytes: g.tile.value, olderBytes: g.tile.olderBytes ?? 0 })), unit));
+  const free = $derived((COLS - (blocks.length % COLS)) % COLS);
+  const notched = $derived(blocks.filter((b) => b.notched).length);
+  const bytes = $derived(laid.groups.reduce((s, g) => s + g.tile.value, 0));
+
+  interface Key { id: string; label: string; kind: Tile["kind"]; colour?: string; emulatorId?: string; count: number }
+  const keys = $derived.by(() => {
+    const out = new Map<string, Key>();
+    for (const b of blocks) {
+      const g = groupOf.get(b.group)!;
+      const k = out.get(g.key);
+      if (k) k.count++;
+      else {
+        const t = g.tile;
+        const emulator = t.kind === "game" || t.kind === "more";
+        out.set(g.key, { id: g.key, label: emulator ? emulatorName(t.emulatorId!) : t.label, kind: emulator ? "emulator" : t.kind, colour: t.colour, emulatorId: emulator ? t.emulatorId : undefined, count: 1 });
+      }
+    }
+    return [...out.values()];
+  });
+
+  let cursor = $state(0);
+  // The cursor shows once the keys or the pointer are on the card.
+  let lit = $state(false);
+  const at = $derived(Math.min(cursor, Math.max(0, blocks.length - 1)));
+  const focusKey = $derived(blocks[at] ? groupOf.get(blocks[at].group)?.key : undefined);
+
+  let grid = $state<HTMLDivElement>();
+  let tip = $state<{ i: number; x: number; y: number } | null>(null);
+  let box = $state({ w: 600, h: 300 });
+
+  function place(i: number, x?: number, y?: number) {
+    if (!grid) return;
+    const el = grid.children[i] as HTMLElement | undefined;
+    const g = grid.getBoundingClientRect();
+    box = { w: g.width || 600, h: g.height || 300 };
+    if (x === undefined || y === undefined) {
+      const r = el?.getBoundingClientRect();
+      x = r ? r.left - g.left + r.width / 2 : 0;
+      y = r ? r.top - g.top + r.height / 2 : 0;
+    }
+    tip = { i, x, y };
+  }
+
+  function pointerMove(e: PointerEvent) {
+    const el = (e.target as HTMLElement).closest<HTMLElement>("[data-i]");
+    if (!el || !grid) return;
+    const i = Number(el.dataset.i);
+    cursor = i;
+    lit = true;
+    const g = grid.getBoundingClientRect();
+    place(i, e.clientX - g.left, e.clientY - g.top);
+  }
+
+  function open(i: number) {
+    const t = blocks[i] ? groupOf.get(blocks[i].group)?.tile : undefined;
+    if (t?.kind === "game") router.go(gamePath(t.emulatorId!, t.gameKey!));
+  }
+
+  $effect(() =>
+    onAction((a) => {
+      if (!blocks.length) return false;
+      const step = a === "left" ? -1 : a === "right" ? 1 : a === "up" ? -COLS : a === "down" ? COLS : 0;
+      if (step) {
+        lit = true;
+        const to = at + step;
+        if (to >= 0 && to < blocks.length) cursor = to;
+        place(cursor === to ? to : at);
+        return true;
+      }
+      if (a === "a") {
+        open(at);
+        return true;
+      }
+      return false;
+    }),
+  );
+
+  const tipTile = $derived(tip && blocks[tip.i] ? groupOf.get(blocks[tip.i].group)?.tile : undefined);
+  const tipFor = (t: Tile) => {
+    const base = tileTip(t, u);
+    const n = blocks.filter((b) => b.group === t.id).length;
+    return { title: base.title, lines: [...base.lines, `${n} ${n === 1 ? "block" : "blocks"}`] };
+  };
+  const heroNote = $derived(
+    [`${formatSize(bytes)}`, `1 block = ${unit} MB`, ...(isAdmin && u.server?.diskFreeBytes != null ? [`${formatSize(u.server.diskFreeBytes)} free on the disk`] : [])].join(" · "),
+  );
+  const swatch = (k: { kind: Tile["kind"]; colour?: string }) => (k.colour ? `background: ${k.colour}` : "");
+</script>
+
+<div>
+  <div class="kick">Used by Tandem</div>
+  <div class="hero">
+    <b>{blocks.length} {blocks.length === 1 ? "block" : "blocks"}</b>
+    <span class="note">{heroNote}</span>
+  </div>
+</div>
+
+<div class="side">
+  <div class="wrap">
+    <div class="card" class:lit role="group" aria-label="Storage blocks" bind:this={grid} onpointermove={pointerMove} onpointerleave={() => {
+        tip = null;
+        lit = false;
+      }}>
+      {#each blocks as b, i (i)}
+        {@const g = groupOf.get(b.group)!}
+        <i
+          data-i={i}
+          class={g.tile.kind}
+          class:notch={b.notched}
+          class:cur={lit && i === at}
+          class:act={g.tile.kind === "game"}
+          style:background={g.tile.colour}
+          onclick={() => {
+            cursor = i;
+            open(i);
+          }}
+          aria-hidden="true"
+        ></i>
+      {/each}
+      {#each { length: free }, i (i)}<i class="free" aria-hidden="true"></i>{/each}
+    </div>
+    {#if tip && tipTile}
+      <StorageTip tip={tipFor(tipTile)} x={tip.x} y={tip.y} boxW={box.w} boxH={box.h} />
+    {/if}
+  </div>
+  <ul class="key" aria-label="Key">
+    {#each keys as k (k.id)}
+      <li class:focus={lit && k.id === focusKey}>
+        <i class={k.kind} style={swatch(k)}></i>
+        <span class="name">{k.label}</span>
+        <span class="mono">{k.count}</span>
+        {#if k.emulatorId}
+          <a class="link" href={exportZipUrl(k.emulatorId)} download aria-label="Export {k.label}">Export</a>
+        {:else}<span></span>{/if}
+      </li>
+    {/each}
+  </ul>
+</div>
+<p class="note">
+  Hover or move the cursor onto a block to see whose it is.
+  {#if notched > 0}Older versions kept by Retention are the blocks with a notch: <span class="mono strong">{notched}</span> of them.{/if}
+</p>
+
+<style>
+  .kick {
+    font: 500 11px "Barlow", system-ui, sans-serif;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink3);
+  }
+  .hero {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-top: 4px;
+  }
+  .hero b {
+    font: 600 46px/1 "Barlow Semi Condensed", sans-serif;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .note {
+    margin: 0;
+    color: var(--ink2);
+    font-size: 14px;
+  }
+  .strong {
+    color: var(--ink);
+  }
+  .side {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: 28px;
+    align-items: start;
+  }
+  .wrap {
+    position: relative;
+    max-width: 600px;
+  }
+  .card {
+    display: grid;
+    grid-template-columns: repeat(20, 1fr);
+    gap: 4px;
+  }
+  .card i {
+    display: block;
+    aspect-ratio: 1;
+    border-radius: 1px;
+    box-shadow: inset 0 0 0 1px var(--rule2);
+  }
+  .card i.act {
+    cursor: pointer;
+  }
+  .card i.free {
+    box-shadow: inset 0 0 0 1px var(--rule);
+    background: none;
+  }
+  .card i.notch {
+    clip-path: polygon(0 0, 70% 0, 100% 30%, 100% 100%, 0 100%);
+  }
+  .card i.cur {
+    outline: 2px solid var(--ink);
+    outline-offset: 1px;
+    clip-path: none;
+  }
+  .art {
+    background: repeating-linear-gradient(135deg, var(--rule2) 0 2px, transparent 2px 6px);
+  }
+  .database {
+    background: radial-gradient(var(--ink3) 1px, transparent 1.3px) 0 0 / 5px 5px;
+  }
+  .configs {
+    background: var(--ink3);
+  }
+  .key {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .key li {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr) auto 44px;
+    align-items: center;
+    gap: 10px;
+    margin-left: -10px;
+    padding: 7px 0 7px 10px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .key li.focus {
+    background: var(--raised);
+  }
+  .key i {
+    width: 14px;
+    height: 14px;
+    border-radius: 1px;
+    box-shadow: inset 0 0 0 1px var(--rule2);
+  }
+  .key .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .key .mono {
+    color: var(--ink2);
+    text-align: right;
+  }
+  .mono {
+    font: 400 13px "JetBrains Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .link {
+    justify-self: end;
+    color: var(--ink2);
+    font-size: 13px;
+    text-underline-offset: 3px;
+  }
+  .link:hover {
+    color: var(--ink);
+  }
+  @media (max-width: 760px) {
+    .side {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .key li {
+      transition: background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+    .link {
+      transition: color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+  }
+</style>
