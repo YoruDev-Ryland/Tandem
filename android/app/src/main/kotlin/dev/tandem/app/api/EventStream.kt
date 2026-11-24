@@ -25,6 +25,7 @@ class EventStream(
     private val onDeliveries: () -> Unit,
     private val onState: (Boolean) -> Unit,
     private val onRevoked: () -> Unit = {},
+    private val onStorage: () -> Unit = {},
     readTimeoutMillis: Long = SSE_READ_TIMEOUT_MS,
     private val backoff: LongArray = longArrayOf(1_000, 2_000, 5_000, 10_000, 30_000),
 ) {
@@ -69,6 +70,7 @@ class EventStream(
 
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 if (type == "deliveries") onDeliveries()
+                else if (type == "storage") onStorage()
             }
 
             override fun onClosed(eventSource: EventSource) = lost()

@@ -94,6 +94,9 @@ class WorkPlanner(private val autoApply: Boolean, private val flags: ApplyOnExit
     /** The server's `deliveries` event. */
     fun deliveriesEvent(): List<SyncWork> = applyIfAuto()
 
+    /** The server's `storage` event: a hold on uploads started or ended. Scans, which sends what was held. */
+    fun storageEvent(): List<SyncWork> = listOf(SyncWork.FullScan)
+
     /** The periodic delivery poll. */
     fun poll(): List<SyncWork> = applyIfAuto()
 

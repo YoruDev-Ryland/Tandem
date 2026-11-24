@@ -14,8 +14,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
-/** [Revoked]: the server answered device_revoked; sync is stopped until a sign-in. */
-enum class ServerConn { Connected, Offline, SignedOut, Revoked }
+/** [Revoked]: the server answered device_revoked; sync is stopped until a sign-in. [Moving]: the server holds uploads while it moves its files. */
+enum class ServerConn { Connected, Offline, SignedOut, Revoked, Moving }
 
 /**
  * The top bar's status. [lastSync] is when the server cache last refreshed; [lastSyncedAt] when this device last
@@ -75,6 +75,7 @@ class AppState(
                 key == null -> ServerConn.SignedOut
                 store.revoked -> ServerConn.Revoked
                 games.offline -> ServerConn.Offline
+                snap.moving -> ServerConn.Moving
                 snap.online || games.updatedAt != null -> ServerConn.Connected
                 else -> ServerConn.Offline
             },

@@ -48,6 +48,7 @@ class SyncEngineTest {
         var configStatus = SaveUploadStatus.Accepted
         var failSaveFor: String? = null
         var unparseableSaveFor: String? = null
+        var moving = false                      // blob PUTs answer 503 server_moving while true
         var blobRetries = 0                     // the next N blob PUTs answer 503 blob_retry
         private var n = 0
 
@@ -70,6 +71,7 @@ class SyncEngineTest {
         }
         override suspend fun putBlob(hash: String, size: Long, source: () -> InputStream) {
             source().use { it.readBytes() }
+            if (moving) throw ApiException(503, "server_moving", "moving files")
             if (blobRetries > 0) { blobRetries--; throw ApiException(503, "blob_retry", "send it again") }
             putBlobs += hash; serverBlobs += hash
         }
@@ -785,6 +787,41 @@ class SyncEngineTest {
         e.fullScan()                                  // next scan: the server takes it now
         assertEquals(1, api.saves.size)
         assertEquals(0, e.queuedCount())
+    }
+
+    @Test fun a_server_moving_upload_stays_queued_and_sets_the_moving_flag() = runBlocking {
+        put("saves/GAME1/a.sav", "hello"); put("saves/GAME2/a.sav", "world")
+        api.moving = true
+        val e = engine()
+        e.fullScan()
+        assertTrue(e.serverMoving())
+        assertEquals(2, e.queuedCount())
+        assertTrue(delays.isEmpty())
+        assertTrue(api.saves.isEmpty())
+        assertTrue(logs.none { it.contains("server error") })
+        assertEquals(1, logs.count { it.contains("server moving files; holding 2 changes") })
+    }
+
+    @Test fun the_next_successful_upload_clears_moving() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.moving = true
+        val e = engine()
+        e.fullScan()
+        assertTrue(e.serverMoving())
+        api.moving = false
+        e.fullScan()
+        assertFalse(e.serverMoving())
+        assertEquals(0, e.queuedCount())
+        assertEquals(1, api.saves.size)
+    }
+
+    @Test fun a_storage_event_clears_moving() = runBlocking {
+        put("saves/GAME1/a.sav", "hello")
+        api.moving = true
+        val e = engine()
+        e.fullScan()
+        e.storageChanged()
+        assertFalse(e.serverMoving())
     }
 
     @Test fun conflicts_carry_display_names() = runBlocking {

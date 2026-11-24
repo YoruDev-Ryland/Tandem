@@ -40,4 +40,13 @@ class StatusTextTest {
     @Test fun removed_from_the_server_wins_over_everything() {
         assertEquals("Removed from the server: open Tandem", statusText(ShizukuState.NotRunning, 2, 1, online = false, revoked = true))
     }
+
+    @Test fun status_reads_server_is_moving_files_with_held_changes() {
+        assertEquals("Server is moving files: 3 changes held", statusText(ShizukuState.Ready, 6, 3, moving = true))
+        assertEquals("Server is moving files: 1 change held", statusText(ShizukuState.Ready, 6, 1, moving = true))
+        assertEquals("Server is moving files: 2 changes held", statusText(ShizukuState.Ready, 6, 2, online = false, moving = true))
+        assertEquals("Shizuku is off: open Tandem", statusText(ShizukuState.NotRunning, 6, 2, moving = true))
+        assertEquals("Not signed in: open Tandem", statusText(ShizukuState.Ready, 6, 2, signedIn = false, moving = true))
+        assertEquals("Removed from the server: open Tandem", statusText(ShizukuState.Ready, 6, 2, revoked = true, moving = true))
+    }
 }

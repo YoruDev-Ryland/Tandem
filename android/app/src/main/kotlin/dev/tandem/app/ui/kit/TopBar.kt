@@ -63,6 +63,7 @@ fun serverCopy(status: TopStatus): Pair<String, Tone>? = when (status.server) {
     ServerConn.Offline -> "Server unreachable" to Tone.Wait
     ServerConn.SignedOut -> "Signed out" to Tone.Fault
     ServerConn.Revoked -> "Removed from server" to Tone.Fault
+    ServerConn.Moving -> "Server is moving files" to Tone.Wait
 }
 
 /**

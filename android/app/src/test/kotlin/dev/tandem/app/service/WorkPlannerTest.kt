@@ -32,6 +32,11 @@ class WorkPlannerTest {
         assertEquals(listOf(SyncWork.ApplyRequested), p.explicitApply())
     }
 
+    @Test fun a_storage_event_plans_a_full_scan() {
+        assertEquals(listOf(SyncWork.FullScan), WorkPlanner(autoApply = false).storageEvent())
+        assertEquals(listOf(SyncWork.FullScan), WorkPlanner(autoApply = true).storageEvent())
+    }
+
     @Test fun auto_apply_off_still_scans_on_reconnect() {
         val p = WorkPlanner(autoApply = false)
         assertEquals(listOf(SyncWork.FullScan), p.streamOpened(reconnect = true))

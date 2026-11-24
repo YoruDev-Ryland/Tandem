@@ -283,6 +283,7 @@ class SyncService : Service() {
                     publish()
                 },
                 onRevoked = { onRevoked(key) },
+                onStorage = { sess.engine.storageChanged(); offer(planner.storageEvent()); publish() },
             )
             // An emulator an asked-for apply waits on may have closed while the service was down: the first monitor
             // that finds it closed finishes the apply as an exit would.
@@ -491,6 +492,7 @@ class SyncService : Service() {
             online = online != false,
             signedIn = !store.serverUrl.isNullOrBlank() && !store.deviceKey.isNullOrBlank(),
             revoked = store.revoked,
+            moving = e?.serverMoving() == true,
         )
     }
 
@@ -504,6 +506,7 @@ class SyncService : Service() {
             running = true,
             status = text,
             online = online == true,
+            moving = e?.serverMoving() == true,
             emulators = e?.detectedEmulators()?.map { EmulatorInfo(it, counts[it.emulatorId] ?: 0) } ?: emptyList(),
             watchDirs = session?.watched?.size ?: 0,
             live = session != null,

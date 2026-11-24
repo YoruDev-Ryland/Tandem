@@ -59,6 +59,8 @@ class AppStateTest {
         assertEquals(ServerConn.Connected, s.top.value.server)
         assertEquals("Deck", s.top.value.deviceName)
         assertEquals(true, s.top.value.signedIn)
+        AppGraph.snapshot.value = ServiceSnapshot(running = true, online = true, moving = true)
+        assertEquals(ServerConn.Moving, s.top.value.server)
     }
 
     @Test fun shizuku_not_running_is_reflected() = runTest {

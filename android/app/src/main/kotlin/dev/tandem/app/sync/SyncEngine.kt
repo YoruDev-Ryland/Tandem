@@ -90,6 +90,8 @@ class SyncEngine(
     private val marks = HashMap<String, Long>()               // store key -> sequence of its last event
     private var eventSeq = 0L
     private val shadowLogged = HashSet<String>()
+    @Volatile private var moving = false                      // the server answered 503 server_moving and no upload has gone through since
+    @Volatile private var movingHitInScan = false             // a server_moving answer since the last full scan began
     private val queued = HashSet<String>()                   // store keys whose last upload attempt failed
     private val titles = HashMap<String, String>()            // "<emulatorId>|<gameKey>" -> game title (items, installs)
     private var running: Set<String> = emptySet()             // emulator ids the last [reportRunning] saw running
@@ -116,6 +118,7 @@ class SyncEngine(
 
     /** Detects modules, reports status and installs, then uploads every changed item and idle config bundle. */
     suspend fun fullScan(): Unit = mutex.withLock {
+        movingHitInScan = false
         dropServerRecords(force = true)
         val found = LinkedHashMap<String, Pair<EmulatorModule, Detected>>()
         for (m in registry.all()) detectOne(m)?.let { found[m.emulatorId] = m to it }
@@ -141,7 +144,10 @@ class SyncEngine(
             }
         }
         for ((m, d) in found.values) if (!fs.isEmulatorRunning(m, d)) uploadConfigBundle(m, d)
-
+        if (movingHitInScan) {
+            val n = queuedCount()
+            log("server moving files; holding $n change${if (n == 1) "" else "s"}")
+        }
     }
 
     /**
@@ -295,6 +301,12 @@ class SyncEngine(
 
     /** Items and config bundles whose last upload failed on a server or network error (retried by the next scan). */
     fun queuedCount(): Int = synchronized(ev) { queued.size }
+
+    /** The server is moving its files and holds uploads: true after a 503 `server_moving` until an upload goes through or [storageChanged]. */
+    fun serverMoving(): Boolean = moving
+
+    /** The server's `storage` event: a hold started or ended. Forget what was learned; the scan it plans finds out. */
+    fun storageChanged() { moving = false }
 
     /** Runs [block] under the engine's lock (non-reentrant: [block] must not call the engine's public suspend functions). */
     suspend fun <T> withLock(block: suspend () -> T): T = mutex.withLock { block() }
@@ -460,6 +472,7 @@ class SyncEngine(
     /** Records whether the upload of [key] failed ([status] null from [apiCall]) for [queuedCount]. */
     private fun queueing(key: String, status: SaveUploadStatus?): SaveUploadStatus? {
         synchronized(ev) { if (status == null) queued += key else queued -= key }
+        if (status != null) moving = false
         return status
     }
 
@@ -673,7 +686,12 @@ class SyncEngine(
     private inline fun <T> apiCall(name: String, f: () -> T): T? = try {
         f()
     } catch (e: ApiException) {
-        log("$name: server error ${e.status} ${e.code ?: ""}".trimEnd()); null
+        if (e.status == 503 && e.code == "server_moving") {
+            moving = true; movingHitInScan = true
+            null
+        } else {
+            log("$name: server error ${e.status} ${e.code ?: ""}".trimEnd()); null
+        }
     } catch (e: IOException) {
         log("$name: io error, skipped (${e.message})"); null
     } catch (e: kotlinx.serialization.SerializationException) {

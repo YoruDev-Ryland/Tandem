@@ -17,6 +17,8 @@ data class ServiceSnapshot(
     val running: Boolean = false,
     val status: String = "Not running",
     val online: Boolean = false,
+    /** The server holds uploads while it moves its files. */
+    val moving: Boolean = false,
     val emulators: List<EmulatorInfo> = emptyList(),
     val watchDirs: Int = 0,
     /** A signed-in session finished its first scan and runs: [emulators] is what it detected. */

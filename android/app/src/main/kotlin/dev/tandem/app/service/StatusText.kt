@@ -5,7 +5,7 @@ import dev.tandem.app.fs.ShizukuState
 /**
  * The persistent notification's text. [watching] is the number of detected emulators, [queued] the uploads that
  * failed and wait for the next scan. [online] is the server event stream's state; [signedIn] whether a device key
- * and server URL are stored.
+ * and server URL are stored. [moving]: the server holds uploads while it moves its files.
  */
 fun statusText(
     state: ShizukuState,
@@ -14,11 +14,13 @@ fun statusText(
     online: Boolean = true,
     signedIn: Boolean = true,
     revoked: Boolean = false,
+    moving: Boolean = false,
 ): String = when {
     signedIn && revoked -> "Removed from the server: open Tandem"
     state == ShizukuState.NotRunning -> "Shizuku is off: open Tandem"
     state == ShizukuState.NoPermission -> "Shizuku permission needed: open Tandem"
     !signedIn -> "Not signed in: open Tandem"
+    moving -> "Server is moving files: ${changes(queued)} held"
     !online -> "Offline: ${changes(queued)} queued"
     watching == 0 -> "No emulators found" + (if (queued > 0) ", ${changes(queued)} queued" else "")
     else -> "Watching $watching emulator${if (watching == 1) "" else "s"}" +
