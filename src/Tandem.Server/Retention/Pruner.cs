@@ -27,8 +27,8 @@ public sealed record PruneResult(int Versions, int Blobs, long Bytes)
 /// the head; a resolve, in SaveService.SetKnownForUploaderAsync, with the winner's uploader's known version) and
 /// never loads the base version it names, and keeping it transitively would keep every version.</para>
 /// <para>Each user's prune holds the <see cref="MaintenanceLock"/> (so never overlaps a backup run) and then the user's lock.</para>
-/// <para>Then blob GC: a blob is deleted only when no remaining version manifest (save, config, vault), raw config
-/// upload, or expanded Config delivery manifest (un-acked, or created in the last 7 days) references it AND it was
+/// <para>Then blob GC: a blob is deleted only when no remaining version manifest (save, config, vault), Lost &amp; found
+/// item, raw config upload, or expanded Config delivery manifest (un-acked, or created in the last 7 days) references it AND it was
 /// last uploaded or confirmed present more than an hour ago (blobs are sent before their manifest). Version rows are
 /// deleted first, then blob rows (committed), and only then the files; a failed file delete is logged and skipped.</para>
 /// </summary>
@@ -283,6 +283,10 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
             Add(Manifests.FromJson(json));
         await foreach (var json in db.VaultVersions.AsNoTracking()
                            .Where(v => db.VaultItems.Any(i => i.Id == v.ItemId && i.UserId == userId)).Select(v => v.ManifestJson)
+                           .AsAsyncEnumerable().WithCancellation(ct))
+            Add(Manifests.FromJson(json));
+        // Lost & found holds a deleted game's saves until the owner restores or deletes them: never collected meanwhile.
+        await foreach (var json in db.LostItems.AsNoTracking().Where(l => l.UserId == userId).Select(l => l.ManifestJson)
                            .AsAsyncEnumerable().WithCancellation(ct))
             Add(Manifests.FromJson(json));
         await foreach (var json in db.RawConfigUploads.AsNoTracking().Where(r => devices.Contains(r.DeviceId)).Select(r => r.ManifestJson)

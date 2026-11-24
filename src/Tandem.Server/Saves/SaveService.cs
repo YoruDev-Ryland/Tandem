@@ -23,7 +23,14 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
     public const int MaxBulkItems = 10000;
     public const int MaxVariantName = 80;
 
-    public async Task<SaveUploadResponse> UploadAsync(Guid userId, Guid? deviceId, SaveUploadRequest request, CancellationToken ct)
+    public Task<SaveUploadResponse> UploadAsync(Guid userId, Guid? deviceId, SaveUploadRequest request, CancellationToken ct) =>
+        UploadCoreAsync(userId, deviceId, request, null, ct);
+
+    /// <param name="lostId">A Lost &amp; found item being restored (a web action, so <paramref name="deviceId"/> is null).
+    /// It is removed in the same save as the new version. A restore never displaces a head: with no head it becomes
+    /// the head; next to a head with other content it opens a Concurrent conflict for the owner to settle.</param>
+    private async Task<SaveUploadResponse> UploadCoreAsync(Guid userId, Guid? deviceId, SaveUploadRequest request, Guid? lostId,
+        CancellationToken ct)
     {
         ValidateIdentity(request);
         var manifest = Manifests.Normalize(request.Manifest);
@@ -41,6 +48,14 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
         {
             // Again under the lock: the pruner (which holds it) may have removed an old unreferenced blob since.
             await blobs.RequireSizesAsync(userId, manifest, ct);
+            if (lostId is Guid lostCheck)
+            {
+                // Checked under the lock, before the item is (re)created: a refused restore leaves nothing behind.
+                if (!await db.LostItems.AnyAsync(l => l.Id == lostCheck && l.UserId == userId, ct))
+                    throw new ApiException(404, "not_found", "Not in Lost & found.");
+                if ((await FindHeadAsync(userId, request.EmulatorId, request.Kind, request.GameKey, slot, core, ct)).OpenConflict)
+                    throw new ApiException(409, "conflict_open", "Resolve the open conflict before restoring.");
+            }
             var itemId = await FindOrCreateItemAsync(userId, request.EmulatorId, request.Kind, request.GameKey, slot, itemCore, ct);
             await using var tx = await BeginAsync(ct);
             var item = await LoadItemForUpdateAsync(userId, itemId, ct)
@@ -52,13 +67,15 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
             var head = item.HeadVersionId is Guid headId
                 ? await db.SaveVersions.SingleAsync(v => v.Id == headId, ct)
                 : null;
+            if (lostId is Guid lost)
+                db.LostItems.Remove(await db.LostItems.SingleAsync(l => l.Id == lost && l.UserId == userId, ct));
 
             if (head is not null && head.ManifestHash == manifestHash)
             {
                 if (deviceId is Guid d1) await SetKnownAsync(d1, item.Id, head.Id, ct);
                 response = new SaveUploadResponse(SaveUploadStatus.Unchanged, item.Id, head.Id, head.Id);
             }
-            else if (head is not null && request.BaseVersionId != head.Id && await db.SaveVersions
+            else if (lostId is null && head is not null && request.BaseVersionId != head.Id && await db.SaveVersions
                          .Where(v => v.ItemId == item.Id && v.Id != head.Id && v.ManifestHash == manifestHash
                                      && (v.ConflictReason == null || v.Resolved) // never an open conflict
                                      && (v.Resolved || v.Variant != null || v.Pinned))
@@ -71,7 +88,7 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
                 response = new SaveUploadResponse(SaveUploadStatus.Superseded, item.Id, settled, head.Id);
                 evt = new SaveHeadChanged(userId, item.Id, head.Id);
             }
-            else if (head is not null && request.BaseVersionId != head.Id && await db.SaveVersions
+            else if (lostId is null && head is not null && request.BaseVersionId != head.Id && await db.SaveVersions
                          .Where(v => v.ItemId == item.Id && v.DeviceId == deviceId && v.ConflictReason != null && !v.Resolved
                                      && v.ManifestHash == manifestHash)
                          .OrderBy(v => v.Seq).Select(v => (Guid?)v.Id).FirstOrDefaultAsync(ct) is Guid existingConflict)
@@ -87,7 +104,8 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
                 // server's own record, never the request, decides this: only then is the upload based on the head.
                 // A Fresh upload comes from a device that forgot what it knew (a variant switch, a new sign-in), so
                 // its files need not descend from that record: its base is taken as sent.
-                var baseId = request.BaseVersionId;
+                // A restore's files descend from a version that was deleted with its game: no base.
+                var baseId = lostId is null ? request.BaseVersionId : null;
                 if (head is not null && baseId != head.Id && request.Fresh != true && deviceId is Guid holder
                     && await db.DeviceItemStates.AnyAsync(s => s.DeviceId == holder && s.ItemId == item.Id && s.KnownVersionId == head.Id, ct))
                     baseId = head.Id;
@@ -111,7 +129,8 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
                 }
                 else
                 {
-                    var reason = baseId is null ? ConflictReason.FirstSync : ConflictReason.Concurrent;
+                    // A restore beside a head is two copies changed apart, not a device's first sync.
+                    var reason = baseId is null && lostId is null ? ConflictReason.FirstSync : ConflictReason.Concurrent;
                     version.ConflictReason = reason;
                     item.OpenConflict = true;
                     response = new SaveUploadResponse(SaveUploadStatus.Conflict, item.Id, version.Id, head.Id);
@@ -130,7 +149,13 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
         {
             var device = deviceId is Guid dn ? await DeviceNameAsync(dn, ct) : "The web app";
             var what = request.Kind == ItemKind.Save ? "save" : "state";
-            if (response.Status == SaveUploadStatus.Accepted)
+            if (lostId is not null && response.Status == SaveUploadStatus.Accepted)
+                await activity.WriteAsync(userId, "save_uploaded", $"Restored the {what} of {label} from Lost & found", null, request.EmulatorId, request.GameKey);
+            else if (lostId is not null)
+                await activity.WriteAsync(userId, "conflict_opened",
+                    $"Restored the {what} of {label} from Lost & found next to a newer one, which conflicts", null, request.EmulatorId, request.GameKey,
+                    new { itemId = response.ItemId, versionId = response.VersionId });
+            else if (response.Status == SaveUploadStatus.Accepted)
                 await activity.WriteAsync(userId, "save_uploaded", $"{device} uploaded {what} for {label}", deviceId, request.EmulatorId, request.GameKey);
             else
                 await activity.WriteAsync(userId, "conflict_opened", $"{device} uploaded {what} for {label}, which conflicts", deviceId, request.EmulatorId, request.GameKey,
@@ -342,7 +367,9 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
 
     /// <summary>
     /// Deletes the user's save and state items of one game, with their versions (cascade), known-version records
-    /// (cascade) and un-acked Save deliveries. Blobs no longer referenced are left to the pruner. A device that still
+    /// (cascade) and un-acked Save deliveries. The head of every item goes to Lost &amp; found first, in the same
+    /// transaction (a <see cref="LostItem"/> holds its manifest, so the pruner keeps its blobs); an item with no head
+    /// is just deleted. Blobs no longer referenced are left to the pruner. A device that still
     /// holds the files learns of it from POST /v1/saves/missing on its next full scan (every 15 min)
     /// and uploads them again as new items. 404 not_found when the game has no items.
     /// </summary>
@@ -350,6 +377,7 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
     {
         string label;
         List<Guid> devices;
+        var kept = 0;
         using (await locks.Acquire(userId, ct))
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -358,6 +386,24 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
             if (items.Count == 0) throw new ApiException(404, "not_found", "This game has no saves.");
             label = Games.GameNames.Label(gameKey, items.Select(i => i.DisplayName).FirstOrDefault(n => !string.IsNullOrEmpty(n)));
             var ids = items.Select(i => i.Id).ToList();
+            var headIds = items.Where(i => i.HeadVersionId is not null).Select(i => i.HeadVersionId!.Value).ToList();
+            var heads = await db.SaveVersions.AsNoTracking().Where(v => headIds.Contains(v.Id) && ids.Contains(v.ItemId))
+                .ToDictionaryAsync(v => v.Id, ct);
+            var name = items.Select(i => i.DisplayName).FirstOrDefault(n => !string.IsNullOrEmpty(n));
+            var now = time.GetUtcNow();
+            foreach (var i in items)
+            {
+                if (i.HeadVersionId is not Guid headId || !heads.TryGetValue(headId, out var head)) continue;
+                db.LostItems.Add(new LostItem
+                {
+                    Id = Guid.NewGuid(), UserId = userId, EmulatorId = i.EmulatorId, Kind = i.Kind, GameKey = i.GameKey, Slot = i.Slot,
+                    Core = head.Core, DisplayName = string.IsNullOrEmpty(i.DisplayName) ? name : i.DisplayName,
+                    ManifestJson = head.ManifestJson, ManifestHash = head.ManifestHash, TotalSize = head.TotalSize,
+                    Reason = LostItem.GameDeleted, LostUtc = now,
+                });
+                kept++;
+            }
+            await db.SaveChangesAsync(ct);
             var pending = db.Deliveries.Where(d => d.Kind == DeliveryKind.Save && d.AckedUtc == null && ids.Contains(d.TargetId));
             devices = await pending.Select(d => d.DeviceId).Distinct().ToListAsync(ct);
             await pending.ExecuteDeleteAsync(ct);
@@ -365,7 +411,58 @@ public sealed class SaveService(TandemDbContext db, BlobService blobs, UserLocks
             await tx.CommitAsync(ct);
         }
         foreach (var d in devices) hub.NotifyDevice(d);
-        await activity.WriteAsync(userId, "game_deleted", $"Deleted the saves of {label}", null, emulatorId, gameKey);
+        await activity.WriteAsync(userId, "game_deleted",
+            kept > 0 ? $"Deleted the saves of {label}; they are in Lost & found" : $"Deleted the saves of {label}", null, emulatorId, gameKey);
+    }
+
+    // ---- Lost & found ----
+
+    /// <summary>The user's Lost &amp; found, newest first.</summary>
+    public async Task<List<LostItemRow>> ListLostAsync(Guid userId, CancellationToken ct) =>
+        (await db.LostItems.AsNoTracking().Where(l => l.UserId == userId).ToListAsync(ct))
+        .OrderByDescending(l => l.LostUtc).ThenBy(l => l.GameKey, StringComparer.Ordinal).ThenBy(l => l.Kind).ThenBy(l => l.Slot, StringComparer.Ordinal)
+        .Select(l => new LostItemRow(l.Id, l.EmulatorId, l.Kind, l.GameKey, l.Slot, l.Core, l.DisplayName, l.TotalSize, l.Reason, l.LostUtc))
+        .ToList();
+
+    /// <summary>404 not_found unless the item is the user's.</summary>
+    public async Task<LostItem> GetLostAsync(Guid userId, Guid lostId, CancellationToken ct) =>
+        await db.LostItems.AsNoTracking().FirstOrDefaultAsync(l => l.Id == lostId && l.UserId == userId, ct)
+        ?? throw new ApiException(404, "not_found", "Not in Lost & found.");
+
+    /// <summary>
+    /// Puts a Lost &amp; found item back through the upload path (as a web upload: no device), so deliveries, conflicts
+    /// and activity behave as for any upload. No item (or no head) for its key: it becomes the head and devices with the
+    /// game get it. The same content as the head: Unchanged. Other content in the head (a device re-seeded the game,
+    /// or a newer save arrived): a Concurrent conflict beside the head, never over it. An open conflict on the item:
+    /// 409 conflict_open and the item stays. The Lost &amp; found item is removed in the other three cases.
+    /// </summary>
+    public async Task<SaveUploadResponse> RestoreLostAsync(Guid userId, Guid lostId, CancellationToken ct)
+    {
+        var lost = await GetLostAsync(userId, lostId, ct);
+        var request = new SaveUploadRequest(lost.EmulatorId, lost.Kind, lost.GameKey, lost.Slot, lost.Core, null,
+            Manifests.FromJson(lost.ManifestJson), lost.DisplayName);
+        var response = await UploadCoreAsync(userId, null, request, lost.Id, ct);
+        hub.NotifyUser(userId, "lost");
+        return response;
+    }
+
+    /// <summary>Deletes it for good: its blobs become collectable by the pruner. Under the user's lock, like a restore.</summary>
+    public async Task DeleteLostAsync(Guid userId, Guid lostId, CancellationToken ct)
+    {
+        LostItem? lost;
+        using (await locks.Acquire(userId, ct))
+        {
+            lost = await db.LostItems.FirstOrDefaultAsync(l => l.Id == lostId && l.UserId == userId, ct);
+            if (lost is not null)
+            {
+                db.LostItems.Remove(lost);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        if (lost is null) throw new ApiException(404, "not_found", "Not in Lost & found.");
+        var what = lost.Kind == ItemKind.Save ? "save" : "state";
+        await activity.WriteAsync(userId, "lost_deleted",
+            $"Deleted the {what} of {Games.GameNames.Label(lost.GameKey, lost.DisplayName)} from Lost & found for good", null, lost.EmulatorId, lost.GameKey);
     }
 
     public const int MaxMissingCheck = 5000;

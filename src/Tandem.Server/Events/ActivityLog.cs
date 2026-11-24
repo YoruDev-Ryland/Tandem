@@ -46,6 +46,10 @@ public sealed class ActivityLog(TandemDbContext db, IEventHub hub, TimeProvider 
                 case "game_deleted":
                     hub.NotifyUser(userId, "saves");
                     hub.NotifyUser(userId, "conflicts");
+                    hub.NotifyUser(userId, "lost");
+                    break;
+                case "lost_deleted":
+                    hub.NotifyUser(userId, "lost");
                     break;
                 case "save_uploaded" or "delivered" or "delivery_failed":
                     hub.NotifyUser(userId, "saves");
