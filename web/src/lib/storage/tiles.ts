@@ -13,6 +13,10 @@ export interface Tile {
   gameKey?: string;
   olderBytes?: number;
   versions?: number;
+  /** A game's bytes in its current versions. */
+  currentBytes?: number;
+  /** A game's versions that are not current: all of them less one per save or state it holds. */
+  olderVersions?: number;
   colour?: string;
   ink?: string;
 }
@@ -54,22 +58,39 @@ export function topTiles(u: StorageUsage, isAdmin: boolean): Tile[] {
   return [...tiles, ...system].filter((t) => t.value > 0);
 }
 
-/** One emulator's games, largest first; those under 2 % of its total fold into an "N more" tile. */
+/** One emulator's games, largest first; those under 2 % of its total fold into an "N more" tile (the zoomed map). */
 export function gameTiles(u: StorageUsage, emulatorId: string): Tile[] {
+  return games(u, emulatorId);
+}
+
+/** One emulator's games inside its tile on the whole map: those under 2 % of the map's total fold into "N more". */
+export function nestedGameTiles(u: StorageUsage, emulatorId: string, mapTotal: number): Tile[] {
+  return games(u, emulatorId, mapTotal);
+}
+
+/** One emulator's games as tiles, largest first, none folded. */
+export function emulatorGames(u: StorageUsage, emulatorId: string): Tile[] {
   const colour = spineColour(systemOf(emulatorId));
   const ink = spineInk(systemOf(emulatorId));
-  const games = u.games
+  return u.games
     .filter((g) => g.emulatorId === emulatorId && g.bytes > 0)
     .sort((a, b) => b.bytes - a.bytes || (a.gameKey < b.gameKey ? -1 : 1))
     .map((g) => ({
-      value: g.bytes,
-      tile: {
-        id: `${g.emulatorId}/${g.gameKey}`, label: g.displayName ?? bareKey(g.emulatorId, g.gameKey), value: g.bytes,
-        kind: "game" as const, emulatorId: g.emulatorId, gameKey: g.gameKey, olderBytes: g.olderBytes, versions: g.versions, colour, ink,
-      } satisfies Tile,
+      id: `${g.emulatorId}/${g.gameKey}`, label: g.displayName ?? bareKey(g.emulatorId, g.gameKey), value: g.bytes,
+      kind: "game" as const, emulatorId: g.emulatorId, gameKey: g.gameKey, olderBytes: g.olderBytes, versions: g.versions,
+      currentBytes: g.currentBytes, olderVersions: Math.max(0, g.versions - Math.max(1, g.kinds.length)), colour, ink,
     }));
-  const { kept, rest } = mergeSmall(games);
-  const tiles: Tile[] = kept.map((k) => k.tile);
-  if (rest) tiles.push({ id: `${emulatorId}/more`, label: `${rest.count} more`, value: rest.value, kind: "more", emulatorId, colour, ink });
-  return tiles;
+}
+
+/** The games, with those under `minShare` of `of` folded into one "N more" tile of the emulator's colour. */
+export function foldGames(games: Tile[], emulatorId: string, minShare: number, of?: number): Tile[] {
+  const { kept, rest } = mergeSmall(games, minShare, of);
+  if (!rest) return kept;
+  const colour = spineColour(systemOf(emulatorId));
+  const ink = spineInk(systemOf(emulatorId));
+  return [...kept, { id: `${emulatorId}/more`, label: `${rest.count} more`, value: rest.value, kind: "more", emulatorId, colour, ink }];
+}
+
+function games(u: StorageUsage, emulatorId: string, of?: number): Tile[] {
+  return foldGames(emulatorGames(u, emulatorId), emulatorId, 0.02, of);
 }

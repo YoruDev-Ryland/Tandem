@@ -239,6 +239,8 @@ export interface Attention {
   backupNotConfigured: boolean;
   /** Active devices not seen for the server's SilentDeviceHours (default 72). */
   silentDevices: Guid[];
+  /** Admins only: the stored files folder is missing (an unmounted disk); nothing is stored until it is back. */
+  filesMissing: boolean;
 }
 export interface HomeResponse { continue: ContinueItem[]; devices: DeviceSummary[]; attention: Attention; recent: ActivityItem[] }
 export interface GameDeviceState { deviceId: Guid; deviceName: string; state: DeviceGameState }
@@ -356,5 +358,5 @@ export interface LostItemRow {
 }
 
 // ---- SSE ----
-export type Topic = "activity" | "saves" | "conflicts" | "configs" | "vault" | "devices" | "lost";
-export const TOPICS: readonly Topic[] = ["activity", "saves", "conflicts", "configs", "vault", "devices", "lost"];
+export type Topic = "activity" | "saves" | "conflicts" | "configs" | "vault" | "devices" | "lost" | "storage";
+export const TOPICS: readonly Topic[] = ["activity", "saves", "conflicts", "configs", "vault", "devices", "lost", "storage"];

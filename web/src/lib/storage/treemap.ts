@@ -48,15 +48,23 @@ export function squarify(items: { id: string; value: number }[], w: number, h: n
   return out;
 }
 
-/** Items under `minShare` of the total fold into `rest` (null when none do). Kept items stay in their order. */
-export function mergeSmall<T extends { value: number }>(items: T[], minShare = 0.02): { kept: T[]; rest: { count: number; value: number } | null } {
-  const total = items.reduce((s, i) => s + i.value, 0);
+/**
+ * Items under `minShare` of `total` (by default the items' own sum) fold into `rest` (null when none do). A lone small
+ * item is kept: "1 more" says less than the item itself. Kept items stay in their order.
+ */
+export function mergeSmall<T extends { value: number }>(
+  items: T[],
+  minShare = 0.02,
+  total = items.reduce((s, i) => s + i.value, 0),
+): { kept: T[]; rest: { count: number; value: number } | null } {
+  const small = (i: T) => total > 0 && i.value / total < minShare;
+  if (items.filter(small).length < 2) return { kept: [...items], rest: null };
   const kept: T[] = [];
   let count = 0, value = 0;
   for (const i of items) {
-    if (total > 0 && i.value / total < minShare) { count++; value += i.value; } else kept.push(i);
+    if (small(i)) { count++; value += i.value; } else kept.push(i);
   }
-  return { kept, rest: count ? { count, value } : null };
+  return { kept, rest: { count, value } };
 }
 
 /** The id of the rect nearest (centre to centre) to `fromId` in the given direction, or null at the edge. */

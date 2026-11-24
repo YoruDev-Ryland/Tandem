@@ -63,6 +63,15 @@ describe("attention", () => {
     expect(tabMarks(attentionItems(home(0, { openConflicts: 0, backupNotConfigured: true }), [], [], now))["/settings"]).toEqual({ tone: "quiet", count: 1 });
     expect(tabMarks(attentionItems(home(0, { openConflicts: 0, silentDevices: [THOR] }), [], [], now))["/devices"]).toEqual({ tone: "ink", count: 1 });
   });
+  it("says when the stored files folder is missing and links to Storage", () => {
+    const items = attentionItems(home(0, { openConflicts: 0, filesMissing: true }), [], [], now);
+    expect(items[0]).toEqual({
+      tab: "/settings", key: "files-missing", tone: "fault",
+      text: "The stored files folder is missing. Nothing is stored until it is back.",
+      href: "/settings?s=storage", action: "See storage",
+    });
+    expect(attentionItems(home(0, { openConflicts: 0 }), [], [], now).some((i) => i.key === "files-missing")).toBe(false);
+  });
   it("names failed deliveries and links to Activity", () => {
     const items = attentionItems(home(0, { openConflicts: 0, failedDeliveries24h: 3 }), [], [], now);
     expect(items[0]).toMatchObject({ text: "3 deliveries failed in the last day.", href: "/activity", tone: "fault" });

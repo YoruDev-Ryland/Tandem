@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { squarify, mergeSmall, neighbour } from "../src/lib/storage/treemap";
-import { blockUnit, blockLayout } from "../src/lib/storage/blocks";
-import { topTiles, gameTiles } from "../src/lib/storage/tiles";
+import { blockUnit, blockLayout, blockGroups } from "../src/lib/storage/blocks";
+import { topTiles, gameTiles, nestedGameTiles } from "../src/lib/storage/tiles";
 import { spineColour, spineInk } from "../src/lib/spines";
 import type { StorageGame, StorageUsage } from "../src/lib/api/types";
 
-const MB = 1_000_000;
-const GB = 1000 * MB;
+// Binary, as formatSize shows sizes: a block of "1 MB" holds what the page calls 1.0 MB.
+const MB = 1024 * 1024;
+const GB = 1024 * MB;
 
 describe("squarify", () => {
   const items = [{ id: "a", value: 60 }, { id: "b", value: 25 }, { id: "c", value: 10 }, { id: "d", value: 5 }, { id: "z", value: 0 }];
@@ -57,6 +58,18 @@ describe("mergeSmall", () => {
 
   it("has no rest when nothing is small", () => {
     expect(mergeSmall([{ value: 50 }, { value: 50 }]).rest).toBeNull();
+  });
+
+  it("keeps a lone small item: one more is no shorter than the item", () => {
+    const { kept, rest } = mergeSmall([{ value: 99 }, { value: 1 }]);
+    expect(kept.map((i) => i.value)).toEqual([99, 1]);
+    expect(rest).toBeNull();
+  });
+
+  it("measures the share against a given total", () => {
+    const { kept, rest } = mergeSmall([{ value: 10 }, { value: 5 }, { value: 5 }], 0.02, 1000);
+    expect(kept).toEqual([]);
+    expect(rest).toEqual({ count: 3, value: 20 });
   });
 });
 
@@ -119,6 +132,35 @@ describe("gameTiles", () => {
   });
 });
 
+describe("gameTiles folding", () => {
+  it("keeps one small game rather than folding it alone", () => {
+    const games = [game("eden", "big", 1000), game("eden", "a", 5)];
+    expect(gameTiles(usage({ games }), "eden").map((t) => t.kind)).toEqual(["game", "game"]);
+  });
+
+  it("carries the current bytes and the count of older versions", () => {
+    const g = game("eden", "k", 30 * MB, { currentBytes: 20 * MB, olderBytes: 10 * MB, versions: 5, kinds: ["Save", "State"] });
+    expect(gameTiles(usage({ games: [g] }), "eden")[0]).toMatchObject({ currentBytes: 20 * MB, olderVersions: 3 });
+  });
+});
+
+describe("nestedGameTiles", () => {
+  // Eden is a sliver of a big map: its games are judged against the map, not against Eden.
+  const games = [game("eden", "a", 50), game("eden", "b", 30), game("eden", "c", 20), game("melonds", "x", 10_000)];
+
+  it("folds games under 2 % of the map's total, even when large within their emulator", () => {
+    const tiles = nestedGameTiles(usage({ games }), "eden", 10_100);
+    expect(tiles).toEqual([expect.objectContaining({ id: "eden/more", kind: "more", label: "3 more", value: 100 })]);
+    // Against Eden alone none of them is small.
+    expect(gameTiles(usage({ games }), "eden").map((t) => t.kind)).toEqual(["game", "game", "game"]);
+  });
+
+  it("keeps games that are big on the map", () => {
+    const tiles = nestedGameTiles(usage({ games }), "melonds", 10_100);
+    expect(tiles.map((t) => t.id)).toEqual(["melonds/x"]);
+  });
+});
+
 describe("neighbour", () => {
   const rects = [
     { id: "a", x: 0, y: 0, w: 100, h: 100 },
@@ -163,5 +205,34 @@ describe("blockLayout", () => {
   it("gives a non-empty group at least one block and skips empty groups", () => {
     const out = blockLayout([{ id: "tiny", bytes: 10, olderBytes: 5 }, { id: "none", bytes: 0, olderBytes: 0 }], 1);
     expect(out).toEqual([{ group: "tiny", notched: true }]);
+  });
+});
+
+describe("blockGroups", () => {
+  const games = [
+    game("eden", "zelda", 20 * MB, { displayName: "Zelda", olderBytes: 4 * MB }),
+    game("eden", "s1", MB / 10), game("eden", "s2", MB / 10),
+    game("melonds", "plat", 10 * MB),
+  ];
+
+  it("lays out games emulator by emulator, then the rest, art and the database", () => {
+    const { groups, unit } = blockGroups(usage({ games }), true);
+    expect(unit).toBe(1);
+    expect(groups.map((g) => g.tile.id)).toEqual(["eden/zelda", "eden/more", "melonds/plat", "other", "art", "database"]);
+    expect(groups.map((g) => g.key)).toEqual(["eden", "eden", "melonds", "other", "art", "database"]);
+    expect(groups[1]!.tile).toMatchObject({ label: "2 more", value: MB / 5 });
+    expect(groups[3]!.tile).toMatchObject({ label: "Configs, Lost & found", value: 7 * MB });
+  });
+
+  it("leaves out the admin-only groups for everyone else", () => {
+    const { groups } = blockGroups(usage({ games, server: null, byKind: { saves: 0, states: 0, configs: MB, vault: 2 * MB, lostAndFound: MB } }), false);
+    expect(groups.map((g) => g.key)).toEqual(["eden", "eden", "melonds", "other"]);
+    expect(groups[3]!.tile).toMatchObject({ label: "Configs, Vault", value: 3 * MB });
+  });
+
+  it("sizes the block from the groups' bytes, not the total", () => {
+    const big = [game("eden", "a", 150 * MB), game("melonds", "b", 100 * MB)];
+    const { unit } = blockGroups(usage({ games: big, totalBytes: 10 * MB, byKind: { saves: 0, states: 0, configs: 0, vault: 0, lostAndFound: 0 }, server: null }), false);
+    expect(unit).toBe(10);
   });
 });
