@@ -35,7 +35,7 @@ public sealed class BlobStore(FilesLocation location) : IBlobStore
     private string PathFor(Guid userId, string hash)
     {
         BlobHash.Require(hash);
-        if (!location.Available)
+        if (!location.CheckPresent())
             throw new ApiException(503, "files_unavailable", "The stored files folder is missing. Nothing is stored until it is back.");
         return location.PathFor(userId, hash);
     }

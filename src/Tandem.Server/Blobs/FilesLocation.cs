@@ -14,15 +14,21 @@ public sealed record FilesLocationSetting(string Path, Guid Id);
 /// the setting: a missing folder or marker (an unmounted NAS) is never recreated, so nothing is written to the wrong
 /// disk. Until it is back <see cref="Available"/> is false and <see cref="BlobStore"/> answers 503.
 /// </summary>
-public sealed class FilesLocation(IOptions<ServerOptions> options)
+public sealed class FilesLocation
 {
     public const string Key = "files.location";
     public const string MarkerName = ".tandem-files";
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    private readonly string _defaultRoot = Path.Combine(options.Value.DataDirectory, "blobs");
-    private volatile Current _current = new(Path.Combine(options.Value.DataDirectory, "blobs"), null, true);
+    private readonly string _defaultRoot;
+    private volatile Current _current;
+
+    public FilesLocation(IOptions<ServerOptions> options)
+    {
+        _defaultRoot = Path.Combine(options.Value.DataDirectory, "blobs");
+        _current = new Current(_defaultRoot, null, true);
+    }
 
     private sealed record Current(string Root, Guid? Id, bool Available);
 
@@ -36,13 +42,15 @@ public sealed class FilesLocation(IOptions<ServerOptions> options)
     {
         var row = await db.ServerSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == Key, ct);
         var setting = row is null ? null : Parse(row.Value);
-        if (setting is null)
+        if (row is null)
         {
             _current = new Current(_defaultRoot, null, true);
             EnsureDefaultMarker();
             return;
         }
-        _current = new Current(setting.Path, setting.Id, MarkerMatches(setting.Path, setting.Id));
+        // An unreadable setting leaves the location unknown: unavailable, and nothing is written to the default folder.
+        _current = string.IsNullOrWhiteSpace(setting?.Path) ? new Current("", Guid.Empty, false)
+            : new Current(setting.Path, setting.Id, MarkerMatches(setting.Path, setting.Id));
     }
 
     /// <summary>Stores the setting and makes the folder the current one (the caller has written its marker).</summary>
@@ -60,9 +68,20 @@ public sealed class FilesLocation(IOptions<ServerOptions> options)
     public bool Recheck()
     {
         var c = _current;
-        if (c.Id is { } id && !c.Available)
+        if (c.Id is { } id && !c.Available && c.Root.Length > 0)
             _current = c with { Available = MarkerMatches(c.Root, id) };
         return _current.Available;
+    }
+
+    /// <summary>Before a blob is read or written: a custom folder must still hold its marker (a vanished NAS is never
+    /// rebuilt on the local disk). A missing marker marks the location unavailable until <see cref="Recheck"/> finds it.</summary>
+    public bool CheckPresent()
+    {
+        var c = _current;
+        if (!c.Available) return false;
+        if (c.Id is null || File.Exists(Path.Combine(c.Root, MarkerName))) return true;
+        _current = c with { Available = false };
+        return false;
     }
 
     public static Guid? ReadMarker(string dir)

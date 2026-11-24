@@ -128,6 +128,45 @@ public class FilesLocationTests
     }
 
     [Fact]
+    public async Task An_unreadable_files_location_setting_refuses_blob_writes()
+    {
+        using var factory = new ServerFactory();
+        var (device, _) = await factory.Register("a@example.com");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+            db.ServerSettings.Add(new ServerSetting { Key = FilesLocation.Key, Value = "not json" });
+            await db.SaveChangesAsync();
+            await scope.ServiceProvider.GetRequiredService<FilesLocation>().LoadAsync(db, CancellationToken.None);
+        }
+
+        var r = await Put(device);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, r.StatusCode);
+        Assert.Equal("files_unavailable", (await r.ReadAsync<ErrorResponse>()).Code);
+        Assert.Empty(Directory.GetFiles(Path.Combine(factory.DataDirectory, "blobs"), Hash, SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task A_custom_location_that_vanishes_at_runtime_refuses_writes_and_is_not_recreated()
+    {
+        using var factory = new ServerFactory();
+        var (device, _) = await factory.Register("a@example.com");
+        var dir = TempDir();
+        var id = Guid.NewGuid();
+        FilesLocation.WriteMarker(dir, id);
+        await Configure(factory, dir, id);
+        Directory.Delete(dir, recursive: true);
+
+        var r = await Put(device);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, r.StatusCode);
+        Assert.Equal("files_unavailable", (await r.ReadAsync<ErrorResponse>()).Code);
+        Assert.False(Directory.Exists(dir));
+        Assert.False(factory.Services.GetRequiredService<FilesLocation>().Available);
+    }
+
+    [Fact]
     public void Exported_settings_drop_the_files_location()
     {
         Assert.Null(BackupSettings.RedactForExport(FilesLocation.Key, "{}"));
