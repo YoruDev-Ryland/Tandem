@@ -5,7 +5,7 @@
   import { formatSize } from "../../../lib/format";
   import { onAction } from "../../../lib/input/actions";
   import { router } from "../../../lib/router.svelte";
-  import { deepSpine, diskNote, gapLayout, labelLines, shade, tileTip, usedBytes } from "../../../lib/storage/page";
+  import { deepSpine, diskNote, gapLayout, labelLines, nothingFocused, shade, tileTip, usedBytes } from "../../../lib/storage/page";
   import { gameTiles, nestedGameTiles, topTiles, type Tile } from "../../../lib/storage/tiles";
   import { neighbour, type Rect } from "../../../lib/storage/treemap";
   import StorageTip from "./StorageTip.svelte";
@@ -65,8 +65,9 @@
   let lit = $state(false);
   const uid = $props.id();
   const tipId = `${uid}-tip`;
-  // The map takes the arrows and A only while someone is on it: focus inside, or keys or the pointer lit it.
-  const engaged = () => lit || !!box?.contains(document.activeElement);
+  // The arrows belong to the map while focus is in it, or while no control has focus (so the d-pad alone can enter
+  // it); a focused control outside keeps them. A acts only on a cursor someone can see.
+  const inside = () => !!box?.contains(document.activeElement);
   const cursor = $derived(cursorId && byId.has(cursorId) ? cursorId : (rects[0]?.id ?? null));
 
   // The tip follows the pointer over a tile, or sits on the cursor's tile after a key moves it.
@@ -121,8 +122,15 @@
         zoomTo(null);
         return true;
       }
-      if (!engaged()) return false;
       if (a === "up" || a === "down" || a === "left" || a === "right") {
+        if (!inside()) {
+          if (!nothingFocused()) return false;
+          // Entering: light the cursor where it is and focus it; the next press moves it.
+          lit = true;
+          keyTip(cursor);
+          void focusCursor(true);
+          return true;
+        }
         lit = true;
         const next = neighbour(rects, cursor, a);
         if (next) {
@@ -133,6 +141,7 @@
         return true;
       }
       if (a === "a") {
+        if (!inside() && !(lit && nothingFocused())) return false;
         const t = byId.get(cursor);
         if (t) activate(t);
         return true;

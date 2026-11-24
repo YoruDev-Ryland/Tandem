@@ -7,7 +7,7 @@
   import { router } from "../../../lib/router.svelte";
   import { blockGroups, blockLayout } from "../../../lib/storage/blocks";
   import { tick } from "svelte";
-  import { deepSpine, tileTip, usedBytes } from "../../../lib/storage/page";
+  import { deepSpine, nothingFocused, tileTip, usedBytes } from "../../../lib/storage/page";
   import type { Tile } from "../../../lib/storage/tiles";
   import StorageTip from "./StorageTip.svelte";
 
@@ -56,7 +56,7 @@
   // pointer lit it.
   let lit = $state(false);
   let focusIn = $state(false);
-  const engaged = () => lit || !!grid?.contains(document.activeElement);
+  const inside = () => !!grid?.contains(document.activeElement);
   const uid = $props.id();
   const tipId = `${uid}-tip`;
 
@@ -100,15 +100,23 @@
     return null;
   }
 
-  async function focusCursor() {
+  async function focusCursor(force = false) {
     await tick();
-    if (grid?.contains(document.activeElement)) grid.querySelector<HTMLElement>("button[tabindex='0']")?.focus({ preventScroll: true });
+    if (force || grid?.contains(document.activeElement)) grid?.querySelector<HTMLElement>("button[tabindex='0']")?.focus({ preventScroll: true });
   }
 
   $effect(() =>
     onAction((a) => {
-      if (!cursor || !engaged()) return false;
+      if (!cursor) return false;
+      // As on the map: the arrows are the card's while focus is in it or no control has focus.
       if (a === "up" || a === "down" || a === "left" || a === "right") {
+        if (!inside()) {
+          if (!nothingFocused()) return false;
+          lit = true;
+          place(cursor);
+          void focusCursor(true);
+          return true;
+        }
         lit = true;
         const to = step(cursor, a);
         if (to) {
@@ -119,6 +127,7 @@
         return true;
       }
       if (a === "a") {
+        if (!inside() && !(lit && nothingFocused())) return false;
         open(cursor);
         return true;
       }

@@ -163,3 +163,9 @@ export function gapLayout(items: { id: string; value: number }[], w: number, h: 
     return { id: r.id, x, y, w: Math.max(0, Math.round(r.x + r.w) - x - gap), h: Math.max(0, Math.round(r.y + r.h) - y - gap) };
   });
 }
+
+/** True when no control has focus (the page itself has it), so the d-pad may enter a graph. */
+export function nothingFocused(): boolean {
+  const el = document.activeElement;
+  return !el || el === document.body || el === document.documentElement;
+}

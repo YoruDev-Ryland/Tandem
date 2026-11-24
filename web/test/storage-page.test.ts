@@ -197,13 +197,29 @@ describe("Storage page", () => {
     expect(dispatch("b")).toBe(false);
   });
 
-  it("leaves the arrows to the page until the map has focus", async () => {
+  it("the_d_pad_enters_the_map_when_nothing_is_focused", async () => {
     await show();
     const map = await screen.findByRole("group", { name: "Storage map" });
-    expect(dispatch("right")).toBe(false);
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(dispatch("right")).toBe(true);
+    // The first press lights the cursor where it is and focuses it; it doesn't move yet.
+    const eden = within(map).getByRole("button", { name: /^Eden,/ });
+    await waitFor(() => expect(document.activeElement).toBe(eden));
+    expect(map.classList.contains("lit")).toBe(true);
+    expect(dispatch("right")).toBe(true);
+    await waitFor(() => expect(eden.classList.contains("cur")).toBe(false));
+  });
+
+  it("leaves the arrows with a focused control outside the map", async () => {
+    await show();
+    const map = await screen.findByRole("group", { name: "Storage map" });
     expect(dispatch("a")).toBe(false);
     within(views()).getByRole("button", { name: "Bars" }).focus();
     expect(dispatch("left")).toBe(false);
+    screen.getByRole("link", { name: "Export everything" }).focus();
+    expect(dispatch("down")).toBe(false);
+    screen.getByRole("button", { name: "Move files…" }).focus();
+    expect(dispatch("up")).toBe(false);
     within(map).getByRole("button", { name: /^Eden,/ }).focus();
     expect(dispatch("right")).toBe(true);
   });
@@ -300,6 +316,17 @@ describe("Storage page", () => {
     expect(screen.getByText(/blocks with a notch/)).toBeTruthy();
   });
 
+  it("the_d_pad_enters_the_blocks_when_nothing_is_focused", async () => {
+    await show({ view: "blocks" });
+    const card = await screen.findByRole("group", { name: "Storage blocks" });
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(dispatch("down")).toBe(true);
+    const zelda = within(card).getByRole("button", { name: /^The Legend of Zelda: Tears of the Kingdom,/ });
+    await waitFor(() => expect(document.activeElement).toBe(zelda));
+    screen.getByRole("link", { name: "Export Eden" }).focus();
+    expect(dispatch("down")).toBe(false);
+  });
+
   it("gives each block group a button, moved between with the arrows, with its tip linked", async () => {
     await show({ view: "blocks" });
     const card = await screen.findByRole("group", { name: "Storage blocks" });
@@ -307,7 +334,6 @@ describe("Storage page", () => {
     expect(within(card).getByRole("button", { name: "Pokémon Platinum, 20 blocks, 20.3 MB" })).toBeTruthy();
     // Only the cursor's group is in the tab order.
     expect(zelda.tabIndex).toBe(0);
-    expect(dispatch("right")).toBe(false);
     zelda.focus();
     expect(dispatch("right")).toBe(true);
     const trails = within(card).getByRole("button", { name: /^Trails in the Sky 1st Chapter, 17 blocks/ });
