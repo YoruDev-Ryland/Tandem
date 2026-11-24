@@ -1144,6 +1144,29 @@ public class FilesMoverTests : IDisposable
     }
 
     [Fact]
+    public async Task Restart_does_not_adopt_a_target_when_the_old_folder_cannot_be_compared()
+    {
+        using var s = await Start();
+        await PutBlob(s.Device, "compare me");
+        var oldRoot = s.Files.Root;
+        var target = NewDir();
+        Assert.Equal(HttpStatusCode.Accepted, (await StartMove(s.Admin, target)).StatusCode);
+        Assert.Equal(MovePhase.Done, (await WaitFinished(s.Admin)).Phase);
+        var record = JsonNode.Parse((await StoredSetting(s.Factory, FilesMover.Key))!)!;
+        record["status"]!["phase"] = "Failed";
+        record["status"]!["error"] = "The move failed: timeout Nothing was changed.";
+        record["status"]!["oldLocation"] = null;
+        await WriteSetting(s.Factory, FilesMover.Key, record.ToJsonString());
+        // The old folder is gone (an unmounted disk at boot), so "every old file is in the target" proves nothing.
+        Directory.Move(oldRoot, oldRoot + ".away");
+
+        var restarted = await Restart(s);
+
+        Assert.Equal(MovePhase.Failed, restarted.Status!.Phase);
+        Assert.NotEqual(target, s.Files.Root);
+    }
+
+    [Fact]
     public async Task Non_admin_gets_403()
     {
         using var s = await Start(allowRegistration: true);

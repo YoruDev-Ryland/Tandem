@@ -631,9 +631,15 @@ public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files,
         await files.LoadAsync(db, CancellationToken.None);
     }
 
-    /// <summary>Every blob of <paramref name="other"/> is in <paramref name="root"/> at the same relative path.</summary>
-    private static bool HoldsEvery(string root, string other) =>
-        EnumerateBlobs(other).All(b => File.Exists(Path.Combine(root, b.Rel)));
+    /// <summary>Every blob of <paramref name="other"/> is in <paramref name="root"/> at the same relative path. False when
+    /// <paramref name="other"/> is not there or can't be read: an empty or unreadable folder proves nothing, and a startup
+    /// that can't read a folder must not fail.</summary>
+    private static bool HoldsEvery(string root, string other)
+    {
+        if (!Directory.Exists(other)) return false;
+        try { return EnumerateBlobs(other).All(b => File.Exists(Path.Combine(root, b.Rel))); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
 
     /// <summary>The blobs a folder holds (count and bytes); the fallback when it is not there.</summary>
     private static (int Count, long Bytes) Measure(string root, int fallbackCount, long fallbackBytes)
