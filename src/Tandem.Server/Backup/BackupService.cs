@@ -22,7 +22,7 @@ namespace Tandem.Server.Backup;
 /// Every run writes one history row and raises <see cref="BackupFinished"/>.</para>
 /// </summary>
 public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock maintenance, IDomainEvents events,
-    IOptions<ServerOptions> options, TimeProvider time, ILogger<BackupService> logger) : BackgroundService
+    IOptions<ServerOptions> options, TimeProvider time, FilesGate gate, ILogger<BackupService> logger) : BackgroundService
 {
     public const int HistoryShown = 20;
     public const int HistoryKeep = 50;
@@ -74,8 +74,11 @@ public sealed class BackupService(IServiceScopeFactory scopes, MaintenanceLock m
         return lastRun is null || lastRun < slot;
     }
 
+    /// <summary>Runs the scheduled backup when due. Null when not due, already running, or while the stored files are
+    /// being moved (the next check after the move runs it).</summary>
     public async Task<BackupRunInfo?> RunIfDueAsync(CancellationToken ct)
     {
+        if (gate.Moving) return null;
         BackupSettingsDto settings;
         DateTimeOffset? last;
         using (var scope = scopes.CreateScope())

@@ -7,6 +7,13 @@ public sealed class ApiException(int status, string code, string message) : Exce
     public int Status { get; } = status;
     public string Code { get; } = code;
 
+    /// <summary>Sent as the Retry-After header (seconds) when set.</summary>
+    public int? RetryAfterSeconds { get; init; }
+
+    /// <summary>503 server_moving with Retry-After 15: the stored files are being moved; the client waits and retries.</summary>
+    public static ApiException ServerMoving(string message = "The server is moving its files. Try again shortly.") =>
+        new(503, "server_moving", message) { RetryAfterSeconds = 15 };
+
     public ErrorResponse ToResponse() => new(Code, Message);
 }
 
@@ -24,6 +31,7 @@ public static class ApiErrors
             {
                 context.Response.Clear();
                 context.Response.StatusCode = ex.Status;
+                if (ex.RetryAfterSeconds is { } retry) context.Response.Headers.RetryAfter = retry.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 await context.Response.WriteAsJsonAsync(ex.ToResponse());
             }
         });

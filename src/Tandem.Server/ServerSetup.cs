@@ -44,6 +44,9 @@ public static class ServerSetup
         builder.Services.AddSingleton<MoveTargetCheck>();
         builder.Services.AddSingleton<IBlobPutHook, NoBlobPutHook>();
         builder.Services.AddHostedService<FilesLocationWatcher>();
+        builder.Services.AddSingleton<IMoveHooks, NoMoveHooks>();
+        builder.Services.AddSingleton<FilesMover>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<FilesMover>()); // a move cut short by a restart is cleaned up
         builder.Services.AddSingleton<IBlobStore, BlobStore>();
         builder.Services.AddScoped<BlobService>();
         builder.Services.AddSingleton<IDomainEvents, DomainEvents>();
@@ -141,6 +144,7 @@ public static class ServerSetup
         app.MapDeviceEndpoints();
         app.MapPairingEndpoints();
         app.MapBlobEndpoints();
+        app.MapFilesMoveEndpoints();
         app.MapSaveEndpoints();
         app.MapConfigEndpoints();
         app.MapDeliveryEndpoints();

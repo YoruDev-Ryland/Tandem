@@ -86,10 +86,11 @@ public static class BackupSettings
 
     /// <summary>The value of a server setting as it goes into a backup: the backup settings lose their secrets and are
     /// disabled (a restored server must not start writing to, and pruning, the target it was restored from). The files
-    /// location is dropped (null): the folder belongs to the server it was set on.</summary>
+    /// location and the move status are dropped (null): the folders belong to the server they were set on.</summary>
     public static string? RedactForExport(string key, string value)
     {
         if (key == FilesLocation.Key) return null; // a restored server keeps its files in its own default folder
+        if (key == FilesMover.Key) return null; // and has no move (or old copy in a folder of the old server) to finish
         if (key != Key) return value;
         var s = Parse(value);
         return JsonSerializer.Serialize(s with { Enabled = false, Passphrase = null, Encrypt = false, S3 = s.S3 is null ? null : s.S3 with { SecretKey = null } }, Json);
@@ -110,8 +111,9 @@ public static class BackupEndpoints
         backup.MapPut("", async (TandemDbContext db, BackupSettingsDto? body, CancellationToken ct) =>
             BackupSettings.ToResponse(await BackupSettings.SaveAsync(db, body, ct)));
 
-        backup.MapPost("/run", (BackupService backups) =>
+        backup.MapPost("/run", (BackupService backups, Blobs.FilesGate gate) =>
         {
+            if (gate.Moving) throw ApiException.ServerMoving("The stored files are being moved. Run the backup when the move is done.");
             if (!backups.TryStartInBackground())
                 throw new ApiException(409, "backup_running", "A backup is already running.");
             return Results.Accepted();

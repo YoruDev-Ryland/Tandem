@@ -1,0 +1,649 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Tandem.Protocol;
+using Tandem.Server.Data;
+using Tandem.Server.Events;
+using Tandem.Server.Http;
+
+namespace Tandem.Server.Blobs;
+
+/// <summary>Test seams in the move job; the server registers <see cref="NoMoveHooks"/>.</summary>
+public interface IMoveHooks
+{
+    /// <summary>After the first copy pass, before the hold.</summary>
+    Task AfterCopyPassAsync(CancellationToken ct);
+
+    /// <summary>After a copy is written and flushed to disk, before it is read back and verified.</summary>
+    Task AfterFileWrittenAsync(string copyPath, CancellationToken ct);
+}
+
+public sealed class NoMoveHooks : IMoveHooks
+{
+    public Task AfterCopyPassAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task AfterFileWrittenAsync(string copyPath, CancellationToken ct) => Task.CompletedTask;
+}
+
+/// <summary>
+/// Moves the stored files to another folder while the server runs. One move at a time, in the background:
+/// <list type="number">
+/// <item><b>Copy</b>: writes its marker in the target, then copies every blob under the current root to the same
+/// relative path there, through a <c>*.copy-*</c> name: flushed to disk, read back, its SHA-256 compared with the file
+/// name (blobs are named by their hash), and only then renamed. Uploads go on into the current folder.</item>
+/// <item><b>Hold</b>: takes <see cref="FilesGate.HoldAsync"/> (device uploads answer 503, server writes wait); not within
+/// 60 s, the move fails. Under the hold it copies what was added since, and drops its copies of files deleted since.</item>
+/// <item><b>Switch</b>: stores <c>files.location</c> and the finished status in one save, swaps
+/// <see cref="FilesLocation"/>, releases the hold.</item>
+/// </list>
+/// <para>Every file and folder the job creates in the target is listed in <see cref="JournalName"/> there before (or,
+/// for a finished copy, right after) it is created; a failure or cancel before the switch deletes exactly those, its
+/// marker and the journal, and nothing else, and never touches the current folder. The running move is stored as the
+/// server setting <see cref="Key"/>, so a restart does the same cleanup (<see cref="StartAsync"/>).</para>
+/// <para>While a move runs <see cref="FilesGate.Moving"/> is set: the pruner and backups skip, and account deletion and
+/// <see cref="RemoveOldAsync"/> answer 503 server_moving. The job never takes <see cref="Saves.UserLocks"/> or
+/// <see cref="Saves.MaintenanceLock"/>: server-side blob writes wait on the gate while holding a user's lock, so taking
+/// one under the hold could deadlock. Deletes that were already under way when the move began take the gate's shared
+/// side, so the last pass under the hold sees them.</para>
+/// </summary>
+public sealed class FilesMover(IServiceScopeFactory scopes, FilesLocation files, FilesGate gate, MoveTargetCheck checker,
+    IEventHub hub, IMoveHooks hooks, TimeProvider time, IOptions<ServerOptions> options, ILogger<FilesMover> logger) : IHostedService
+{
+    public const string Key = "files.move";
+    public const string JournalName = ".tandem-move-journal";
+    public const string Unchanged = "Nothing was changed.";
+    public const string CancelledError = "The move was cancelled. " + Unchanged;
+    public const string RestartedError = "The server restarted during the move. " + Unchanged;
+    public const string HoldTimeoutError = "Uploads did not pause in time. " + Unchanged;
+    public const string SourceMissingError = "The current files folder went missing during the move. " + Unchanged;
+    public static readonly TimeSpan HoldTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(2);
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
+
+    /// <summary>What <see cref="Key"/> holds: the status, the id of the marker the job wrote, the topmost target folder the
+    /// move created (removed again on failure if empty), and whether a failed move's cleanup finished.</summary>
+    internal sealed record MoveRecord(MoveStatus Status, Guid Id, string? CreatedDir, bool Cleaned);
+
+    private sealed class MoveFailedException(string message) : Exception(message);
+
+    private sealed class Job(string from, string target, Guid id, string? createdDir, Guid? sourceMarker)
+    {
+        public string From { get; } = from;
+        public string Target { get; } = target;
+        public Guid Id { get; } = id;
+        public string? CreatedDir { get; } = createdDir;
+        public Guid? SourceMarker { get; } = sourceMarker;
+        public CancellationTokenSource Cts { get; } = new();
+        public Task Task { get; set; } = Task.CompletedTask;
+        public HashSet<string> Copied { get; } = new(StringComparer.Ordinal);
+        public StreamWriter? Journal { get; set; }
+        public string? StopReason { get; set; }
+        /// <summary>The switch threw and whether it was stored could not be read back: the copy must stay.</summary>
+        public bool SwitchUnknown { get; set; }
+        public DateTimeOffset LastNotify { get; set; }
+        public long SourceBytes { get; set; }
+    }
+
+    private readonly object _sync = new();
+    private Job? _job;
+    private bool _removing;
+    private volatile MoveRecord? _record;
+
+    public MoveStatus? Status => _record?.Status;
+
+    // ---- requests ----
+
+    /// <summary>The checks for a target folder, with the bytes a move would copy now.</summary>
+    public MoveCheckResult Check(string? path)
+    {
+        RequireSourcePresent();
+        return checker.Run(path ?? "", BytesToCopy());
+    }
+
+    /// <summary>Checks the folder and starts the move in the background. False (with the failed check) when the folder
+    /// is refused; 409 move_running when a move (or the removal of an old copy) is running.</summary>
+    public bool TryStart(string path, out MoveCheckResult check)
+    {
+        lock (_sync)
+        {
+            if (_job is not null || _removing)
+                throw new ApiException(409, "move_running", "A move of the stored files is already running.");
+            RequireSourcePresent();
+            var from = files.Root;
+            var createdDir = TopmostMissing(path);
+            check = checker.Run(path ?? "", BytesToCopy());
+            if (!check.Ok) return false;
+
+            var job = new Job(from, check.Path, Guid.NewGuid(), createdDir, FilesLocation.ReadMarker(from));
+            var status = new MoveStatus(MovePhase.Copying, from, job.Target, 0, 0, 0, 0, null, null, 0, time.GetUtcNow());
+            _record = new MoveRecord(status, job.Id, createdDir, Cleaned: false);
+            _job = job;
+            gate.Moving = true;
+            job.Task = Task.Run(() => RunAsync(job));
+            return true;
+        }
+    }
+
+    /// <summary>Stops a running move before its switch; nothing happens after it (or with no move).</summary>
+    public void Cancel()
+    {
+        Job? job;
+        lock (_sync) job = _job;
+        if (job is null) return;
+        job.StopReason ??= CancelledError;
+        try { job.Cts.Cancel(); } catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>Deletes the old copy a finished move left (only Tandem's own entries in that folder: the per-user blob
+    /// folders, its marker and journal, then the folder if empty). 503 server_moving while a move runs; 409 when there
+    /// is no old copy.</summary>
+    public async Task RemoveOldAsync(CancellationToken ct)
+    {
+        MoveRecord record;
+        string old;
+        lock (_sync)
+        {
+            if (_job is not null || gate.Moving || _removing)
+                throw ApiException.ServerMoving("The stored files are being moved. Try again when the move is done.");
+            if (_record is not { Status: { Phase: MovePhase.Done, OldLocation: { } o } } r)
+                throw new ApiException(409, "no_old_copy", "There is no old copy of the stored files to remove.");
+            record = r;
+            old = o;
+            _removing = true;
+        }
+        try
+        {
+            if (!SafeToRemove(old))
+                throw new ApiException(409, "no_old_copy", "The old folder holds the current files or the server's data; it is left alone.");
+            await Task.Run(() => DeleteOldCopy(old), ct);
+            var done = record with { Status = record.Status with { OldLocation = null, OldBytes = 0 } };
+            await PersistAsync(done, CancellationToken.None);
+            _record = done;
+            logger.LogInformation("Removed the old copy of the stored files in {Folder}", old);
+            hub.NotifyAll("changed", "storage");
+        }
+        finally
+        {
+            lock (_sync) _removing = false;
+        }
+    }
+
+    // ---- the job ----
+
+    private async Task RunAsync(Job job)
+    {
+        var ct = job.Cts.Token;
+        MoveRecord final;
+        try
+        {
+            await PersistAsync(_record!, ct);
+            hub.NotifyAll("changed", "storage");
+            // The check left the folder in place; if it is gone now (an unmounted disk) this fails rather than recreate it.
+            job.Journal = new StreamWriter(new FileStream(Path.Combine(job.Target, JournalName), FileMode.CreateNew, FileAccess.Write, FileShare.Read));
+            FilesLocation.WriteMarker(job.Target, job.Id);
+
+            await CopyPassAsync(job, final: false, ct);
+            await hooks.AfterCopyPassAsync(ct);
+
+            Update(job, s => s with { Phase = MovePhase.Holding }, notify: true);
+            var holding = gate.HoldAsync(HoldTimeout, ct); // sets Holding before its first await
+            hub.NotifyAll("storage");
+            IDisposable? hold;
+            try { hold = await holding; }
+            catch { hub.NotifyAll("storage"); throw; }
+            if (hold is null)
+            {
+                hub.NotifyAll("storage");
+                throw new MoveFailedException(HoldTimeoutError);
+            }
+            try
+            {
+                if (!SourceStillThere(job)) throw new MoveFailedException(SourceMissingError);
+                await CopyPassAsync(job, final: true, ct);
+                ct.ThrowIfCancellationRequested(); // the last point a cancel is taken
+                final = await SwitchAsync(job);
+            }
+            finally
+            {
+                hold.Dispose();
+                hub.NotifyAll("storage");
+            }
+            CloseJournal(job);
+            TryDeleteFile(Path.Combine(job.Target, JournalName));
+            logger.LogInformation("Moved the stored files from {From} to {To}", job.From, job.Target);
+        }
+        catch (Exception ex)
+        {
+            final = await FailAsync(job, ex);
+        }
+
+        gate.Moving = false;
+        lock (_sync)
+        {
+            _record = final;
+            _job = null;
+        }
+        job.Cts.Dispose();
+        hub.NotifyAll("changed", "storage");
+    }
+
+    private async Task<MoveRecord> FailAsync(Job job, Exception ex)
+    {
+        var error = ex switch
+        {
+            MoveFailedException => ex.Message,
+            OperationCanceledException when job.Cts.IsCancellationRequested => job.StopReason ?? CancelledError,
+            IOException or UnauthorizedAccessException => $"The copy failed: {ex.Message} {Unchanged}",
+            _ => $"The move failed: {ex.Message} {Unchanged}",
+        };
+        if (ex is MoveFailedException or OperationCanceledException) logger.LogWarning("Moving the stored files failed: {Error}", error);
+        else logger.LogError(ex, "Moving the stored files failed");
+        CloseJournal(job);
+
+        var failed = _record!.Status with { Phase = MovePhase.Failed, Error = error };
+        if (job.SwitchUnknown)
+        {
+            // Whether files.location now names the target is unknown: keep the copy and the running record, and let the
+            // next start decide from the database (it cleans only when the switch is not stored).
+            return _record with { Status = failed with { Error = $"The move could not be confirmed: {ex.Message} The copy in {job.Target} is kept; the server checks it on its next start." } };
+        }
+        var cleaned = Cleanup(job.Target, job.Id, job.CreatedDir, logger);
+        var record = new MoveRecord(failed, job.Id, job.CreatedDir, cleaned);
+        try { await PersistAsync(record, CancellationToken.None); }
+        catch (Exception persist) { logger.LogError(persist, "Could not store the failed move"); }
+        return record;
+    }
+
+    /// <summary>One pass over the current root. The first copies everything; the last (under the hold) copies what is
+    /// new and deletes this job's copies of files that were deleted since.</summary>
+    private async Task CopyPassAsync(Job job, bool final, CancellationToken ct)
+    {
+        var entries = EnumerateBlobs(job.From);
+        List<(string Rel, long Size)> todo;
+        if (!final)
+        {
+            todo = entries;
+            Update(job, s => s with { FilesTotal = entries.Count, BytesTotal = entries.Sum(e => e.Size) }, notify: true);
+        }
+        else
+        {
+            var present = entries.Select(e => e.Rel).ToHashSet(StringComparer.Ordinal);
+            foreach (var rel in job.Copied.Where(r => !present.Contains(r)).ToList())
+            {
+                File.Delete(Path.Combine(job.Target, rel)); // only ever this job's own copy
+                job.Copied.Remove(rel);
+            }
+            todo = entries.Where(e => !job.Copied.Contains(e.Rel)).ToList();
+            Update(job, s => s with { FilesTotal = job.Copied.Count + todo.Count, FilesDone = job.Copied.Count,
+                BytesTotal = entries.Sum(e => e.Size), BytesDone = entries.Where(e => job.Copied.Contains(e.Rel)).Sum(e => e.Size) }, notify: false);
+        }
+
+        foreach (var (rel, size) in todo)
+        {
+            ct.ThrowIfCancellationRequested();
+            var copied = await CopyOneAsync(job, rel, ct);
+            // A file deleted before it was copied is simply not part of the move.
+            Update(job, s => copied ? s with { FilesDone = s.FilesDone + 1, BytesDone = s.BytesDone + size }
+                : s with { FilesTotal = s.FilesTotal - 1, BytesTotal = s.BytesTotal - size }, notify: false);
+            if (time.GetUtcNow() - job.LastNotify >= ProgressInterval) Notify(job);
+        }
+        if (final) job.SourceBytes = _record!.Status.BytesTotal; // what the old copy holds
+    }
+
+    /// <summary>Copies one blob via a temp name, flushed to disk, read back and verified against its name, then renamed.
+    /// False when the source was deleted before it could be read.</summary>
+    private async Task<bool> CopyOneAsync(Job job, string rel, CancellationToken ct)
+    {
+        var source = Path.Combine(job.From, rel);
+        var dest = Path.Combine(job.Target, rel);
+        var dir = Path.GetDirectoryName(dest)!;
+        EnsureDirectories(job, dir);
+        var temp = $"{dest}.copy-{Guid.NewGuid():N}";
+        Log(job, 't', Path.GetRelativePath(job.Target, temp));
+        try
+        {
+            FileStream input;
+            try
+            {
+                input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 81920,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return false; }
+            await using (input)
+            await using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await input.CopyToAsync(output, ct);
+                await output.FlushAsync(ct);
+                output.Flush(flushToDisk: true);
+            }
+            await hooks.AfterFileWrittenAsync(temp, ct);
+            if (!string.Equals(await HashAsync(temp, ct), Path.GetFileName(rel), StringComparison.Ordinal))
+                throw new MoveFailedException($"A copied file did not match the original ({rel}). {Unchanged}");
+            File.Move(temp, dest, overwrite: false); // the target was empty: an existing file is not this job's to replace
+            Log(job, 'f', rel);
+            job.Copied.Add(rel);
+            Durability.SyncDirectory(dir);
+            return true;
+        }
+        finally
+        {
+            TryDeleteFile(temp); // gone already after the rename
+        }
+    }
+
+    /// <summary>Creates the folders below the target that do not exist yet, listing each in the journal first.</summary>
+    private static void EnsureDirectories(Job job, string dir)
+    {
+        var missing = new Stack<string>();
+        for (var d = dir; !string.Equals(d, job.Target, StringComparison.Ordinal) && !Directory.Exists(d); d = Path.GetDirectoryName(d)!)
+            missing.Push(d);
+        while (missing.TryPop(out var d))
+        {
+            Log(job, 'd', Path.GetRelativePath(job.Target, d));
+            Directory.CreateDirectory(d);
+        }
+    }
+
+    private static void Log(Job job, char kind, string rel)
+    {
+        job.Journal!.WriteLine($"{kind} {rel}");
+        job.Journal.Flush();
+    }
+
+    private static void CloseJournal(Job job)
+    {
+        try { job.Journal?.Dispose(); }
+        catch (IOException) { }
+        job.Journal = null;
+    }
+
+    /// <summary>The current root is still the folder the move started from (an unmounted disk would look empty, and the
+    /// last pass would then drop every copy).</summary>
+    private static bool SourceStillThere(Job job) =>
+        Directory.Exists(job.From) && FilesLocation.ReadMarker(job.From) == job.SourceMarker;
+
+    /// <summary>Stores files.location and the finished status in one save, then swaps the location.</summary>
+    private async Task<MoveRecord> SwitchAsync(Job job)
+    {
+        var status = _record!.Status;
+        var done = new MoveRecord(status with { Phase = MovePhase.Done, Error = null, OldLocation = job.From, OldBytes = job.SourceBytes },
+            job.Id, job.CreatedDir, Cleaned: true);
+        try
+        {
+            using var scope = scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+            await TrackAsync(db, done, CancellationToken.None);
+            await files.SwitchAsync(db, job.Target, job.Id, CancellationToken.None); // saves both settings together
+            return done;
+        }
+        catch (Exception ex)
+        {
+            // Still under the hold, so nothing is written meanwhile: read back what was stored, a few times if need be.
+            bool? stored = null;
+            for (var attempt = 0; attempt < 5 && stored is null; attempt++)
+            {
+                if (attempt > 0) await Task.Delay(TimeSpan.FromSeconds(1), CancellationToken.None);
+                stored = await SwitchStoredAsync(job.Target, job.Id);
+            }
+            switch (stored)
+            {
+                case true:
+                    logger.LogWarning(ex, "The switch reported an error but was stored");
+                    using (var scope = scopes.CreateScope())
+                        await files.LoadAsync(scope.ServiceProvider.GetRequiredService<TandemDbContext>(), CancellationToken.None);
+                    try { await PersistAsync(done, CancellationToken.None); } catch (Exception) { /* the next start finds the switch */ }
+                    return done;
+                case null:
+                    job.SwitchUnknown = true;
+                    break;
+            }
+            throw;
+        }
+    }
+
+    /// <summary>Whether files.location names this target with this id; null when that cannot be read.</summary>
+    private async Task<bool?> SwitchStoredAsync(string target, Guid id)
+    {
+        try
+        {
+            using var scope = scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+            var row = await db.ServerSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == FilesLocation.Key);
+            if (row is null) return false;
+            var setting = JsonSerializer.Deserialize<FilesLocationSetting>(row.Value, Json);
+            return setting is not null && setting.Id == id && string.Equals(setting.Path, target, StringComparison.Ordinal);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Could not read the stored files location");
+            return null;
+        }
+    }
+
+    private void Update(Job job, Func<MoveStatus, MoveStatus> change, bool notify)
+    {
+        lock (_sync)
+        {
+            var r = _record!;
+            _record = r with { Status = change(r.Status) };
+        }
+        if (notify) Notify(job);
+    }
+
+    private void Notify(Job job)
+    {
+        job.LastNotify = time.GetUtcNow();
+        hub.NotifyAll("changed", "storage");
+    }
+
+    // ---- restart ----
+
+    /// <summary>A move stored as running did not finish: when its switch was stored it is done; otherwise its partial copy
+    /// is deleted and it is marked failed. A finished move's status (and old copy) is loaded.</summary>
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        MoveRecord? record;
+        try
+        {
+            using var scope = scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+            var row = await db.ServerSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == Key, cancellationToken);
+            if (row is null) return;
+            record = JsonSerializer.Deserialize<MoveRecord>(row.Value, Json);
+        }
+        catch (JsonException ex)
+        {
+            logger.LogError(ex, "The stored move status is unreadable; it is left as it is");
+            return;
+        }
+        if (record?.Status is not { } status) return;
+
+        var unfinished = status.Phase is MovePhase.Copying or MovePhase.Holding || status.Phase == MovePhase.Failed && !record.Cleaned;
+        if (!unfinished)
+        {
+            if (status.Phase == MovePhase.Done && string.Equals(files.Root, status.To, StringComparison.Ordinal))
+                TryDeleteFile(Path.Combine(status.To, JournalName)); // left if the server stopped right after the switch
+            _record = record;
+            return;
+        }
+
+        switch (await SwitchStoredAsync(status.To, record.Id))
+        {
+            case true:
+                TryDeleteFile(Path.Combine(status.To, JournalName));
+                record = record with { Status = status with { Phase = MovePhase.Done, Error = null, OldLocation = status.From,
+                    OldBytes = status.BytesTotal, FilesDone = status.FilesTotal, BytesDone = status.BytesTotal }, Cleaned = true };
+                break;
+            case false:
+                var cleaned = Cleanup(status.To, record.Id, record.CreatedDir, logger);
+                record = record with { Status = status with { Phase = MovePhase.Failed, Error = status.Phase == MovePhase.Failed ? status.Error : RestartedError },
+                    Cleaned = cleaned };
+                logger.LogWarning("A move of the stored files to {To} did not finish; its partial copy was removed", status.To);
+                break;
+            default:
+                _record = record with { Status = status with { Phase = MovePhase.Failed, Error = RestartedError } };
+                return; // nothing is deleted while the stored location cannot be read
+        }
+        _record = record;
+        await PersistAsync(record, CancellationToken.None);
+    }
+
+    /// <summary>A running move is cancelled and cleaned up (as a restart would) before the server stops.</summary>
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        Job? job;
+        lock (_sync) job = _job;
+        if (job is null) return;
+        job.StopReason = RestartedError;
+        try { job.Cts.Cancel(); } catch (ObjectDisposedException) { }
+        try { await job.Task.WaitAsync(cancellationToken); }
+        catch (OperationCanceledException) { }
+    }
+
+    // ---- files ----
+
+    /// <summary>Deletes what the move created in the target: the files and folders in its journal (folders only when
+    /// empty), its marker when it holds this move's id, the journal, and the target folders the move created when empty.
+    /// Never anything else. True when all of that went.</summary>
+    internal static bool Cleanup(string target, Guid id, string? createdDir, ILogger logger)
+    {
+        var ok = true;
+        var journal = Path.Combine(target, JournalName);
+        var dirs = new List<string>();
+        try
+        {
+            if (File.Exists(journal))
+                foreach (var line in File.ReadAllLines(journal))
+                {
+                    if (line.Length < 3 || line[1] != ' ') continue;
+                    var full = Path.GetFullPath(Path.Combine(target, line[2..]));
+                    if (!MoveTargetCheck.IsInside(full, target, orSame: false)) continue; // never outside the target
+                    if (line[0] == 'd') dirs.Add(full);
+                    else if (line[0] is 'f' or 't' && !TryDeleteFile(full)) ok = false;
+                }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogError(ex, "Could not read the move journal in {Target}", target);
+            return false;
+        }
+        for (var i = dirs.Count - 1; i >= 0; i--) TryDeleteEmptyDirectory(dirs[i]);
+        if (FilesLocation.ReadMarker(target) == id && !TryDeleteFile(Path.Combine(target, FilesLocation.MarkerName))) ok = false;
+        if (!TryDeleteFile(journal)) ok = false;
+        if (createdDir is not null && (string.Equals(target, createdDir, StringComparison.Ordinal) || MoveTargetCheck.IsInside(target, createdDir, orSame: false)))
+            for (var d = target; d is not null; d = Path.GetDirectoryName(d))
+            {
+                if (!TryDeleteEmptyDirectory(d)) break;
+                if (string.Equals(d, createdDir, StringComparison.Ordinal)) break;
+            }
+        if (!ok) logger.LogError("Some files of the failed move could not be removed from {Target}", target);
+        return ok;
+    }
+
+    /// <summary>Every blob under the root (relative path and size). Markers, journals, temp and copy files are not
+    /// blobs: only files named by a hash are moved.</summary>
+    private static List<(string Rel, long Size)> EnumerateBlobs(string root)
+    {
+        var list = new List<(string, long)>();
+        if (!Directory.Exists(root)) return list;
+        var walk = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0, IgnoreInaccessible = false };
+        foreach (var info in new DirectoryInfo(root).EnumerateFiles("*", walk))
+        {
+            if (!BlobHash.IsValid(info.Name)) continue;
+            try { list.Add((Path.GetRelativePath(root, info.FullName), info.Length)); }
+            catch (FileNotFoundException) { } // deleted while listing
+        }
+        return list;
+    }
+
+    public long BytesToCopy() => EnumerateBlobs(files.Root).Sum(e => e.Size);
+
+    private void RequireSourcePresent()
+    {
+        if (!files.CheckPresent())
+            throw new ApiException(503, "files_unavailable", "The stored files folder is missing. Nothing is stored until it is back.");
+    }
+
+    private static async Task<string> HashAsync(string path, CancellationToken ct)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, ct));
+    }
+
+    /// <summary>The first folder of the path that does not exist yet (what checking and moving will create), or null.</summary>
+    private static string? TopmostMissing(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path)) return null;
+        string full;
+        try { full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { return null; }
+        string? missing = null;
+        for (var d = full; d is not null && !Directory.Exists(d); d = Path.GetDirectoryName(d)) missing = d;
+        return missing;
+    }
+
+    /// <summary>The old copy never holds the current files or the data directory (the database).</summary>
+    private bool SafeToRemove(string old)
+    {
+        if (!Path.IsPathFullyQualified(old)) return false;
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(old));
+        var current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(files.Root));
+        var data = Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.Value.DataDirectory));
+        return !MoveTargetCheck.IsInside(current, full, orSame: true) && !MoveTargetCheck.IsInside(full, current, orSame: true)
+               && !MoveTargetCheck.IsInside(data, full, orSame: true);
+    }
+
+    /// <summary>Only Tandem's entries: the per-user folders (named by a user id), the marker and a journal; then the
+    /// folder itself when nothing else is left in it.</summary>
+    private static void DeleteOldCopy(string root)
+    {
+        if (!Directory.Exists(root)) return;
+        foreach (var dir in Directory.EnumerateDirectories(root))
+            if (Guid.TryParseExact(Path.GetFileName(dir), "N", out _))
+                Directory.Delete(dir, recursive: true);
+        TryDeleteFile(Path.Combine(root, FilesLocation.MarkerName));
+        TryDeleteFile(Path.Combine(root, JournalName));
+        TryDeleteEmptyDirectory(root);
+    }
+
+    private async Task PersistAsync(MoveRecord record, CancellationToken ct)
+    {
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TandemDbContext>();
+        await TrackAsync(db, record, ct);
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static async Task TrackAsync(TandemDbContext db, MoveRecord record, CancellationToken ct)
+    {
+        var text = JsonSerializer.Serialize(record, Json);
+        var row = await db.ServerSettings.FirstOrDefaultAsync(s => s.Key == Key, ct);
+        if (row is null) db.ServerSettings.Add(new ServerSetting { Key = Key, Value = text });
+        else row.Value = text;
+    }
+
+    private static bool TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    private static bool TryDeleteEmptyDirectory(string dir)
+    {
+        try
+        {
+            if (!Directory.Exists(dir) || Directory.EnumerateFileSystemEntries(dir).Any()) return false;
+            Directory.Delete(dir);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+}

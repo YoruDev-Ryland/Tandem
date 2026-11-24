@@ -102,13 +102,7 @@ public static class HoldGuard
     public static TBuilder RequireNotHolding<TBuilder>(this TBuilder builder) where TBuilder : IEndpointConventionBuilder =>
         builder.AddEndpointFilter(async (context, next) =>
         {
-            if (context.HttpContext.RequestServices.GetRequiredService<FilesGate>().Holding)
-            {
-                // A result, not an ApiException: the error middleware clears the response, and with it the header.
-                context.HttpContext.Response.Headers.RetryAfter = "15";
-                return Results.Json(new ApiException(503, "server_moving", "The server is moving its files. Try again shortly.").ToResponse(),
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
+            if (context.HttpContext.RequestServices.GetRequiredService<FilesGate>().Holding) throw ApiException.ServerMoving();
             return await next(context);
         });
 }

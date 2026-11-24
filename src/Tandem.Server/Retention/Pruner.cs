@@ -26,14 +26,15 @@ public sealed record PruneResult(int Versions, int Blobs, long Bytes)
 /// versions are not kept for their own sake: the server only ever compares a BaseVersionId as an id (an upload with
 /// the head; a resolve, in SaveService.SetKnownForUploaderAsync, with the winner's uploader's known version) and
 /// never loads the base version it names, and keeping it transitively would keep every version.</para>
-/// <para>Each user's prune holds the <see cref="MaintenanceLock"/> (so never overlaps a backup run) and then the user's lock.</para>
+/// <para>Each user's prune holds the <see cref="MaintenanceLock"/> (so never overlaps a backup run) and then the user's lock.
+/// While the stored files are being moved (<see cref="FilesGate.Moving"/>) runs are skipped.</para>
 /// <para>Then blob GC: a blob is deleted only when no remaining version manifest (save, config, vault), Lost &amp; found
 /// item, raw config upload, or expanded Config delivery manifest (un-acked, or created in the last 7 days) references it AND it was
 /// last uploaded or confirmed present more than an hour ago (blobs are sent before their manifest). Version rows are
 /// deleted first, then blob rows (committed), and only then the files; a failed file delete is logged and skipped.</para>
 /// </summary>
 public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, MaintenanceLock maintenance, IOptions<ServerOptions> options,
-    TimeProvider time, ILogger<Pruner> logger) : BackgroundService
+    TimeProvider time, FilesGate gate, ILogger<Pruner> logger) : BackgroundService
 {
     public static readonly TimeSpan BlobGrace = TimeSpan.FromHours(1);
     public static readonly TimeSpan ExpandedConfigKeep = TimeSpan.FromDays(7);
@@ -63,6 +64,11 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
     /// A failure for one user is logged and the others still run.</summary>
     public async Task<PruneResult> RunOnceAsync(CancellationToken ct)
     {
+        if (gate.Moving)
+        {
+            logger.LogInformation("Pruning skipped: the stored files are being moved");
+            return PruneResult.None;
+        }
         List<Guid> users;
         using (var scope = scopes.CreateScope())
             users = await scope.ServiceProvider.GetRequiredService<TandemDbContext>().Users.AsNoTracking()
@@ -129,6 +135,7 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
         using (await maintenance.AcquireAsync(ct))
         using (await locks.Acquire(userId, ct))
         {
+            if (gate.Moving) return PruneResult.None; // a move began during this run: the rest waits for the next one
             var settings = await RetentionSettings.LoadAsync(db, userId, ct);
             var versions = await PruneVersionsAsync(db, userId, settings, ct);
             var (blobs, bytes) = await CollectBlobsAsync(db, store, userId, ct);
@@ -253,13 +260,15 @@ public sealed class Pruner(IServiceScopeFactory scopes, UserLocks locks, Mainten
                 .Select(b => b.Hash).ToListAsync(ct));
         var gone = doomed.Where(b => !survivors.Contains(b.Hash)).ToList();
 
-        // Still under the lock, so no upload confirms one of these hashes between the row and the file delete.
-        foreach (var b in gone)
-        {
-            try { await store.DeleteAsync(userId, b.Hash, ct); }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { logger.LogWarning(ex, "Could not delete blob file {Hash} of user {UserId}", b.Hash, userId); }
-        }
+        // Still under the lock, so no upload confirms one of these hashes between the row and the file delete. On the
+        // gate's shared side, so a move that began meanwhile sees these deletes in its last pass under the hold.
+        using (await gate.EnterWriteAsync(ct))
+            foreach (var b in gone)
+            {
+                try { await store.DeleteAsync(userId, b.Hash, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) { logger.LogWarning(ex, "Could not delete blob file {Hash} of user {UserId}", b.Hash, userId); }
+            }
         return (gone.Count, gone.Sum(b => b.Size));
     }
 

@@ -974,6 +974,8 @@ public class DeliveryTests
 
         public void NotifyUser(Guid userId, string topic) { }
 
+        public void NotifyAll(string type, string? topic = null) { }
+
         public void CloseDevice(Guid deviceId) { }
 
         public void CloseUser(Guid userId) { }

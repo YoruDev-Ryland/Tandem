@@ -36,7 +36,8 @@ public sealed class DomainEvents(ILogger<DomainEvents> logger) : IDomainEvents
     }
 }
 
-/// <summary>A live-stream event. <see cref="Type"/> is <c>deliveries</c>, <c>changed</c> (with a topic) or <c>ping</c>.</summary>
+/// <summary>A live-stream event. <see cref="Type"/> is <c>deliveries</c>, <c>changed</c> (with a topic), <c>ping</c>, or
+/// <c>storage</c> (sent to everyone when a hold for moving the stored files starts and ends).</summary>
 public sealed record ServerEvent(string Type, string? Topic = null);
 
 /// <summary>A live subscription. Disposing it unsubscribes and stops its heartbeat; it is safe to dispose twice.</summary>
@@ -51,8 +52,11 @@ public interface IEventHub
     /// <summary>The device has new deliveries.</summary>
     void NotifyDevice(Guid deviceId);
 
-    /// <summary>Topics: saves, configs, devices, vault, activity, conflicts.</summary>
+    /// <summary>Topics: saves, configs, devices, vault, activity, conflicts (and storage, sent to everyone).</summary>
     void NotifyUser(Guid userId, string topic);
+
+    /// <summary>Sends <paramref name="type"/> (with an optional topic) to every open stream of every user and device.</summary>
+    void NotifyAll(string type, string? topic = null);
 
     /// <summary>Ends every open stream of the device (it was revoked): the response completes and the client sees
     /// 401 device_revoked when it reconnects.</summary>
@@ -79,6 +83,8 @@ public sealed class NoOpEventHub : IEventHub
     public void NotifyDevice(Guid deviceId) { }
 
     public void NotifyUser(Guid userId, string topic) { }
+
+    public void NotifyAll(string type, string? topic = null) { }
 
     public void CloseDevice(Guid deviceId) { }
 
@@ -161,6 +167,8 @@ public sealed class EventHub(TimeProvider time, Microsoft.Extensions.Options.IOp
     public void NotifyDevice(Guid deviceId) => Fanout(s => s.DeviceId == deviceId, new ServerEvent("deliveries"));
 
     public void NotifyUser(Guid userId, string topic) => Fanout(s => s.UserId == userId, new ServerEvent("changed", topic));
+
+    public void NotifyAll(string type, string? topic = null) => Fanout(_ => true, new ServerEvent(type, topic));
 
     public void CloseDevice(Guid deviceId) => Close(s => s.DeviceId == deviceId);
 

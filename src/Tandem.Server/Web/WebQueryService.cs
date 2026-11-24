@@ -12,7 +12,7 @@ namespace Tandem.Server.Web;
 
 /// <summary>Read models for the web app. Everything is scoped to the user and ignores revoked devices.</summary>
 public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameStateQueries gameStates, Http.StorageMonitor storage,
-    Microsoft.Extensions.Options.IOptions<ServerOptions> options)
+    Microsoft.Extensions.Options.IOptions<ServerOptions> options, Blobs.FilesLocation files)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public const int ContinueCount = 10;
@@ -58,7 +58,7 @@ public sealed class WebQueryService(TandemDbContext db, TimeProvider time, GameS
         var silent = (await Notify.NotifyTriggers.SilentDevicesAsync(db, userId, options.Value.SilentDeviceHours, time.GetUtcNow(), ct))
             .OrderBy(d => d.CreatedUtc).Select(d => d.Id).ToList();
         return new HomeResponse(cont, devices, new Attention(concurrent, firstSync, shizuku, failed, configConflicts, storage.IsLow,
-            backupOff, silent), recent);
+            backupOff, silent, isAdmin && !files.Available), recent);
     }
 
     public async Task<List<DeviceSummary>> DevicesAsync(Guid userId, Guid? current, CancellationToken ct)
